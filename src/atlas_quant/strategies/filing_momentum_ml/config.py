@@ -252,6 +252,10 @@ class FeatureCacheIdentity:
     universe_id: str
     data_cutoff: date
     created_at: datetime
+    sector_mapping_identity: str | None = None
+    price_convention: str | None = None
+    filing_timing_mode: str | None = None
+    provider_identity: str | None = None
 
     @classmethod
     def compute(
@@ -259,6 +263,11 @@ class FeatureCacheIdentity:
         config: FilingMomentumMLConfig,
         data_cutoff: date,
         created_at: datetime,
+        *,
+        sector_mapping_identity: str | None = None,
+        price_convention: str | None = None,
+        filing_timing_mode: str | None = None,
+        provider_identity: str | None = None,
     ) -> "FeatureCacheIdentity":
         return cls(
             strategy_id=config.strategy_id,
@@ -271,6 +280,10 @@ class FeatureCacheIdentity:
             universe_id=config.universe_id,
             data_cutoff=data_cutoff,
             created_at=created_at,
+            sector_mapping_identity=sector_mapping_identity,
+            price_convention=price_convention,
+            filing_timing_mode=filing_timing_mode,
+            provider_identity=provider_identity,
         )
 
     def cache_key(self) -> str:
@@ -279,7 +292,14 @@ class FeatureCacheIdentity:
         Deliberately excludes ``created_at`` (a timestamp shouldn't be part
         of a lookup key) and ``data_cutoff`` is included because caches for
         different cutoffs are not interchangeable under strict
-        point-in-time rules.
+        point-in-time rules. ``sector_mapping_identity``/``price_convention``/
+        ``filing_timing_mode``/``provider_identity`` were added in Stage 3
+        so a cache built under one sector-consolidation mapping, price
+        convention, filing-timing policy, or data-source cannot be silently
+        reused under a different one of any of those (extending this
+        dataclass rather than replacing it — see Stage 2's
+        ``FeatureCacheIdentity`` docstring for why the identity contract
+        was fixed ahead of any cache-writing code).
         """
         return compute_config_identity(
             {
@@ -292,5 +312,9 @@ class FeatureCacheIdentity:
                 "model_config_identity": self.model_config_identity,
                 "universe_id": self.universe_id,
                 "data_cutoff": self.data_cutoff,
+                "sector_mapping_identity": self.sector_mapping_identity,
+                "price_convention": self.price_convention,
+                "filing_timing_mode": self.filing_timing_mode,
+                "provider_identity": self.provider_identity,
             }
         )
