@@ -325,3 +325,46 @@ def make_fallback_statistics(
         observation_count=len(quarterly_returns),
         provenance=provenance(measurement_cutoff),
     )
+
+
+class FakeEstimator:
+    """A deterministic, injectable Estimator for tests -- never a real fit.
+
+    ``fixed_scores`` (if given) maps row index -> P(y=1) directly, letting
+    a test control scoring output precisely. Otherwise ``predict_proba``
+    returns a constant distribution for every row.
+    """
+
+    def __init__(
+        self,
+        classes: tuple[int, ...] = (0, 1),
+        fixed_scores: dict | None = None,
+        default_score: float = 0.5,
+        fit_error: str | None = None,
+    ) -> None:
+        self.classes_ = classes
+        self.fixed_scores = fixed_scores or {}
+        self.default_score = default_score
+        self.fit_error = fit_error
+        self.fit_called_with = None
+
+    def fit(self, X, y):
+        if self.fit_error is not None:
+            raise ValueError(self.fit_error)
+        self.fit_called_with = (X, y)
+        return self
+
+    def predict_proba(self, X):
+        rows = []
+        pos_index = self.classes_.index(1) if 1 in self.classes_ else None
+        for i in range(len(X)):
+            score = self.fixed_scores.get(i, self.default_score)
+            row = [0.0] * len(self.classes_)
+            if pos_index is not None:
+                row[pos_index] = score
+                other = (1.0 - score) / max(1, len(self.classes_) - 1)
+                for j in range(len(row)):
+                    if j != pos_index:
+                        row[j] = other
+            rows.append(row)
+        return rows
