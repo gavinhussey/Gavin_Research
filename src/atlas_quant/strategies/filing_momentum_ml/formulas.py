@@ -18,11 +18,14 @@ convention, not a silent fallback.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import TypeVar
 
 import numpy as np
 
 _NAN = float("nan")
+
+_K = TypeVar("_K")
 
 
 def qoq_change(current: float, previous: float) -> float:
@@ -127,3 +130,66 @@ def vol_ratio(vol_short: float, vol_long: float) -> float:
     if vol_long == 0:
         return _NAN
     return vol_short / vol_long
+
+
+def score_proportional_weights(
+    scores: Mapping[_K, float], deployable_pct: float
+) -> dict[_K, float]:
+    """Score-proportional position weighting, report §5.3.
+
+    ``w_i = P_i / sum(P_j for j in Q) * deployable_pct``, where ``Q`` is the
+    set of already-qualified instruments passed in via ``scores`` and
+    ``P_i`` is each instrument's model score (a probability in the report's
+    own usage, but this function does not enforce that — see below).
+
+    This is deliberately the *last* pure-math step of the pipeline: by the
+    time scores reach this function, qualification (which stocks pass the
+    ML threshold), the maximum/minimum-position gates, and ETF-fallback
+    selection have already happened elsewhere (Stage 5+). This function
+    only turns an already-decided set of (instrument, score) pairs into
+    weights — it does not select, filter, cap, or fall back to anything
+    itself, and the weights it returns are relative to the strategy's own
+    assigned capital budget, not total portfolio capital (see
+    ``InstrumentRecommendation.weight`` / ``StrategyEvaluationContext
+    .capital_budget_pct``).
+
+    Explicit behavior for inputs qualification is expected to already have
+    excluded, documented rather than silently handled:
+
+    - Empty ``scores`` returns ``{}`` — no instruments, no weights.
+    - A total score of exactly zero (all scores zero, since qualification
+      should already exclude negative scores — see below) returns a weight
+      of ``0.0`` for every instrument rather than dividing by zero. This
+      never produces NaN or infinity.
+    - A negative score raises ``ValueError`` rather than being silently
+      normalized (e.g. alongside positive scores, which could produce a
+      negative or >1 weight for another instrument) or silently dropped
+      (which would hide an upstream qualification bug) — a model
+      probability score reaching this function should never be negative;
+      if one is, that is a defect in the caller, not something for this
+      pure function to paper over.
+
+    Input order is preserved in the returned dict's key order (Python
+    dicts preserve insertion order), so any serialization built on top of
+    this function's output is deterministic without a separate sort step.
+    """
+    if not (0.0 <= deployable_pct <= 1.0):
+        raise ValueError(
+            f"deployable_pct must be within [0.0, 1.0], got {deployable_pct!r}"
+        )
+    if not scores:
+        return {}
+
+    for key, score in scores.items():
+        if score < 0:
+            raise ValueError(
+                f"score_proportional_weights received a negative score for "
+                f"{key!r} ({score!r}) — qualification must exclude negative "
+                "scores before calling this function"
+            )
+
+    total = float(sum(scores.values()))
+    if total == 0:
+        return {key: 0.0 for key in scores}
+
+    return {key: (score / total) * deployable_pct for key, score in scores.items()}

@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+# Populate this list in the same change that introduces the first
+# AtlasQuant production cache path. Do not add a path here speculatively.
 PROTECTED_PATH_NAMES: tuple[str, ...] = ()
 
 

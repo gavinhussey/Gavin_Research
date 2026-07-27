@@ -45,6 +45,29 @@ No cache paths needed fixing up as part of this move, because none exist
 yet in this repository — re-verify this specific step once Stage 3 adds
 any.
 
+## Three kinds of provenance (Stage 2.1)
+
+This project deliberately keeps three separate provenance questions apart:
+
+- **Strategy provenance** — comes from `~/Downloads/report_current.html`
+  alone. It does not depend on Git history existing, and is unaffected by
+  this repository's own version-control history one way or the other.
+- **Implementation provenance** — this repository's own Git history,
+  established starting Stage 2.1 (`git init`, checkpoint commit) so future
+  AtlasQuant work is recoverable, reviewable, and reversible. This history
+  is not evidence of, and should never be cited as, strategy correctness.
+- **Performance provenance** — the legacy `Arnold_Quant` prototype's cached
+  backtest results and old caches are not authoritative for this platform.
+  They may only be relied on once their underlying data, model settings,
+  feature mode (`fcf_mode`), configuration, and cache identity can be
+  independently verified against this platform's own configuration
+  (see `FeatureCacheIdentity` in `strategies/filing_momentum_ml/config.py`).
+
+`Arnold_Quant` itself remains a reference only: a source of formulas to
+cross-check, infrastructure ideas that may be reusable, legacy behavior to
+compare against, and compatibility considerations — never an authority
+over what AtlasQuant's strategy logic should do.
+
 ## Legacy-name provenance, preserved intentionally
 
 `atlas_quant.LEGACY_NAMES` and `PlatformConfig.legacy_names` both record `("ArnoldQuantML", "FilingEdgeML")` — not for display, but so that if a historical artifact (an old log line, a comment referencing `ArnoldQuant_v.1`, a cached run name) is ever surfaced in a report or diagnostic, code can recognize it as a known legacy name rather than an unrecognized string.

@@ -115,6 +115,18 @@ class FilingMomentumMLConfig:
     budget." Default 1.0 reproduces that assumption for a standalone
     backtest; a multi-strategy allocator (Stage 7+) is expected to override
     it per-run, not by editing this default.
+
+    Deliberately *not* a field here: a "minimum positive labels" threshold.
+    ``report_current.html`` defines only ``N_WINNERS = 10`` (positive
+    labels assigned per quarter, §4.2) and ``MIN_TRAIN_Q = 8`` (quarters of
+    history required before a model is usable, §4.4) — no separate,
+    independently-valued "minimum positive labels" parameter is named
+    anywhere in the report. The legacy prototype's ``ml_scorer.py`` does
+    gate model fitting on ``train["label"].sum() < N_WINNERS``
+    (``fit_for_quarter``), but that reuses ``N_WINNERS`` rather than
+    defining an independent constant — so this config schema already
+    represents that same requirement via ``n_winners``; Stage 5's training
+    gate should read ``config.n_winners`` for this check, not a new field.
     """
 
     strategy_id: str = STRATEGY_ID

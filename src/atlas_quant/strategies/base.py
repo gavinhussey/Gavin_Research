@@ -14,10 +14,12 @@ from datetime import datetime
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from atlas_quant.domain.audit import AuditTrail
+from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.market import MarketContext
 from atlas_quant.domain.position import Position
+from atlas_quant.domain.serialization import to_jsonable
 from atlas_quant.domain.signal import InstrumentRecommendation
-from atlas_quant.domain.status import StrategyStatus
+from atlas_quant.domain.status import SignalKind, StrategyStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +88,93 @@ class StrategyResult:
     missing_data: tuple[str, ...] = field(default_factory=tuple)
     audit_trail: AuditTrail = field(default_factory=AuditTrail)
     state_update: Any = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-compatible representation of this result.
+
+        ``evaluation_timestamp``/``data_cutoff`` become explicit ISO-8601
+        strings; ``status``/each recommendation's ``kind``/``asset_class``
+        become their enum ``.value``; ``recommendations`` and
+        ``audit_trail`` preserve their original order. ``state_update`` is
+        strategy-specific and passed through :func:`to_jsonable` on a
+        best-effort basis — a strategy that needs its own state to survive
+        a round trip is responsible for making it JSON-compatible (or
+        implementing its own reconstruction) before Stage 3+ persists it;
+        this method does not invent a reconstruction path for arbitrary
+        strategy state.
+        """
+        return {
+            "strategy_id": self.strategy_id,
+            "display_name": self.display_name,
+            "strategy_version": self.strategy_version,
+            "config_identity": self.config_identity,
+            "model_identity": self.model_identity,
+            "evaluation_timestamp": self.evaluation_timestamp.isoformat(),
+            "data_cutoff": self.data_cutoff.isoformat(),
+            "status": self.status.value,
+            "recommendations": [
+                {
+                    "instrument_id": {
+                        "symbol": rec.instrument_id.symbol,
+                        "asset_class": rec.instrument_id.asset_class.value,
+                        "venue": rec.instrument_id.venue,
+                    },
+                    "kind": rec.kind.value,
+                    "weight": rec.weight,
+                    "score": rec.score,
+                    "rationale": rec.rationale,
+                }
+                for rec in self.recommendations
+            ],
+            "capital_requested_pct": self.capital_requested_pct,
+            "risk_estimates": dict(self.risk_estimates),
+            "rejection_reasons": list(self.rejection_reasons),
+            "warnings": list(self.warnings),
+            "missing_data": list(self.missing_data),
+            "audit_trail": self.audit_trail.to_dict(),
+            "state_update": to_jsonable(self.state_update),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "StrategyResult":
+        def _recommendation_from_dict(raw: Mapping[str, Any]) -> InstrumentRecommendation:
+            iid = raw["instrument_id"]
+            return InstrumentRecommendation(
+                instrument_id=InstrumentId(
+                    symbol=iid["symbol"],
+                    asset_class=AssetClass(iid["asset_class"]),
+                    venue=iid.get("venue"),
+                ),
+                kind=SignalKind(raw["kind"]),
+                weight=raw["weight"],
+                score=raw.get("score"),
+                rationale=raw.get("rationale"),
+            )
+
+        return cls(
+            strategy_id=data["strategy_id"],
+            display_name=data["display_name"],
+            strategy_version=data["strategy_version"],
+            config_identity=data["config_identity"],
+            model_identity=data.get("model_identity"),
+            evaluation_timestamp=datetime.fromisoformat(data["evaluation_timestamp"]),
+            data_cutoff=datetime.fromisoformat(data["data_cutoff"]),
+            status=StrategyStatus(data["status"]),
+            recommendations=tuple(
+                _recommendation_from_dict(r) for r in data.get("recommendations", ())
+            ),
+            capital_requested_pct=data.get("capital_requested_pct", 0.0),
+            risk_estimates=dict(data.get("risk_estimates") or {}),
+            rejection_reasons=tuple(data.get("rejection_reasons", ())),
+            warnings=tuple(data.get("warnings", ())),
+            missing_data=tuple(data.get("missing_data", ())),
+            audit_trail=(
+                AuditTrail.from_dict(data["audit_trail"])
+                if data.get("audit_trail")
+                else AuditTrail()
+            ),
+            state_update=data.get("state_update"),
+        )
 
 
 @runtime_checkable
