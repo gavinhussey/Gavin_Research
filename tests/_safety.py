@@ -10,11 +10,16 @@ autouse ``_safety_barrier`` fixture in conftest.py:
    silently in the default test run.
 2. A protected-path write guard — blocks writes to any path whose name
    matches ``PROTECTED_PATH_NAMES`` regardless of which test is running.
-   This repository has no production cache files yet (Stage 3+ will add
-   them); the list is intentionally empty today and must be extended the
-   moment any stage introduces a real, persistent cache path, mirroring
-   the equivalent guard in the legacy Filing Momentum ML prototype
-   repository.
+   Covers ``open()`` in a write mode, ``pathlib.Path.write_text``/
+   ``write_bytes``/``unlink``, and ``os.replace``/``os.rename`` (the
+   atomic-write primitives Stage 3's feature cache uses) — a write via any
+   of these to a protected path raises immediately rather than silently
+   succeeding. Matching is substring-based against the path's string form
+   (``os.fspath``), so it applies identically whether a test constructs an
+   absolute or a relative path, as long as neither happens to contain a
+   protected name as a substring — which is why every cache test in this
+   repository uses a pytest ``tmp_path`` (never a path under
+   ``data/cache/filing_momentum_ml``) as its cache root.
 """
 
 from __future__ import annotations
@@ -28,7 +33,14 @@ import pytest
 
 # Populate this list in the same change that introduces the first
 # AtlasQuant production cache path. Do not add a path here speculatively.
-PROTECTED_PATH_NAMES: tuple[str, ...] = ()
+#
+# Stage 3 introduces the Filing Momentum ML feature cache
+# (atlas_quant.strategies.filing_momentum_ml.feature_cache
+# .DEFAULT_CACHE_ROOT = <repo>/data/cache/filing_momentum_ml/features).
+# The substring below matches that path (and its atomic-write temp files,
+# which live alongside it in the same directory) whether referenced as an
+# absolute or a repo-relative path.
+PROTECTED_PATH_NAMES: tuple[str, ...] = ("data/cache/filing_momentum_ml",)
 
 
 def _is_protected(path: object) -> bool:
@@ -85,6 +97,7 @@ def install_protected_path_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     _real_write_text = Path.write_text
     _real_write_bytes = Path.write_bytes
     _real_unlink = Path.unlink
+    _real_mkdir = Path.mkdir
 
     def _guarded_write_text(self, *args, **kwargs):
         if _is_protected(self):
@@ -101,6 +114,28 @@ def install_protected_path_guard(monkeypatch: pytest.MonkeyPatch) -> None:
             raise _BlockedByTestSafety(f"refused to delete protected path: {self!r}")
         return _real_unlink(self, *args, **kwargs)
 
+    def _guarded_mkdir(self, *args, **kwargs):
+        if _is_protected(self):
+            raise _BlockedByTestSafety(f"refused to create protected directory: {self!r}")
+        return _real_mkdir(self, *args, **kwargs)
+
     monkeypatch.setattr(Path, "write_text", _guarded_write_text)
     monkeypatch.setattr(Path, "write_bytes", _guarded_write_bytes)
     monkeypatch.setattr(Path, "unlink", _guarded_unlink)
+    monkeypatch.setattr(Path, "mkdir", _guarded_mkdir)
+
+    _real_replace = os.replace
+    _real_rename = os.rename
+
+    def _guarded_replace(src, dst, *args, **kwargs):
+        if _is_protected(dst):
+            raise _BlockedByTestSafety(f"refused to replace into protected path: {dst!r}")
+        return _real_replace(src, dst, *args, **kwargs)
+
+    def _guarded_rename(src, dst, *args, **kwargs):
+        if _is_protected(dst):
+            raise _BlockedByTestSafety(f"refused to rename into protected path: {dst!r}")
+        return _real_rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", _guarded_replace)
+    monkeypatch.setattr(os, "rename", _guarded_rename)
