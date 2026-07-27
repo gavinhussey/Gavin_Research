@@ -153,6 +153,17 @@ class FilingMomentumMLConfig:
     regime_gate_mode: RegimeGateMode = "both"
     markov_years: int = 3
 
+    # Stage 5: the report is silent on what to do when a per-instrument
+    # regime classification is missing or unavailable (insufficient
+    # history, a numerical fit failure, etc.) at entry-check time. This
+    # platform's explicit, conservative default is to reject such a
+    # candidate rather than silently treat unavailable data as Bull --
+    # "allow" is exposed as a genuine, real config value (not hardcoded)
+    # for a deployment that would rather qualify a candidate than lose it
+    # to a data gap, at the cost of not applying the per-stock Bear filter
+    # to it.
+    missing_regime_policy: Literal["reject", "allow"] = "reject"
+
     strategy_budget_pct: float = 1.0
 
     model: FilingMomentumModelConfig = field(default_factory=FilingMomentumModelConfig)
@@ -210,6 +221,11 @@ class FilingMomentumMLConfig:
             raise ValueError(
                 "fallback_lookback_quarters must be > 0, got "
                 f"{self.fallback_lookback_quarters!r}"
+            )
+        if self.missing_regime_policy not in ("reject", "allow"):
+            raise ValueError(
+                "missing_regime_policy must be 'reject' or 'allow', got "
+                f"{self.missing_regime_policy!r}"
             )
         if self.markov_years <= 0:
             raise ValueError(f"markov_years must be > 0, got {self.markov_years!r}")
