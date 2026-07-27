@@ -10,11 +10,13 @@ one at this granularity.
 """
 
 import math
+from datetime import date
 
 import pytest
 
 from atlas_quant.strategies.filing_momentum_ml.formulas import (
     annualized_vol,
+    fiscal_quarter_number,
     margin_trend,
     ols_trend,
     price_momentum,
@@ -150,6 +152,22 @@ class TestVolRatio:
 
     def test_boundary_equal_vols_ratio_is_one(self):
         assert vol_ratio(vol_short=0.25, vol_long=0.25) == pytest.approx(1.0)
+
+
+class TestFiscalQuarterNumber:
+    @pytest.mark.parametrize(
+        "quarter_end,expected",
+        [
+            (date(2026, 3, 31), 1),
+            (date(2026, 6, 30), 2),
+            (date(2026, 9, 30), 3),
+            (date(2026, 12, 31), 4),
+            (date(2026, 1, 1), 1),
+            (date(2026, 4, 1), 2),
+        ],
+    )
+    def test_calendar_quarter_matches_month(self, quarter_end, expected):
+        assert fiscal_quarter_number(quarter_end) == expected
 
 
 class TestScoreProportionalWeights:

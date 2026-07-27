@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import TypeVar
 
 import numpy as np
@@ -120,6 +121,19 @@ def annualized_vol(daily_returns: Sequence[float]) -> float:
     if len(values) < 2:
         return _NAN
     return math.sqrt(252) * float(np.std(np.asarray(values, dtype=float), ddof=0))
+
+
+def fiscal_quarter_number(quarter_end: date) -> int:
+    """Calendar-quarter number of ``quarter_end``, report §3.4: ``quarter_num``.
+
+    The report defines this as ``q ∈ {1, 2, 3, 4}`` capturing "calendar-quarter
+    seasonality in filing behavior" — i.e. the calendar quarter containing
+    ``quarter_end``'s month, not an arbitrary fiscal-year-relative index.
+    This is a total function: every valid ``date`` has a well-defined
+    calendar quarter, so there is no missing-data case here (unlike every
+    other function in this module).
+    """
+    return (quarter_end.month - 1) // 3 + 1
 
 
 def vol_ratio(vol_short: float, vol_long: float) -> float:
