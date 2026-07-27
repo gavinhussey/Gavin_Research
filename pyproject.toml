@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atlas-quant"
+version = "0.1.0"
+description = "AtlasQuant — a read-only, multi-strategy quantitative research and backtesting platform. First strategy: Filing Momentum ML (formerly developed as ArnoldQuantML / FilingEdgeML in a separate legacy repository — see docs/naming_migration.md)."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.25.0",
+    "pandas>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Plain `pytest` must be safe by default — network, external-env (e.g. a
+# separate Python env needed for hmmlearn once the regime gate lands),
+# slow (full historical backtests), and production_data tests are opt-in
+# only. See tests/conftest.py and tests/_safety.py.
+addopts = "-m \"not network and not external_env and not slow and not production_data\""
