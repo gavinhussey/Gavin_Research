@@ -130,3 +130,66 @@ def make_sector_record(
         as_of=as_of,
         provenance=provenance(as_of),
     )
+
+
+def make_daily_series(
+    instrument_id: InstrumentId,
+    trading_days: list[date],
+    daily_growth_rates: list[float],
+    *,
+    start_price: float = 100.0,
+) -> list[DailyPriceObservation]:
+    """Build a deterministic close-price series from an explicit per-day growth-rate list.
+
+    ``len(daily_growth_rates)`` must equal ``len(trading_days)``; the
+    first day's own growth rate is applied to ``start_price`` to produce
+    that day's close (there is no "day zero" close preceding the series).
+    """
+    if len(daily_growth_rates) != len(trading_days):
+        raise ValueError("daily_growth_rates must have the same length as trading_days")
+    prices = []
+    price = start_price
+    for day, rate in zip(trading_days, daily_growth_rates):
+        price *= 1 + rate
+        prices.append(
+            DailyPriceObservation(
+                instrument_id=instrument_id,
+                trading_date=day,
+                close=price,
+                price_convention="split_dividend_adjusted",
+                provenance=provenance(datetime(day.year, day.month, day.day)),
+            )
+        )
+    return prices
+
+
+class FakeHMMFitter:
+    """A deterministic, injectable HMMFitter for tests -- never a real fit.
+
+    ``state_means``/``predicted_states`` are returned exactly as given,
+    letting a test control the fit outcome precisely rather than relying
+    on probabilistic convergence.
+    """
+
+    def __init__(
+        self,
+        state_means: tuple[float, ...] = (-0.02, 0.0, 0.02),
+        current_state: int = 2,
+        converged: bool = True,
+        error: str | None = None,
+    ) -> None:
+        self.state_means = state_means
+        self.current_state = current_state
+        self.converged = converged
+        self.error = error
+
+    def fit_predict(self, observations, **kwargs):
+        from atlas_quant.strategies.filing_momentum_ml.regime_hmm import HMMFitResult
+
+        if self.error is not None:
+            return HMMFitResult(converged=False, state_means=(), predicted_states=(), error=self.error)
+        n = len(observations)
+        predicted = tuple([self.current_state] * n) if n else ()
+        return HMMFitResult(
+            converged=self.converged, state_means=self.state_means, predicted_states=predicted
+        )

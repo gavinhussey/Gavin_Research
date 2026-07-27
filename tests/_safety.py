@@ -10,16 +10,25 @@ autouse ``_safety_barrier`` fixture in conftest.py:
    silently in the default test run.
 2. A protected-path write guard — blocks writes to any path whose name
    matches ``PROTECTED_PATH_NAMES`` regardless of which test is running.
-   Covers ``open()`` in a write mode, ``pathlib.Path.write_text``/
-   ``write_bytes``/``unlink``, and ``os.replace``/``os.rename`` (the
-   atomic-write primitives Stage 3's feature cache uses) — a write via any
-   of these to a protected path raises immediately rather than silently
-   succeeding. Matching is substring-based against the path's string form
+   Covers both the high-level primitives (``open()`` in a write mode,
+   ``pathlib.Path.write_text``/``write_bytes``/``unlink``/``mkdir``,
+   ``os.replace``/``os.rename``) and the low-level ones every one of those
+   is ultimately built on (``os.open`` with write/create/truncate/append
+   flags, ``tempfile.mkstemp``, ``tempfile.NamedTemporaryFile``) — Stage 3
+   found that ``tempfile.mkstemp`` bypassed the high-level guards entirely
+   by calling ``os.open`` directly, leaking an empty file into a real
+   production path during test development (see feature_cache.py's
+   ``_atomic_write_text`` docstring). Guarding ``os.open`` itself closes
+   that whole class of bypass, not just the one call site that triggered
+   it. Matching is substring-based against the path's string form
    (``os.fspath``), so it applies identically whether a test constructs an
    absolute or a relative path, as long as neither happens to contain a
    protected name as a substring — which is why every cache test in this
    repository uses a pytest ``tmp_path`` (never a path under
-   ``data/cache/filing_momentum_ml``) as its cache root.
+   ``data/cache/filing_momentum_ml``) as its cache root. ``tempfile``
+   calls with no explicit ``dir=`` (the system default temp directory) are
+   never protected-path matches and are left untouched — this guard never
+   disables temporary files, only writes into a protected directory.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ from __future__ import annotations
 import builtins
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -123,6 +133,42 @@ def install_protected_path_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "write_bytes", _guarded_write_bytes)
     monkeypatch.setattr(Path, "unlink", _guarded_unlink)
     monkeypatch.setattr(Path, "mkdir", _guarded_mkdir)
+
+    _real_os_open = os.open
+    _write_flags = (
+        getattr(os, "O_WRONLY", 0)
+        | getattr(os, "O_RDWR", 0)
+        | getattr(os, "O_CREAT", 0)
+        | getattr(os, "O_TRUNC", 0)
+        | getattr(os, "O_APPEND", 0)
+    )
+
+    def _guarded_os_open(path, flags, *args, **kwargs):
+        if (flags & _write_flags) and _is_protected(path):
+            raise _BlockedByTestSafety(f"refused to os.open protected path for writing: {path!r}")
+        return _real_os_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", _guarded_os_open)
+
+    _real_mkstemp = tempfile.mkstemp
+
+    def _guarded_mkstemp(*args, dir=None, **kwargs):
+        if dir is not None and _is_protected(dir):
+            raise _BlockedByTestSafety(f"refused to mkstemp in protected directory: {dir!r}")
+        return _real_mkstemp(*args, dir=dir, **kwargs)
+
+    monkeypatch.setattr(tempfile, "mkstemp", _guarded_mkstemp)
+
+    _real_named_temp_file = tempfile.NamedTemporaryFile
+
+    def _guarded_named_temp_file(*args, dir=None, **kwargs):
+        if dir is not None and _is_protected(dir):
+            raise _BlockedByTestSafety(
+                f"refused to open NamedTemporaryFile in protected directory: {dir!r}"
+            )
+        return _real_named_temp_file(*args, dir=dir, **kwargs)
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", _guarded_named_temp_file)
 
     _real_replace = os.replace
     _real_rename = os.rename
