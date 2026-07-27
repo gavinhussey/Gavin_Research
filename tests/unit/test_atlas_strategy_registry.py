@@ -99,8 +99,10 @@ def test_filing_momentum_ml_registration_metadata_matches_report():
     assert AssetClass.EQUITY in registration.asset_classes
     assert AssetClass.ETF in registration.asset_classes  # SPY/VGT fallback
     assert "sec_fundamentals" in registration.required_capabilities
-    # No executable strategy implementation exists yet (Stage 5).
-    assert registration.factory is None
+    # Stage 5: a real, protocol-conforming factory now exists.
+    assert registration.factory is not None
+    strategy = registration.factory()
+    assert hasattr(strategy, "evaluate")
 
 
 def test_filing_momentum_ml_can_be_registered_into_a_fresh_registry():
