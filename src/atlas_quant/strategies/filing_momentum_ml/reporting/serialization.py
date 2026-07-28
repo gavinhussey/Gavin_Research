@@ -81,7 +81,6 @@ def report_to_dict(report: FilingMomentumReport) -> dict:
         "provenance": to_jsonable(report.provenance),
         "audit": {
             "config_identity": report.audit.config_identity, "model_config_identity": report.audit.model_config_identity,
-            "regime_config_identity": report.audit.regime_config_identity,
             "backtest_run_identity": report.audit.backtest_run_identity,
             "performance_analysis_identity": report.audit.performance_analysis_identity,
             "report_identity": report.audit.report_identity,

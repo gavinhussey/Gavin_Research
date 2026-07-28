@@ -145,7 +145,7 @@ def test_build_acquisition_manifest_derives_coverage_from_prices():
         _client(), _provider(), sec_user_agent="Test test@example.com", retrieved_at=_RETRIEVED_AT,
     )
     manifest = build_acquisition_manifest(
-        result, dataset_identity_label="test-run", strategy_config_identity="s1", regime_config_identity="r1",
+        result, dataset_identity_label="test-run", strategy_config_identity="s1",
         retrieval_date=date(2024, 6, 1), data_cutoff=_RETRIEVED_AT, git_commit="abc123",
     )
     assert manifest.coverage_start == date(2023, 1, 3)

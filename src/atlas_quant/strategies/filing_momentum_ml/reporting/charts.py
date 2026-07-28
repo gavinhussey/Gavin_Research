@@ -2,7 +2,7 @@
 SVG renderer.
 
 matplotlib is confirmed absent from this repository's venv (same status
-as scikit-learn/hmmlearn) and is never required to import this module or
+as scikit-learn) and is never required to import this module or
 generate a report — chart data is plain structured
 :class:`~atlas_quant.reporting.domain.ChartSeriesDefinition` values;
 rendering to SVG (below) uses only the Python standard library.
@@ -99,7 +99,7 @@ def alpha_distribution_chart(series: ReturnSeries, bin_count: int = 10) -> Chart
 
 def outcome_composition_chart(composition: dict) -> ChartSeriesDefinition:
     """Outcome composition by classification (counts) — report's own
-    "27 stock-pick / 33 fallback / 0 cash" style breakdown."""
+    "27 stock-pick / 33 blended-partial-fill / 0 cash" style breakdown."""
     points = tuple(
         ChartPoint(classification.value, float(count))
         for classification, count in sorted(composition.items(), key=lambda kv: kv[0].value)

@@ -12,7 +12,7 @@ Stage 10 adds no new trading logic, no second strategy, no multi-strategy
 capital allocation, and no live/paper-trading capability. Everything here
 either *gates* whether an existing Stage 3-9 service may run (dependency
 and data-provenance checks) or *supplies data* to it (acquisition-shaped
-input, normalization) — every feature, label, model, regime, decision,
+input, normalization) — every feature, label, model, decision,
 accounting, and performance formula is computed exclusively by the
 Stage 3-9 code this stage calls, never reimplemented.
 
@@ -43,7 +43,7 @@ Every step below is offline (no network access is performed by any of
 this code) and reuses an existing Stage 3-9 service unchanged.
 
 1. **Dependency status** (`dependency_status.py`) — reports whether
-   pandas/numpy (core, always required), scikit-learn/hmmlearn/requests
+   pandas/numpy (core, always required), scikit-learn/requests
    (production-data, required for a genuine backtest), pyarrow/jupyter/
    nbformat/pandas_market_calendars (optional), and Bloomberg/Schwab
    (optional providers) are importable, using `importlib.util.find_spec`
@@ -112,8 +112,9 @@ this code) and reuses an existing Stage 3-9 service unchanged.
    with the real `build_hgbc_estimator` factory. Never substitutes
    another estimator; if scikit-learn is unavailable, reports
    `blocked=True` and stops.
-8. **Regime-evaluation boundary** (`production.regime_boundary`) — the
-   same pattern for hmmlearn and `RegimeEvaluator.evaluate_batch`/
+8. **(Removed)** — a regime-evaluation boundary module existed here
+   until the regime gate was deleted. There is no hmmlearn dependency and
+   no `RegimeEvaluator`. Formerly `RegimeEvaluator.evaluate_batch`/
    `HmmlearnFitter`.
 9. **Top-level orchestration** (`production.orchestration`) —
    `run_filing_momentum_production_backtest` coordinates all of the
@@ -124,7 +125,7 @@ this code) and reuses an existing Stage 3-9 service unchanged.
    `blocked_identity_mismatch` / `running_step_failed` / `completed` /
    `completed_with_warnings` / `comparison_only`. The one piece of new
    logic in this module, `build_fallback_statistics_source`, derives
-   fallback-ticker trailing returns using the same documented "last price
+   ETF-sleeve-ticker trailing returns using the same documented "last price
    on or before" convention and the same pure `compute_forward_return`
    formula Stage 6 already defines — never a new return calculation.
 10. **Checkpointing** (`production.checkpoint`) — persists, per run, the
@@ -132,7 +133,7 @@ this code) and reuses an existing Stage 3-9 service unchanged.
     (`raw_data_acquired` .. `comparison_completed`) as atomically-written
     JSON (never pickle) under `data/manifests/filing_momentum_ml/`. A
     checkpoint manifest computed under a different dataset/strategy/
-    regime config identity is rejected (`CheckpointIdentityMismatch` ->
+    strategy config identity is rejected (`CheckpointIdentityMismatch` ->
     `BLOCKED_IDENTITY_MISMATCH`), never silently resumed.
 11. **CLI** (`atlas_quant.cli.filing_momentum`, the `atlas-quant
     filing-momentum` console script) — `validate-data`, `build-features`,

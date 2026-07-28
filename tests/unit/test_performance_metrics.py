@@ -52,7 +52,7 @@ def _quarter(
     strategy_result = _minimal_strategy_result(status) if status is not None else None
     return BacktestQuarterResult(
         period=period, outcome_type=outcome_type, training_state=None, model_identity=None,
-        scoring_result=None, market_regime=None, per_instrument_regime_count=0,
+        scoring_result=None,
         strategy_result=strategy_result, positions=(), period_return=period_return,
         benchmark=None, benchmark_return=benchmark_return, alpha=alpha, cash_weight=0.0,
     )
@@ -88,16 +88,14 @@ class TestClassifyQuarter:
         q = _quarter(date(2020, 3, 31), QuarterOutcomeType.SKIPPED)
         assert classify_quarter(q) == QuarterClassification.SKIPPED
 
-    def test_regime_blocked_distinguished_from_cash(self):
-        q = _quarter(date(2020, 3, 31), QuarterOutcomeType.CASH, 0.0, 0.02, status=StrategyStatus.REGIME_BLOCKED)
-        assert classify_quarter(q) == QuarterClassification.REGIME_BLOCKED
-
-    def test_intentional_cash(self):
-        q = _quarter(date(2020, 3, 31), QuarterOutcomeType.CASH, 0.0, 0.02, status=StrategyStatus.NO_SIGNAL)
+    def test_edge_case_cash(self):
+        # CASH survives only for genuinely-no-exposure edge cases
+        # (missing data / disabled); no regime gate can produce one.
+        q = _quarter(date(2020, 3, 31), QuarterOutcomeType.CASH, 0.0, 0.02, status=StrategyStatus.MISSING_DATA)
         assert classify_quarter(q) == QuarterClassification.CASH
 
     def test_invalid_when_period_return_missing(self):
-        q = _quarter(date(2020, 3, 31), QuarterOutcomeType.CASH, None, 0.02, status=StrategyStatus.CASH)
+        q = _quarter(date(2020, 3, 31), QuarterOutcomeType.CASH, None, 0.02, status=StrategyStatus.MISSING_DATA)
         assert classify_quarter(q) == QuarterClassification.INVALID
 
 
@@ -106,7 +104,7 @@ class TestExtractReturnSeries:
         quarters = _quarters([
             (date(2020, 3, 31), QuarterOutcomeType.PRIMARY, 0.05, 0.02, None),
             (date(2020, 6, 30), QuarterOutcomeType.FALLBACK, 0.01, 0.02, None),
-            (date(2020, 9, 30), QuarterOutcomeType.CASH, 0.0, 0.02, StrategyStatus.REGIME_BLOCKED),
+            (date(2020, 9, 30), QuarterOutcomeType.CASH, 0.0, 0.02, StrategyStatus.MISSING_DATA),
             (date(2020, 12, 31), QuarterOutcomeType.SKIPPED, None, None, None),
         ])
         result = _backtest_result(quarters)
@@ -124,19 +122,19 @@ class TestExtractReturnSeries:
         assert series.included_count == 1
         assert series.points[0].classification == QuarterClassification.PRIMARY
 
-    def test_invested_excludes_cash_and_regime_blocked(self):
+    def test_invested_excludes_cash(self):
         quarters = _quarters([
             (date(2020, 3, 31), QuarterOutcomeType.PRIMARY, 0.05, 0.02, None),
-            (date(2020, 6, 30), QuarterOutcomeType.CASH, 0.0, 0.02, StrategyStatus.NO_SIGNAL),
-            (date(2020, 9, 30), QuarterOutcomeType.CASH, 0.0, 0.02, StrategyStatus.REGIME_BLOCKED),
+            (date(2020, 6, 30), QuarterOutcomeType.CASH, 0.0, 0.02, StrategyStatus.DISABLED),
+            (date(2020, 9, 30), QuarterOutcomeType.CASH, 0.0, 0.02, StrategyStatus.MISSING_DATA),
         ])
         result = _backtest_result(quarters)
         series = extract_return_series(result, ScopeDefinition.standard(PerformanceScope.INVESTED))
         assert series.included_count == 1
 
-    def test_regime_blocked_included_in_all_evaluated(self):
+    def test_cash_included_in_all_evaluated(self):
         quarters = _quarters([
-            (date(2020, 3, 31), QuarterOutcomeType.CASH, 0.0, 0.02, StrategyStatus.REGIME_BLOCKED),
+            (date(2020, 3, 31), QuarterOutcomeType.CASH, 0.0, 0.02, StrategyStatus.MISSING_DATA),
         ])
         result = _backtest_result(quarters)
         series = extract_return_series(result, ScopeDefinition.standard(PerformanceScope.ALL_EVALUATED))

@@ -16,7 +16,6 @@ from atlas_quant.domain.audit import AuditTrail
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.domain.serialization import to_jsonable
 from atlas_quant.strategies.filing_momentum_ml.fallback_domain import FallbackAssetStatistics
-from atlas_quant.strategies.filing_momentum_ml.regime_domain import RegimeResult
 from atlas_quant.strategies.filing_momentum_ml.scoring_domain import ScoredCandidate
 
 
@@ -37,8 +36,6 @@ class CandidateRejectionCategory(str, Enum):
     DUPLICATE_INSTRUMENT = "duplicate_instrument"
     EXCLUDED_SECTOR = "excluded_sector"
     BELOW_THRESHOLD = "below_threshold"
-    PER_INSTRUMENT_BEAR = "per_instrument_bear"
-    MISSING_REGIME_RESULT = "missing_regime_result"
     POSITION_CAP = "position_cap"
 
 
@@ -47,10 +44,13 @@ class FilingMomentumOutcome(str, Enum):
     ``StrategyStatus`` by the evaluator, never used as a substitute for it."""
 
     PRIMARY_SELECTION = "primary_selection"
-    FALLBACK = "fallback"
-    MARKET_REGIME_BLOCKED = "market_regime_blocked"
-    CASH = "cash"
-    NO_SIGNAL = "no_signal"
+    BLENDED = "blended"
+    """Fewer than ``min_positions`` stocks qualified, so this quarter is a
+    partial fill: every qualifying stock is still held (sized off the most
+    recent full-quota quarter's score-to-weight ratio) and the deployable
+    capital they leave unused is placed in the fallback ETF sleeve. Not
+    "ETFs instead of stocks" -- stocks *plus* an ETF sleeve."""
+
     MISSING_REQUIRED_DATA = "missing_required_data"
     INVALID_INPUT = "invalid_input"
     DISABLED = "disabled"
@@ -95,7 +95,6 @@ class FilingMomentumDecisionSummary:
     data_cutoff: datetime
     strategy_budget_pct: float
     config_identity: str
-    market_regime: RegimeResult
     initial_candidate_count: int
     rejected_candidates: tuple[RejectedCandidate, ...]
     capped_candidates: tuple[RejectedCandidate, ...]
@@ -105,6 +104,15 @@ class FilingMomentumDecisionSummary:
     cash_weight: float
     fallback_decision: FallbackWeightDecision | None
     warnings: tuple[str, ...]
+    reference_score_to_weight_ratio: float | None = None
+    """``deployable_pct / sum(selected scores)`` for a full-quota quarter.
+
+    Set only by a full-quota evaluation (>= ``min_positions`` survivors);
+    ``None`` on every other outcome, including a partial-fill quarter --
+    a partial fill consumes a reference ratio but never produces one, so
+    the backtest runner's carried ratio always means "the most recent
+    *full-quota* quarter's ratio".
+    """
     audit_trail: AuditTrail = field(default_factory=AuditTrail)
 
     def to_dict(self) -> dict[str, object]:
@@ -115,7 +123,6 @@ class FilingMomentumDecisionSummary:
             "data_cutoff": self.data_cutoff.isoformat(),
             "strategy_budget_pct": self.strategy_budget_pct,
             "config_identity": self.config_identity,
-            "market_regime": self.market_regime.to_dict(),
             "initial_candidate_count": self.initial_candidate_count,
             "rejected_candidates": [r.to_dict() for r in self.rejected_candidates],
             "capped_candidates": [r.to_dict() for r in self.capped_candidates],
@@ -125,6 +132,7 @@ class FilingMomentumDecisionSummary:
             "outcome": self.outcome.value,
             "weights": {str(k): v for k, v in self.weights.items()},
             "cash_weight": self.cash_weight,
+            "reference_score_to_weight_ratio": self.reference_score_to_weight_ratio,
             "warnings": list(self.warnings),
             "audit_trail": self.audit_trail.to_dict(),
         }

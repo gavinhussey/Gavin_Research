@@ -13,12 +13,6 @@ from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, 
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
 from atlas_quant.strategies.filing_momentum_ml.fallback_domain import FallbackAssetStatistics
-from atlas_quant.strategies.filing_momentum_ml.regime_domain import (
-    ComponentAvailability,
-    ComponentClassification,
-    RegimeClassification,
-    RegimeResult,
-)
 from atlas_quant.strategies.filing_momentum_ml.scoring_domain import ScoredCandidate
 
 
@@ -171,118 +165,6 @@ def make_daily_series(
     return prices
 
 
-class FakeHMMFitter:
-    """A deterministic, injectable HMMFitter for tests -- never a real fit.
-
-    ``state_means``/``predicted_states`` are returned exactly as given,
-    letting a test control the fit outcome precisely rather than relying
-    on probabilistic convergence.
-    """
-
-    def __init__(
-        self,
-        state_means: tuple[float, ...] = (-0.02, 0.0, 0.02),
-        current_state: int = 2,
-        converged: bool = True,
-        error: str | None = None,
-    ) -> None:
-        self.state_means = state_means
-        self.current_state = current_state
-        self.converged = converged
-        self.error = error
-
-    def fit_predict(self, observations, **kwargs):
-        from atlas_quant.strategies.filing_momentum_ml.regime_hmm import HMMFitResult
-
-        if self.error is not None:
-            return HMMFitResult(converged=False, state_means=(), predicted_states=(), error=self.error)
-        n = len(observations)
-        predicted = tuple([self.current_state] * n) if n else ()
-        return HMMFitResult(
-            converged=self.converged, state_means=self.state_means, predicted_states=predicted
-        )
-
-
-def make_component_classification(
-    instrument_id: InstrumentId,
-    *,
-    component: str = "markov",
-    is_bear: bool = False,
-    availability: ComponentAvailability = ComponentAvailability.OK,
-    evaluation_timestamp: datetime = datetime(2026, 1, 1),
-    data_cutoff: datetime = datetime(2026, 1, 1),
-) -> ComponentClassification:
-    if availability != ComponentAvailability.OK:
-        classification = RegimeClassification.UNKNOWN
-        is_bear = False
-    else:
-        classification = RegimeClassification.BEAR if is_bear else RegimeClassification.BULL
-    return ComponentClassification(
-        component=component,
-        instrument_id=instrument_id,
-        evaluation_timestamp=evaluation_timestamp,
-        data_cutoff=data_cutoff,
-        classification=classification,
-        is_bear=is_bear,
-        availability=availability,
-        confidence=None,
-        observation_count=300,
-        required_observation_count=100,
-        windows=(),
-        config_identity="a" * 64,
-        provenance=(),
-    )
-
-
-def make_regime_result(
-    instrument_id: InstrumentId,
-    *,
-    markov_bear: bool = False,
-    hmm_bear: bool = False,
-    markov_availability: ComponentAvailability = ComponentAvailability.OK,
-    hmm_availability: ComponentAvailability = ComponentAvailability.OK,
-    gate_mode: str = "both",
-    evaluation_timestamp: datetime = datetime(2026, 1, 1),
-    data_cutoff: datetime = datetime(2026, 1, 1),
-) -> RegimeResult:
-    markov = make_component_classification(
-        instrument_id, component="markov", is_bear=markov_bear, availability=markov_availability,
-        evaluation_timestamp=evaluation_timestamp, data_cutoff=data_cutoff,
-    )
-    hmm = make_component_classification(
-        instrument_id, component="hmm", is_bear=hmm_bear, availability=hmm_availability,
-        evaluation_timestamp=evaluation_timestamp, data_cutoff=data_cutoff,
-    )
-    if gate_mode == "both":
-        is_blocked = markov.is_bear and hmm.is_bear
-    elif gate_mode == "either":
-        is_blocked = markov.is_bear or hmm.is_bear
-    elif gate_mode == "markov":
-        is_blocked = markov.is_bear
-    elif gate_mode == "hmm":
-        is_blocked = hmm.is_bear
-    else:
-        is_blocked = False
-    warnings = tuple(
-        f"{name} component unavailable: {component.availability.value}"
-        for name, component in (("markov", markov), ("hmm", hmm))
-        if component.availability != ComponentAvailability.OK
-    )
-    return RegimeResult(
-        instrument_id=instrument_id,
-        evaluation_timestamp=evaluation_timestamp,
-        data_cutoff=data_cutoff,
-        markov=markov,
-        hmm=hmm,
-        gate_mode=gate_mode,
-        is_blocked=is_blocked,
-        block_reason="test fixture" if is_blocked else None,
-        warnings=warnings,
-        config_identity="a" * 64,
-        provenance=(),
-    )
-
-
 def make_scored_candidate(
     symbol: str,
     score: float,
@@ -395,8 +277,18 @@ def make_backtest_price_source(
     return source
 
 
-def make_backtest_feature_observation_source(universe: list, sector: str = "Tech & Media"):
-    """Returns a callable(quarter_end) -> list[FeatureObservation] for a fixed universe."""
+def make_backtest_feature_observation_source(
+    universe: list, sector: str = "Tech & Media", *, point_in_time_cutoff: bool = False
+):
+    """Returns a callable(quarter_end) -> list[FeatureObservation] for a fixed universe.
+
+    By default every observation carries a far-future ``data_cutoff``,
+    which the Stage 5 evaluator rejects as ``FUTURE_DATA_CUTOFF`` -- so
+    the default source exercises the "no candidate survives validation"
+    path. Pass ``point_in_time_cutoff=True`` for a cutoff equal to the
+    quarter end, producing candidates that actually survive into ranking
+    and weighting.
+    """
     from atlas_quant.strategies.filing_momentum_ml.feature_domain import (
         FEATURE_NAMES,
         FeatureObservation,
@@ -412,7 +304,12 @@ def make_backtest_feature_observation_source(universe: list, sector: str = "Tech
                     strategy_id="filing_momentum_ml", strategy_version="0.1.0", feature_schema_version="2",
                     instrument_id=iid, fiscal_period="Q", quarter_end=quarter_end,
                     filing_timestamp=datetime(quarter_end.year, quarter_end.month, quarter_end.day),
-                    feature_timestamp=quarter_end, data_cutoff=datetime(2035, 1, 1),
+                    feature_timestamp=quarter_end,
+                    data_cutoff=(
+                        datetime(quarter_end.year, quarter_end.month, quarter_end.day)
+                        if point_in_time_cutoff
+                        else datetime(2035, 1, 1)
+                    ),
                     sector=sector, features=features, missing_features=missing_feature_names(features),
                     provenance=(provenance(datetime(quarter_end.year, quarter_end.month, quarter_end.day)),),
                     config_identity="a" * 64, feature_cache_identity=None,
@@ -425,22 +322,28 @@ def make_backtest_feature_observation_source(universe: list, sector: str = "Tech
     return source
 
 
-def make_backtest_fallback_statistics_source(spy_return: float = 0.02, vgt_return: float = 0.03):
+#: The ETF-sleeve tickers FilingMomentumMLConfig defaults to. Kept here so
+#: fixtures and the config can never silently drift apart.
+FALLBACK_TICKERS = ("VOO", "VTI")
+
+
+def make_backtest_fallback_statistics_source(voo_return: float = 0.02, vti_return: float = 0.03):
+    """A fallback_statistics_source covering the default VOO/VTI sleeve."""
     from atlas_quant.strategies.filing_momentum_ml.fallback_domain import FallbackAssetStatistics
 
-    spy = instrument("SPY", AssetClass.ETF)
-    vgt = instrument("VGT", AssetClass.ETF)
+    voo = instrument("VOO", AssetClass.ETF)
+    vti = instrument("VTI", AssetClass.ETF)
 
     def source(period) -> tuple:
         return (
             FallbackAssetStatistics(
-                instrument_id=spy, measurement_cutoff=period.evaluation_timestamp,
-                quarterly_returns=(spy_return,) * 12, observation_count=12,
+                instrument_id=voo, measurement_cutoff=period.evaluation_timestamp,
+                quarterly_returns=(voo_return,) * 12, observation_count=12,
                 provenance=provenance(period.evaluation_timestamp),
             ),
             FallbackAssetStatistics(
-                instrument_id=vgt, measurement_cutoff=period.evaluation_timestamp,
-                quarterly_returns=(vgt_return,) * 12, observation_count=12,
+                instrument_id=vti, measurement_cutoff=period.evaluation_timestamp,
+                quarterly_returns=(vti_return,) * 12, observation_count=12,
                 provenance=provenance(period.evaluation_timestamp),
             ),
         )

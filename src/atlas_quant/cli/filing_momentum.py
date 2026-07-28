@@ -73,7 +73,6 @@ from atlas_quant.strategies.filing_momentum_ml.production.validation import (
     validate_sectors,
     validate_universe,
 )
-from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
 from atlas_quant.strategies.filing_momentum_ml.reporting.output import write_report_artifacts
 from atlas_quant.strategies.filing_momentum_ml.reporting.report_model import ReportOptions
 from atlas_quant.strategies.filing_momentum_ml.sector_encoding import SectorEncoder
@@ -414,7 +413,7 @@ def cmd_acquire_data(args: argparse.Namespace, stdout, stderr) -> int:
 
     manifest = build_acquisition_manifest(
         result, dataset_identity_label=args.dataset_label, strategy_config_identity=FilingMomentumMLConfig().identity(),
-        regime_config_identity=RegimeConfig().identity(), retrieval_date=retrieved_at.date(),
+        retrieval_date=retrieved_at.date(),
         data_cutoff=retrieved_at, git_commit=None,
     )
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -541,8 +540,7 @@ def _build_run_inputs(args: argparse.Namespace, bundle: NormalizedBundle, calend
     if with_report and getattr(args, "source_report_html", None):
         source_html = Path(args.source_report_html).read_text()
 
-    regime_gate_mode = getattr(args, "regime_gate_mode", None) or RegimeConfig().gate_mode
-    backtest_config = FilingMomentumBacktestConfig(regime_config=RegimeConfig(gate_mode=regime_gate_mode))
+    backtest_config = FilingMomentumBacktestConfig()
     return ProductionRunInputs(
         backtest_config=backtest_config, periods=periods, universe=bundle.universe,
         benchmark_instrument_id=benchmark, trading_calendar=calendar, sector_encoder=SectorEncoder(),
@@ -633,15 +631,6 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--end-quarter", type=str, default=None, help="YYYY-MM-DD, a valid calendar quarter-end")
     parser.add_argument("--benchmark", type=str, default="SPY")
     parser.add_argument("--earnings-lag-days", type=int, default=None)
-    parser.add_argument(
-        "--regime-gate-mode", type=str, default=None, choices=("both", "either", "markov", "hmm", "none"),
-        help=(
-            "default: report_current.html's own documented production value ('both'). "
-            "'none'/'markov' do not require hmmlearn to be installed, but are a genuine, "
-            "disclosed DEVIATION from the report's specified behavior -- never claim a run "
-            "using anything but 'both' as a reproduction of report_current.html"
-        ),
-    )
     parser.add_argument("--dry-run", action="store_true", help="compute but never write any artifact to disk")
     parser.add_argument("--overwrite", action="store_true", help="allow replacing an existing artifact")
     parser.add_argument("--json", action="store_true", dest="as_json", help="machine-readable JSON output")

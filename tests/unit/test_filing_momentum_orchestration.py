@@ -4,8 +4,8 @@ Dependency availability is monkeypatched throughout rather than assumed
 from the ambient environment (which packages happen to be installed has
 changed across sessions of this project before) -- both the
 BLOCKED_MISSING_DEPENDENCY report and the "dependencies available" path
-(full Stage 3/6/7/8 wiring with fake estimator/HMM fitter, test-only,
-never production code) are exercised this way.
+(full Stage 3/6/7/8 wiring with a fake estimator, test-only, never
+production code) are exercised this way.
 """
 
 from datetime import date, datetime, timedelta
@@ -27,7 +27,6 @@ from atlas_quant.strategies.filing_momentum_ml.sector_encoding import SectorEnco
 
 from tests.fixtures.filing_momentum_ml import (
     FakeEstimator,
-    FakeHMMFitter,
     make_quarterly_filings,
     make_sector_record,
     provenance,
@@ -36,7 +35,8 @@ from tests.fixtures.filing_momentum_ml import (
 _AAA = InstrumentId(symbol="AAA", asset_class=AssetClass.EQUITY)
 _BBB = InstrumentId(symbol="BBB", asset_class=AssetClass.EQUITY)
 _SPY = InstrumentId(symbol="SPY", asset_class=AssetClass.EQUITY)
-_VGT = InstrumentId(symbol="VGT", asset_class=AssetClass.EQUITY)
+_VOO = InstrumentId(symbol="VOO", asset_class=AssetClass.EQUITY)
+_VTI = InstrumentId(symbol="VTI", asset_class=AssetClass.EQUITY)
 _BENCHMARK = InstrumentId(symbol="SPY", asset_class=AssetClass.EQUITY)
 
 _QUARTER_ENDS = [date(2022, 3, 31), date(2022, 6, 30), date(2022, 9, 30), date(2022, 12, 31), date(2023, 3, 31)]
@@ -72,7 +72,7 @@ def _manifest() -> DataProvenanceManifest:
         coverage_start=date(2019, 1, 1), coverage_end=date(2023, 6, 30),
         row_counts={}, missing_data_summary={}, duplicate_summary={},
         corporate_action_treatment="none", delisting_treatment="none", data_corrections=(),
-        source_file_hashes={}, strategy_config_identity="x", regime_config_identity="y",
+        source_file_hashes={}, strategy_config_identity="x",
         git_commit=None,
     )
 
@@ -88,7 +88,7 @@ def _build_inputs() -> ProductionRunInputs:
     }
     prices_by_instrument = {
         _AAA: _daily_prices(_AAA), _BBB: _daily_prices(_BBB),
-        _SPY: _daily_prices(_SPY), _VGT: _daily_prices(_VGT),
+        _SPY: _daily_prices(_SPY), _VOO: _daily_prices(_VOO), _VTI: _daily_prices(_VTI),
     }
     sector_by_instrument = {
         _AAA: make_sector_record(_AAA, "Technology", datetime(2023, 1, 1)),
@@ -102,75 +102,34 @@ def _build_inputs() -> ProductionRunInputs:
     )
 
 
-def _missing_hmmlearn_only(report):
+def _missing_sklearn_only(report):
     from atlas_quant.dependency_status import DependencyAvailability, DependencyCategory, DependencyStatus
 
     return (
         DependencyStatus(
-            "hmmlearn", DependencyCategory.PRODUCTION_DATA,
-            DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST, None, "0.3.0",
-            detail="module 'hmmlearn' not found",
+            "scikit-learn", DependencyCategory.PRODUCTION_DATA,
+            DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST, None, "1.3.0",
+            detail="module 'sklearn' not found",
         ),
     )
 
 
 def test_blocked_missing_dependency(monkeypatch):
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", _missing_hmmlearn_only)
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", _missing_sklearn_only)
     result = run_filing_momentum_production_backtest(_build_inputs())
     assert result.state == ProductionRunState.BLOCKED_MISSING_DEPENDENCY
     assert result.missing_dependencies
     assert result.backtest_result is None
 
 
-def test_gate_mode_both_still_requires_hmmlearn(monkeypatch):
-    """report_current.html's own documented production default ("both")
-    genuinely needs the HMM component's verdict -- hmmlearn stays required."""
-    import dataclasses
+def test_hmmlearn_is_no_longer_a_dependency_at_all(monkeypatch):
+    """The regime gate is gone, so hmmlearn is not referenced by the
+    dependency specs, the orchestration module, or any run path."""
+    from atlas_quant.dependency_status import DEPENDENCY_SPECS
 
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", _missing_hmmlearn_only)
-    inputs = _build_inputs()
-    assert inputs.backtest_config.regime_config.gate_mode == "both"
-    result = run_filing_momentum_production_backtest(inputs)
-    assert result.state == ProductionRunState.BLOCKED_MISSING_DEPENDENCY
-    assert any(d.name == "hmmlearn" for d in result.missing_dependencies)
-
-
-def test_gate_mode_none_does_not_require_hmmlearn(monkeypatch):
-    """A deliberate, disclosed deviation from report_current.html's default
-    -- gate_mode="none" never consults the HMM component's verdict, so a
-    missing hmmlearn no longer blocks the run."""
-    import dataclasses
-
-    from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
-
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", _missing_hmmlearn_only)
-    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
-        FakeEstimator(), _fake_build_info(),
-    ))
-
-    inputs = _build_inputs()
-    inputs = dataclasses.replace(
-        inputs,
-        backtest_config=FilingMomentumBacktestConfig(
-            strategy_config=inputs.backtest_config.strategy_config,
-            regime_config=RegimeConfig(gate_mode="none"),
-        ),
-    )
-    result = run_filing_momentum_production_backtest(inputs)
-    assert result.state != ProductionRunState.BLOCKED_MISSING_DEPENDENCY
-    assert not any(d.name == "hmmlearn" for d in result.missing_dependencies)
-    # The regime gate never blocks a quarter to cash when gate_mode="none".
-    for quarter in result.backtest_result.quarter_results:
-        if quarter.market_regime is not None:
-            assert quarter.market_regime.is_blocked is False
-
-
-def test_disabled_hmm_fitter_reports_unavailable_without_importing_hmmlearn():
-    fitter = orchestration_module.DisabledHMMFitter()
-    result = fitter.fit_predict([(0.01, 0.02)], n_states=3, covariance_type="diag", n_iter=200, random_state=42)
-    assert result.converged is False
-    assert result.predicted_states == ()
-    assert result.error is not None and "disabled" in result.error
+    assert not any(spec.name == "hmmlearn" for spec in DEPENDENCY_SPECS)
+    assert not hasattr(orchestration_module, "HmmlearnFitter")
+    assert not hasattr(orchestration_module, "DisabledHMMFitter")
 
 
 def test_blocked_invalid_dataset_when_prices_missing(monkeypatch):
@@ -196,7 +155,6 @@ def test_completes_end_to_end_when_dependencies_available(monkeypatch):
     monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
         FakeEstimator(), _fake_build_info(),
     ))
-    monkeypatch.setattr(orchestration_module, "HmmlearnFitter", lambda: FakeHMMFitter())
 
     result = run_filing_momentum_production_backtest(_build_inputs())
     assert result.state in (ProductionRunState.COMPLETED, ProductionRunState.COMPLETED_WITH_WARNINGS)
@@ -222,7 +180,6 @@ def test_checkpoint_manifest_persisted_and_complete_after_run(monkeypatch, tmp_p
     monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
         FakeEstimator(), _fake_build_info(),
     ))
-    monkeypatch.setattr(orchestration_module, "HmmlearnFitter", lambda: FakeHMMFitter())
 
     inputs = _with_checkpoint_root(_build_inputs(), tmp_path)
     result = run_filing_momentum_production_backtest(inputs)
@@ -255,7 +212,6 @@ def test_resume_rejects_manifest_with_mismatched_strategy_config_identity(monkey
         run_identity=run_identity,
         dataset_manifest_identity=manifest_identity,
         strategy_config_identity="not-the-real-strategy-config-identity",
-        regime_config_identity=inputs.backtest_config.regime_config.identity(),
         git_commit=None, dependency_versions={}, run_mode="production",
         created_at=datetime(2024, 1, 1),
     )

@@ -70,7 +70,6 @@ class ExecutiveSummary:
     max_positions: int
     deployable_pct: float
     fallback_description: str
-    regime_description: str
     backtest_start: date | None
     backtest_end: date | None
     warnings: tuple[str, ...]
@@ -86,7 +85,6 @@ class StrategySpecification:
     model_hyperparameters: Mapping[str, object]
     ml_threshold: float
     excluded_sectors: tuple[str, ...]
-    regime_gate_mode: str
     weighting_summary: str
     fallback_weighting_summary: str
     entry_exit_summary: str
@@ -103,7 +101,6 @@ class BacktestCoverage:
     primary_count: int
     fallback_count: int
     cash_count: int
-    regime_blocked_count: int
     skipped_count: int
     invalid_count: int
     missing_benchmark_count: int
@@ -170,7 +167,6 @@ class ProvenanceSection:
 class AuditSection:
     config_identity: str
     model_config_identity: str | None
-    regime_config_identity: str
     backtest_run_identity: str
     performance_analysis_identity: str
     report_identity: str

@@ -1,9 +1,8 @@
 """The standalone Filing Momentum ML historical backtest runner, Stage 7.
 
-Orchestrates, in the report-defined order, Stage 6 (labeling/training/
-scoring), Stage 4 (regime), and Stage 5 (strategy decision) for one
-quarter at a time — never reimplementing any of their formulas. This is a
-single-strategy backtest: ``strategy_budget_pct`` defaults to 1.0 (100%
+Orchestrates, in order, Stage 6 (labeling/training/scoring) and Stage 5
+(the strategy decision) for one quarter at a time — never reimplementing
+any of their formulas. This is a single-strategy backtest: ``strategy_budget_pct`` defaults to 1.0 (100%
 assigned capital) so the report's standalone behavior is reproduced;
 cross-strategy allocation is out of scope entirely.
 """
@@ -38,7 +37,6 @@ from atlas_quant.strategies.filing_momentum_ml.config import (
     STRATEGY_VERSION,
     FilingMomentumMLConfig,
 )
-from atlas_quant.strategies.filing_momentum_ml.decision_domain import FilingMomentumOutcome
 from atlas_quant.strategies.filing_momentum_ml.estimator import Estimator, EstimatorBuildInfo
 from atlas_quant.strategies.filing_momentum_ml.fallback_domain import FallbackAssetStatistics
 from atlas_quant.strategies.filing_momentum_ml.feature_domain import FeatureObservation
@@ -49,10 +47,6 @@ from atlas_quant.strategies.filing_momentum_ml.model_training import (
     TrainingState,
     train_model,
 )
-from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
-from atlas_quant.strategies.filing_momentum_ml.regime_domain import RegimeResult
-from atlas_quant.strategies.filing_momentum_ml.regime_evaluator import RegimeEvaluator
-from atlas_quant.strategies.filing_momentum_ml.regime_hmm import HMMFitter
 from atlas_quant.strategies.filing_momentum_ml.scoring import ScoringResult, score_observations
 from atlas_quant.strategies.filing_momentum_ml.strategy import (
     FilingMomentumEvaluationInputs,
@@ -92,7 +86,6 @@ class FilingMomentumBacktestConfig:
     """Every behavior-changing backtest-level configuration value, bundled and identified."""
 
     strategy_config: FilingMomentumMLConfig = field(default_factory=FilingMomentumMLConfig)
-    regime_config: RegimeConfig = field(default_factory=RegimeConfig)
     price_policy: PriceResolutionPolicy = field(default_factory=PriceResolutionPolicy)
     transaction_costs: TransactionCostPolicy = field(default_factory=TransactionCostPolicy)
     strategy_budget_pct: float = 1.0
@@ -108,7 +101,6 @@ class FilingMomentumBacktestConfig:
         return compute_config_identity(
             {
                 "strategy_config_identity": self.strategy_config.identity(),
-                "regime_config_identity": self.regime_config.identity(),
                 "price_policy": self.price_policy,
                 "transaction_costs": self.transaction_costs.identity(),
                 "strategy_budget_pct": self.strategy_budget_pct,
@@ -125,26 +117,33 @@ class FilingMomentumBacktestDependencies:
     price_source: Mapping[InstrumentId, tuple[DailyPriceObservation, ...]]
     fallback_statistics_source: Callable[[BacktestPeriod], tuple[FallbackAssetStatistics, ...]]
     estimator_factory: Callable[[FilingMomentumMLConfig], tuple[Estimator, EstimatorBuildInfo]]
-    hmm_fitter: HMMFitter
     trading_calendar: TradingCalendar
     universe: tuple[InstrumentId, ...]
     benchmark_instrument_id: InstrumentId
 
 
 class QuarterOutcomeType(str, Enum):
+    """One quarter's coarse capital-deployment bucket.
+
+    ``FALLBACK`` is the blended partial-fill bucket: fewer than
+    ``min_positions`` stocks qualified, so the quarter holds whatever
+    stocks did qualify *plus* an ETF sleeve over the deployable capital
+    they left unused (``FilingMomentumOutcome.BLENDED`` /
+    ``StrategyStatus.FALLBACK``). It is deliberately not merged into
+    ``PRIMARY`` -- a quarter with ETF exposure must stay distinguishable
+    from a pure stock-selection quarter in every downstream statistic.
+
+    ``CASH`` is now an edge case only. With the regime gate removed and
+    the strategy no longer able to produce a 100%-cash decision by
+    design, it is reachable only via ``StrategyStatus.MISSING_DATA``
+    (fallback-ticker statistics genuinely unavailable) or
+    ``StrategyStatus.DISABLED`` -- never as a routine outcome.
+    """
+
     PRIMARY = "primary"
     FALLBACK = "fallback"
     CASH = "cash"
     SKIPPED = "skipped"
-
-
-_CASH_STATUSES = (
-    StrategyStatus.REGIME_BLOCKED,
-    StrategyStatus.CASH,
-    StrategyStatus.NO_SIGNAL,
-    StrategyStatus.MISSING_DATA,
-    StrategyStatus.DISABLED,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,8 +155,6 @@ class BacktestQuarterResult:
     training_state: TrainingState | None
     model_identity: ModelIdentity | None
     scoring_result: ScoringResult | None
-    market_regime: RegimeResult | None
-    per_instrument_regime_count: int
     strategy_result: StrategyResult | None
     positions: tuple[PositionOutcome, ...]
     period_return: float | None
@@ -214,6 +211,7 @@ class BacktestResult:
 
     @property
     def fallback_quarter_count(self) -> int:
+        """Quarters that ran as a blended partial fill (stocks + ETF sleeve)."""
         return sum(1 for q in self.quarter_results if q.outcome_type == QuarterOutcomeType.FALLBACK)
 
     @property
@@ -324,21 +322,31 @@ def run_filing_momentum_backtest(
 ) -> BacktestResult:
     """Run the standalone Filing Momentum ML backtest over ``periods``, in order.
 
-    For each period: build/score via Stage 6, evaluate regime via Stage 4,
-    decide via Stage 5, then resolve positions/benchmark and compute the
-    period's return. A model is retrained from scratch for every period
-    (never reused across quarters) — the per-period fitted estimator lives
-    only inside that period's ``TrainingResult`` momentarily and is never
-    carried into a later period's training call.
+    For each period: build/score via Stage 6, decide via Stage 5, then
+    resolve positions/benchmark and compute the period's return. A model
+    is retrained from scratch for every period (never reused across
+    quarters) — the per-period fitted estimator lives only inside that
+    period's ``TrainingResult`` momentarily and is never carried into a
+    later period's training call.
+
+    Exactly one piece of state crosses quarter boundaries:
+    ``carried_reference_ratio``, the ``deployable_pct / sum(scores)``
+    ratio recorded by the most recent *full-quota* quarter, which a later
+    partial-fill quarter sizes its few picks against (see
+    ``strategy.FilingMomentumMLStrategy``). It is deliberately not
+    overwritten by a partial-fill quarter's ``None``, so "most recent
+    full-quota quarter" is preserved across any number of intervening
+    thin quarters. Nothing else — no model, no score, no position — is
+    carried forward.
     """
     config = config or FilingMomentumBacktestConfig()
     strategy_config = config.strategy_config
     labeled_quarters = _build_labeled_quarters(periods, dependencies, strategy_config.n_winners)
-    evaluator = RegimeEvaluator(config.regime_config)
     strategy = FilingMomentumMLStrategy()
 
     quarter_results: list[BacktestQuarterResult] = []
     run_audit = AuditTrail()
+    carried_reference_ratio: float | None = None
 
     for period in periods:
         target_obs = dependencies.feature_observation_source(period.quarter_end)
@@ -363,8 +371,7 @@ def run_filing_momentum_backtest(
                 BacktestQuarterResult(
                     period=period, outcome_type=QuarterOutcomeType.SKIPPED,
                     training_state=training_result.state, model_identity=None,
-                    scoring_result=None, market_regime=None, per_instrument_regime_count=0,
-                    strategy_result=None, positions=(), period_return=None,
+                    scoring_result=None, strategy_result=None, positions=(), period_return=None,
                     benchmark=None, benchmark_return=None, alpha=None, cash_weight=0.0,
                     warnings=(f"training skipped: {training_result.state.value}",),
                     rejection_reasons=tuple(eligibility.reasons),
@@ -379,22 +386,11 @@ def run_filing_momentum_backtest(
         )
 
         benchmark_prices = dependencies.price_source.get(dependencies.benchmark_instrument_id, ())
-        market_regime = evaluator.evaluate_one(
-            dependencies.benchmark_instrument_id, benchmark_prices,
-            period.evaluation_timestamp, period.evaluation_timestamp, dependencies.hmm_fitter,
-        )
-        per_instrument_regime = {
-            candidate.instrument_id: evaluator.evaluate_one(
-                candidate.instrument_id, dependencies.price_source.get(candidate.instrument_id, ()),
-                period.evaluation_timestamp, period.evaluation_timestamp, dependencies.hmm_fitter,
-            )
-            for candidate in scoring_result.scored_candidates
-        }
 
         inputs = FilingMomentumEvaluationInputs(
             config=strategy_config, scored_candidates=scoring_result.scored_candidates,
-            market_regime=market_regime, per_instrument_regime=per_instrument_regime,
             fallback_statistics=dependencies.fallback_statistics_source(period),
+            previous_reference_score_to_weight_ratio=carried_reference_ratio,
         )
         context = StrategyEvaluationContext(
             strategy_id=STRATEGY_ID, evaluation_timestamp=period.evaluation_timestamp,
@@ -402,6 +398,14 @@ def run_filing_momentum_backtest(
             strategy_config=inputs,
         )
         strategy_result = strategy.evaluate(context)
+
+        # Only a full-quota quarter produces a new reference ratio; every
+        # other outcome leaves it None, which must NOT clear the carried
+        # value -- otherwise a single thin quarter would erase the
+        # conviction level the next thin quarter needs.
+        new_reference = getattr(strategy_result.state_update, "reference_score_to_weight_ratio", None)
+        if new_reference is not None:
+            carried_reference_ratio = new_reference
 
         positions = tuple(
             resolve_position(
@@ -438,7 +442,6 @@ def run_filing_momentum_backtest(
             BacktestQuarterResult(
                 period=period, outcome_type=outcome_type, training_state=training_result.state,
                 model_identity=training_result.model_identity, scoring_result=scoring_result,
-                market_regime=market_regime, per_instrument_regime_count=len(per_instrument_regime),
                 strategy_result=strategy_result, positions=positions, period_return=period_return,
                 benchmark=benchmark, benchmark_return=benchmark_return, alpha=alpha,
                 cash_weight=cash_weight, warnings=strategy_result.warnings,

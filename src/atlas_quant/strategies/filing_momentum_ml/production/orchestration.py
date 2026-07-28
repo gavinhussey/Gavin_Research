@@ -2,18 +2,18 @@
 
 Coordinates, over genuinely normalized production data: dependency
 gating -> raw-data validation -> Stage 3 feature build -> Stage 7's
-standalone backtest runner (which itself calls Stage 6 labeling/training,
-Stage 4 regime, and Stage 5 decisions -- never reimplemented here) ->
-Stage 8 performance analysis -> Stage 9 report/comparison. Every formula
-this module's own callers might expect (feature calculation, labeling,
-model fitting, regime classification, position accounting, performance
-metrics, report structure) is computed exclusively by the existing
+standalone backtest runner (which itself calls Stage 6 labeling/training
+and Stage 5 decisions -- never reimplemented here) -> Stage 8 performance
+analysis -> Stage 9 report/comparison. Every formula this module's own
+callers might expect (feature calculation, labeling, model fitting,
+position accounting, performance metrics, report structure) is computed
+exclusively by the existing
 Stage 3-9 service it delegates to; this module only decides *whether*
 and *in what order* those services run, and wires their typed inputs and
 outputs together.
 
 The one piece of new logic here -- :func:`build_fallback_statistics_source`
--- derives trailing quarterly returns for the configured fallback tickers
+-- derives trailing quarterly returns for the configured ETF-sleeve tickers
 using the same "last price on or before" price-resolution convention
 :mod:`atlas_quant.strategies.filing_momentum_ml.forward_return` already
 documents and uses, and the same pure
@@ -40,11 +40,8 @@ from atlas_quant.config.identity import compute_config_identity
 from atlas_quant.data.point_in_time import TradingCalendar
 from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, SectorRecord
 from atlas_quant.dependency_status import (
-    DEPENDENCY_SPECS,
-    DependencyAvailability,
     DependencyStatus,
     build_environment_report,
-    check_dependency,
     missing_required_for_production,
 )
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
@@ -81,7 +78,6 @@ from atlas_quant.strategies.filing_momentum_ml.production.validation import (
     validate_prices,
     validate_sectors,
 )
-from atlas_quant.strategies.filing_momentum_ml.regime_hmm import HMMFitResult, HmmlearnFitter
 from atlas_quant.strategies.filing_momentum_ml.reporting.report_builder import build_filing_momentum_report
 from atlas_quant.strategies.filing_momentum_ml.reporting.report_model import FilingMomentumReport, ReportOptions
 from atlas_quant.strategies.filing_momentum_ml.sector_encoding import SectorEncoder
@@ -100,40 +96,6 @@ class ProductionRunState(str, Enum):
     COMPLETED = "completed"
     COMPLETED_WITH_WARNINGS = "completed_with_warnings"
     COMPARISON_ONLY = "comparison_only"
-
-
-#: gate_mode values whose combined regime verdict never consults the HMM
-#: component's classification at all (see RegimeEvaluator.combine's truth
-#: table) -- hmmlearn is therefore not required to run a genuine backtest
-#: configured this way, even though report_current.html's own documented
-#: production default is "both" (report §5.1: "the only gate logic
-#: actually used"). A run using "none"/"markov" is a genuine, disclosed
-#: DEVIATION from that default -- its config_identity reflects this, and
-#: it must never be presented as reproducing report_current.html's
-#: documented behavior.
-_GATE_MODES_NOT_REQUIRING_HMM = frozenset({"none", "markov"})
-
-
-class DisabledHMMFitter:
-    """An ``HMMFitter`` that never imports or calls hmmlearn.
-
-    Used only when ``RegimeConfig.gate_mode`` is one of
-    :data:`_GATE_MODES_NOT_REQUIRING_HMM` -- i.e. the combined regime
-    result never consults the HMM component's own classification, so
-    there is nothing to gain (and an unnecessary hard dependency on
-    hmmlearn to lose) by attempting a real fit. Always reports itself as
-    unavailable via ``HMMFitResult(error=...)``, which
-    ``evaluate_hmm_component`` already turns into
-    ``ComponentAvailability.NUMERICAL_FIT_FAILURE`` / ``is_bear=False`` --
-    the same honest, typed "component unavailable" path used whenever an
-    HMM fit genuinely fails, never a silently invented classification.
-    """
-
-    def fit_predict(self, observations, **kwargs) -> HMMFitResult:
-        return HMMFitResult(
-            converged=False, state_means=(), predicted_states=(),
-            error="HMM component disabled for this run: regime_config.gate_mode does not require it",
-        )
 
 
 def _last_price_on_or_before(
@@ -275,7 +237,6 @@ def _load_or_create_run_manifest(
         return None, None
 
     strategy_config_identity = inputs.backtest_config.strategy_config.identity()
-    regime_config_identity = inputs.backtest_config.regime_config.identity()
     dependency_versions = {s.name: s.installed_version for s in build_environment_report()}
 
     try:
@@ -285,7 +246,6 @@ def _load_or_create_run_manifest(
             run_identity=run_identity,
             dataset_manifest_identity=manifest_identity,
             strategy_config_identity=strategy_config_identity,
-            regime_config_identity=regime_config_identity,
             git_commit=inputs.manifest.git_commit,
             dependency_versions=dependency_versions,
             run_mode=inputs.run_mode,
@@ -305,7 +265,6 @@ def _load_or_create_run_manifest(
             existing,
             dataset_manifest_identity=manifest_identity,
             strategy_config_identity=strategy_config_identity,
-            regime_config_identity=regime_config_identity,
         )
     except CheckpointIdentityMismatch as exc:
         return None, ProductionRunResult(
@@ -376,13 +335,6 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
 
     environment_report = build_environment_report()
     missing = missing_required_for_production(environment_report)
-    if inputs.backtest_config.regime_config.gate_mode in _GATE_MODES_NOT_REQUIRING_HMM:
-        # This run's own gate_mode never consults the HMM component's
-        # classification (see _GATE_MODES_NOT_REQUIRING_HMM) -- hmmlearn
-        # is not required to proceed. This is a genuine, disclosed
-        # deviation from report_current.html's documented "both" default,
-        # captured in this run's own config_identity.
-        missing = tuple(m for m in missing if m.name != "hmmlearn")
     if missing:
         return ProductionRunResult(
             state=ProductionRunState.BLOCKED_MISSING_DEPENDENCY,
@@ -499,20 +451,11 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         lookback_quarters=config.strategy_config.fallback_lookback_quarters,
     )
 
-    if check_dependency(next(s for s in DEPENDENCY_SPECS if s.name == "hmmlearn")).availability == DependencyAvailability.AVAILABLE:
-        hmm_fitter = HmmlearnFitter()
-    else:
-        # Only reachable when gate_mode doesn't require hmmlearn (the
-        # dependency gate above already blocked otherwise) -- never a
-        # silent substitute for a genuine fit the run actually needed.
-        hmm_fitter = DisabledHMMFitter()
-
     dependencies = FilingMomentumBacktestDependencies(
         feature_observation_source=_feature_observation_source,
         price_source={k: tuple(v) for k, v in inputs.prices_by_instrument.items()},
         fallback_statistics_source=fallback_source,
         estimator_factory=build_hgbc_estimator,
-        hmm_fitter=hmm_fitter,
         trading_calendar=inputs.trading_calendar,
         universe=inputs.universe,
         benchmark_instrument_id=inputs.benchmark_instrument_id,
@@ -600,7 +543,6 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
                 backtest_result,
                 performance,
                 config.strategy_config,
-                config.regime_config,
                 report_options=inputs.report_options,
                 source_report_html=inputs.source_report_html,
                 reproducibility_status=inputs.reproducibility_status,

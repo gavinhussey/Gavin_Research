@@ -86,7 +86,6 @@ def render_report_html(report: FilingMomentumReport, *, include_charts: bool = T
         f"<li>Positions: {es.min_positions}-{es.max_positions}</li>"
         f"<li>Deployable: {_fmt(es.deployable_pct, 'percent', pp)}</li>"
         f"<li>Fallback: {escape(es.fallback_description)}</li>"
-        f"<li>Regime: {escape(es.regime_description)}</li>"
         f"<li>Backtest period: {escape(es.backtest_start)} – {escape(es.backtest_end)}</li></ul>"
     )
 
@@ -98,7 +97,6 @@ def render_report_html(report: FilingMomentumReport, *, include_charts: bool = T
         f"<p>{escape(spec.labeling_rule_summary)}</p>"
         f"<p>{escape(spec.training_window_summary)}</p>"
         f"<p>Sector exclusion: {escape(', '.join(spec.excluded_sectors))}</p>"
-        f"<p>Regime gate mode: {escape(spec.regime_gate_mode)}</p>"
         f"<p>{escape(spec.weighting_summary)}</p>"
         f"<p>{escape(spec.fallback_weighting_summary)}</p>"
         f"<p>{escape(spec.entry_exit_summary)}</p>"
@@ -112,7 +110,7 @@ def render_report_html(report: FilingMomentumReport, *, include_charts: bool = T
         "<h2>3. Backtest Coverage</h2>"
         f"<ul><li>Evaluated: {cov.evaluated_count}</li><li>Primary: {cov.primary_count}</li>"
         f"<li>Fallback: {cov.fallback_count}</li><li>Cash: {cov.cash_count}</li>"
-        f"<li>Regime-blocked: {cov.regime_blocked_count}</li><li>Skipped: {cov.skipped_count}</li>"
+        f"<li>Skipped: {cov.skipped_count}</li>"
         f"<li>Invalid: {cov.invalid_count}</li><li>Missing benchmark: {cov.missing_benchmark_count}</li></ul>"
     )
 
@@ -204,7 +202,6 @@ def render_report_html(report: FilingMomentumReport, *, include_charts: bool = T
     sections.append(
         "<h2>15. Audit and Reproducibility</h2>"
         f"<ul><li>Config identity: {escape(audit.config_identity)}</li>"
-        f"<li>Regime config identity: {escape(audit.regime_config_identity)}</li>"
         f"<li>Backtest run identity: {escape(audit.backtest_run_identity)}</li>"
         f"<li>Performance analysis identity: {escape(audit.performance_analysis_identity)}</li>"
         f"<li>Report identity: {escape(audit.report_identity)}</li></ul>"

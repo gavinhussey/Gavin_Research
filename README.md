@@ -33,10 +33,10 @@ and sector data) via `atlas-quant filing-momentum acquire-data`.
 
 **A real, present-day acquisition has been run**: 518 universe members,
 96,852 filing rows, and 4,436,726 price rows, validated with 0 fatal
-issues. **A genuine historical backtest still has not completed** —
-`hmmlearn` is the one remaining missing dependency in this development
-environment (its build fails here due to a broken local C++ toolchain,
-unrelated to this project). See
+issues, and **a genuine historical backtest has since run end-to-end on
+it**. (`hmmlearn` was previously the one blocking dependency; as of
+Stage 12 the HMM/Markov regime gate has been removed from this strategy
+entirely, so it is no longer a dependency at all.) See
 `research/strategies/filing_momentum_ml/docs/reproducibility_findings.md`
 for the full detail and the current classification (`NOT_RUN`) — nothing
 in this repository should be read as a strategy performance claim until
@@ -95,7 +95,6 @@ automatically by any code in this repository:
 
 ```
 pip install -e '.[model]'           # scikit-learn>=1.3.0,<2.0.0 — real model training
-pip install -e '.[regime]'          # hmmlearn>=0.3.0,<0.4.0 — real HMM regime evaluation
 pip install -e '.[production-data]' # requests, pyarrow, yfinance, lxml — real data acquisition
 pip install -e '.[notebooks]'       # jupyter, nbformat — to open the research notebooks interactively
 pip install -e '.[research]'        # all of the above

@@ -24,7 +24,7 @@ _NOW = datetime(2024, 5, 1, 12, 0, 0)
 def _manifest(**overrides):
     defaults = dict(
         run_identity="run-abc", dataset_manifest_identity="dataset-1",
-        strategy_config_identity="strategy-1", regime_config_identity="regime-1",
+        strategy_config_identity="strategy-1",
         git_commit="deadbeef", dependency_versions={"pandas": "3.0.5"}, run_mode="production",
         created_at=_NOW,
     )
@@ -95,7 +95,7 @@ def test_validate_resume_compatibility_passes_for_matching_identities():
     manifest = _manifest()
     validate_resume_compatibility(
         manifest, dataset_manifest_identity="dataset-1",
-        strategy_config_identity="strategy-1", regime_config_identity="regime-1",
+        strategy_config_identity="strategy-1",
     )
 
 
@@ -104,7 +104,7 @@ def test_validate_resume_compatibility_rejects_dataset_mismatch():
     with pytest.raises(CheckpointIdentityMismatch, match="dataset_manifest_identity"):
         validate_resume_compatibility(
             manifest, dataset_manifest_identity="different-dataset",
-            strategy_config_identity="strategy-1", regime_config_identity="regime-1",
+            strategy_config_identity="strategy-1",
         )
 
 
@@ -113,7 +113,7 @@ def test_validate_resume_compatibility_rejects_strategy_config_mismatch():
     with pytest.raises(CheckpointIdentityMismatch, match="strategy_config_identity"):
         validate_resume_compatibility(
             manifest, dataset_manifest_identity="dataset-1",
-            strategy_config_identity="different-strategy", regime_config_identity="regime-1",
+            strategy_config_identity="different-strategy",
         )
 
 

@@ -3,7 +3,7 @@
 Every function here only reads existing, typed
 :class:`~atlas_quant.backtest.filing_momentum_runner.BacktestQuarterResult`/
 :class:`~atlas_quant.backtest.filing_momentum_runner.BacktestResult` fields
-— none recompute positions, prices, decisions, training, or regime
+— none recompute positions, prices, decisions, or training
 classifications.
 """
 
@@ -13,7 +13,6 @@ import math
 from typing import Sequence
 
 from atlas_quant.backtest.filing_momentum_runner import BacktestQuarterResult, BacktestResult, QuarterOutcomeType
-from atlas_quant.domain.status import StrategyStatus
 from atlas_quant.strategies.filing_momentum_ml.performance_domain import (
     AlphaMetrics,
     AnnualSummary,
@@ -39,11 +38,9 @@ _A = MetricAvailability
 def classify_quarter(quarter_result: BacktestQuarterResult) -> QuarterClassification:
     """Read (never recompute) a quarter's fine-grained classification.
 
-    Refines Stage 7's coarse ``QuarterOutcomeType.CASH`` bucket using the
-    already-produced ``strategy_result.status`` to distinguish a
-    confirmed market-Bear block from an ordinary intentional-cash/no-
-    signal/missing-data/disabled outcome — both are existing, already-
-    computed fields, never independently re-derived here.
+    A straight read of Stage 7's already-computed ``outcome_type``; the
+    only judgement made here is that a quarter with no computable period
+    return is ``INVALID`` rather than ``CASH``. Nothing is re-derived.
     """
     if quarter_result.outcome_type == QuarterOutcomeType.SKIPPED:
         return QuarterClassification.SKIPPED
@@ -53,11 +50,6 @@ def classify_quarter(quarter_result: BacktestQuarterResult) -> QuarterClassifica
         return QuarterClassification.FALLBACK
     if quarter_result.period_return is None:
         return QuarterClassification.INVALID
-    if (
-        quarter_result.strategy_result is not None
-        and quarter_result.strategy_result.status == StrategyStatus.REGIME_BLOCKED
-    ):
-        return QuarterClassification.REGIME_BLOCKED
     return QuarterClassification.CASH
 
 

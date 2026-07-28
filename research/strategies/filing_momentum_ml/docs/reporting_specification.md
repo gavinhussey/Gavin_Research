@@ -13,7 +13,7 @@ built by this stage's own tests uses synthetic fixtures and reports
 
 `build_filing_momentum_report` consumes, and never recalculates:
 `BacktestResult` (Stage 7), `PerformanceAnalysisResult` (Stage 8),
-`FilingMomentumMLConfig`, `RegimeConfig`, an optional `ModelIdentity`
+`FilingMomentumMLConfig`, an optional `ModelIdentity`
 (Stage 6), and an optional raw `report_current.html` string for
 comparison. It rejects incompatible inputs (`ReportBuildError`) rather
 than silently combining results from different runs: the performance
@@ -37,9 +37,9 @@ strategy is forced to adopt this report's 15-section structure.
 Reproduces `report_current.html`'s section coverage where supported by
 existing typed data: (1) executive summary, (2) strategy specification
 (all 17 features, formulas, timing, labeling, training window,
-hyperparameters, threshold, exclusions, regime gate, weighting, entry/
+hyperparameters, threshold, exclusions, weighting, entry/
 exit, caps, transaction costs), (3) backtest coverage (evaluated/primary/
-fallback/cash/regime-blocked/skipped/invalid/missing-benchmark counts),
+blended/cash/skipped/invalid/missing-benchmark counts),
 (4) performance summary across all four scopes, (5)-(6) equity/drawdown/
 returns/alpha/composition charts, (7) annual results, (8) quarter-by-
 quarter results, (9) holdings and trade outcomes, (10) best/worst
@@ -110,12 +110,12 @@ sort_keys=True)`) and HTML (`render_report_html`, self-contained, no
 remote CDN/script/font). Chart *data* (`ChartSeriesDefinition`) is
 rendered to inline SVG via a dependency-free, pure-stdlib renderer
 (`render_svg_bar_chart`) — matplotlib is confirmed absent from this
-venv (same status as scikit-learn/hmmlearn) and was never required.
+venv (same status as scikit-learn) and was never required.
 
 ## Report identity
 
 `ReportMetadata.report_identity` combines the strategy config identity,
-regime config identity, backtest run identity, performance analysis
+backtest run identity, performance analysis
 identity, and report options identity — deterministic, never including
 wall-clock generation time. A separate, optional
 `ReportMetadata.generated_at` field exists for human display only and

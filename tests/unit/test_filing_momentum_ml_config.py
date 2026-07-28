@@ -34,10 +34,11 @@ def test_defaults_match_report_current_html():
     assert config.return_cap == 0.50  # report §5.5
     assert config.earnings_lag_days == 42  # report §5.5
     assert config.exclude_sectors == ("Materials",)  # report §5.2
-    assert config.fallback_tickers == ("SPY", "VGT")  # report §5.4
+    # A deliberate platform design decision, NOT report-sourced (the report
+    # specified SPY/VGT and an all-or-nothing fallback).
+    assert config.fallback_tickers == ("VOO", "VTI")
     assert config.fallback_dynamic_weight is True  # report §5.4
     assert config.fallback_lookback_quarters == 12  # report §5.4
-    assert config.regime_gate_mode == "both"  # report §5.1/§5b.1
     assert config.strategy_budget_pct == 1.0  # standalone-backtest default
 
 
@@ -111,14 +112,16 @@ def test_fcf_mode_rejects_unknown_value():
         FilingMomentumMLConfig(fcf_mode="ttm")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("mode", ["both", "either", "markov", "hmm", "none"])
-def test_regime_gate_mode_accepts_all_documented_modes(mode):
-    FilingMomentumMLConfig(regime_gate_mode=mode)
-
-
-def test_regime_gate_mode_rejects_unknown_value():
-    with pytest.raises(ValueError):
-        FilingMomentumMLConfig(regime_gate_mode="always")  # type: ignore[arg-type]
+def test_regime_gate_configuration_is_gone_entirely():
+    """The HMM/Markov regime gate was removed, so none of its config
+    surface may linger -- a stale field would imply a gate that no longer
+    exists."""
+    fields = FilingMomentumMLConfig.__dataclass_fields__
+    assert "regime_gate_mode" not in fields
+    assert "markov_years" not in fields
+    assert "missing_regime_policy" not in fields
+    with pytest.raises(TypeError):
+        FilingMomentumMLConfig(regime_gate_mode="both")  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize(

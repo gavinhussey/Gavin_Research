@@ -1,4 +1,51 @@
-# Reproducibility findings (Stage 10-11)
+# Reproducibility findings (Stage 10-12)
+
+## Deliberate, permanent divergence from `report_current.html` (Stage 12)
+
+**Read this before anything else in this document.**
+
+As of Stage 12, this strategy's configuration **deliberately and
+permanently diverges** from `report_current.html`'s documented design in
+two specific ways, by explicit product decision:
+
+1. **The regime gate is gone.** The report's two-layer HMM + Markov gate
+   — a market-level Bear block that held the entire quarter in cash, and
+   a per-instrument Markov-only Bear filter that dropped individual
+   candidates — has been **removed from the codebase entirely**. There is
+   no `RegimeConfig`, `RegimeEvaluator`, HMM fitter, `regime_gate_mode`,
+   `missing_regime_policy`, `--regime-gate-mode` CLI flag, or `hmmlearn`
+   dependency anywhere. `StrategyStatus.REGIME_BLOCKED` and
+   `FilingMomentumOutcome.MARKET_REGIME_BLOCKED` no longer exist.
+
+2. **The all-or-nothing SPY/VGT fallback is gone.** Where the report
+   abandoned the quarter's stock picks entirely and put 100% of
+   deployable capital into a SPY/VGT blend whenever fewer than
+   `min_positions` stocks qualified, this platform now runs a
+   **partial-fill VOO/VTI capital sleeve**: the qualifying stocks are
+   always kept, sized at `score * k` where `k` is the most recent
+   *full-quota* quarter's `deployable_pct / sum(scores)` ratio, and only
+   the deployable capital they leave unused goes to the ETF sleeve. See
+   `strategy_decision_specification.md` for the exact formulas.
+
+**This is not a bug, not an unfinished reproduction, and not a
+reproduction gap to be closed.** It must never be conflated with this
+platform's other disclosed reproduction gaps (data-provenance gaps,
+survivorship bias, the legacy-cache verification gap, and so on), which
+*are* genuine gaps this project intends to narrow. Any future work that
+"restores" the regime gate or the all-or-nothing fallback in the name of
+matching the report would be reversing a deliberate decision, not fixing
+a defect.
+
+Consequently the historical `hmmlearn`-toolchain blocker recorded below
+is **obsolete**: `hmmlearn` is no longer a dependency of this project at
+all, so a machine that cannot build it is no longer blocked from running
+a genuine backtest. That narrative is retained for history, not as a
+live constraint.
+
+Everything below this section predates Stage 12 and describes the
+pipeline as it stood under the regime-gated, SPY/VGT-fallback design.
+
+---
 
 ## Classification
 
@@ -20,7 +67,10 @@ disclosed reasons:**
    report's own documented production default (§5.1, `gate_mode="both"`).
    The regime gate never triggered cash in this run (`cash_quarter_count
    == 0`), which is a mechanical consequence of disabling the gate, not a
-   finding about market regimes.
+   finding about market regimes. **Superseded by Stage 12**: the regime
+   gate has since been removed outright, so this is no longer a
+   configuration deviation to be closed — it is a permanent design
+   divergence (see the banner at the top of this document).
 2. **Benchmark/fallback price data gap (newly discovered).** SPY and VGT
    (the report's benchmark and fallback tickers) are **not present** in
    the acquired price data at all — Stage 11's acquisition pipeline only
@@ -88,9 +138,12 @@ not defects in this platform's own code:
   `acquisition/sec_edgar.py`); `XOM`'s absence has not been root-caused
   and is flagged here as an open item, not silently dropped.
 
-## The one remaining blocker
+## The former hmmlearn blocker (historical, resolved by removal)
 
-Confirmed directly: `atlas-quant filing-momentum run-backtest` against
+*Obsolete as of Stage 12 — retained for history. `hmmlearn` is no longer
+a dependency, so none of the following blocks a run any more.*
+
+Confirmed directly at the time: `atlas-quant filing-momentum run-backtest` against
 this real, acquired, validated dataset reports:
 
 ```
@@ -111,7 +164,7 @@ a system-level, `sudo`-gated action with a GUI installer step, which this
 project does not perform autonomously. Once resolved on a given machine:
 
 ```bash
-pip install -e '.[regime]'   # hmmlearn>=0.3.0,<0.4.0
+pip install -e '.[regime]'   # hmmlearn>=0.3.0,<0.4.0 -- extra removed in Stage 12
 ```
 
 ## The cohort-snapshot correction (`implementation_bug`)
@@ -244,7 +297,7 @@ reproduction.
 | # | Requirement | Status |
 |---|---|---|
 | 1 | scikit-learn>=1.3.0,<2.0.0 installed | **Done** (1.9.0) |
-| 2 | hmmlearn>=0.3.0,<0.4.0 installed | **Blocked** -- broken local C++ toolchain, see above |
+| 2 | ~~hmmlearn>=0.3.0,<0.4.0 installed~~ | **Obsolete (Stage 12)** -- the regime gate was removed; hmmlearn is no longer a dependency |
 | 3 | requests/yfinance/lxml/pyarrow installed | **Done** |
 | 4 | Real universe/sector data acquired | **Done** -- 518 members, Wikipedia |
 | 5 | Real filing data acquired | **Done** -- 96,852 rows, SEC EDGAR |
@@ -253,14 +306,14 @@ reproduction.
 | 8 | Raw-data validation passing (no `FATAL`) | **Done** -- 0 fatal |
 | 9 | Feature build produces trainable rows for non-calendar-aligned issuers | **Done** (cohort-snapshot correction, above) |
 | 10 | A genuine backtest actually executes end-to-end on real data | **Done** -- 32/40 quarters completed, real model training throughout |
-| 11 | Regime gate matches report_current.html's own default (`gate_mode="both"`) | **Blocked** -- ran with `gate_mode="none"` instead, since hmmlearn is unavailable; a disclosed deviation, not a reproduction |
-| 12 | Benchmark (SPY) and fallback (VGT) price data acquired | **Not done** -- newly discovered gap; the acquisition pipeline only fetches universe constituents, and SPY/VGT are not constituents of their own index (`data_provenance_required`) |
+| 11 | ~~Regime gate matches report_current.html's own default (`gate_mode="both"`)~~ | **Obsolete (Stage 12)** -- deliberate permanent divergence; there is no regime gate to match |
+| 12 | Benchmark (SPY) and ETF-sleeve (VOO/VTI) price data acquired | **Partly done (Stage 12)** -- SPY/VOO/VTI price history is now present in `data/raw/filing_momentum_ml/prices.json`; the acquisition *pipeline* still only fetches universe constituents by default, so this remains a `data_provenance_required` gap for a clean from-scratch re-acquisition |
 | 13 | Legacy `Arnold_Quant` caches independently verified, if reused | **Not attempted** -- only the diagnostic, read-only audit (notebook 01) has run; not a blocker for a fresh acquisition-based run, only relevant if legacy caches are ever reused |
 
 ## Resume commands
 
-Once `hmmlearn` is installed on a machine with a working C++ toolchain,
-the report-compliant command (using the default `gate_mode="both"`) is:
+The regime gate no longer exists, so there is no gate-mode flag and no
+hmmlearn prerequisite. The command is simply:
 
 ```bash
 atlas-quant filing-momentum run-backtest \
@@ -276,17 +329,6 @@ completed checkpoint; a checkpoint computed under a different
 dataset/config identity is rejected (`BLOCKED_IDENTITY_MISMATCH`), never
 silently reused.
 
-**On this machine specifically**, since `hmmlearn` cannot be installed,
-`--regime-gate-mode none` was used to run the pipeline end-to-end anyway:
-
-```bash
-atlas-quant filing-momentum run-backtest \
-    --raw-root data/raw/filing_momentum_ml \
-    --manifest data/manifests/filing_momentum_ml/data_manifest.json \
-    --start-quarter 2015-03-31 --end-quarter 2024-12-31 \
-    --regime-gate-mode none \
-    --checkpoint-root data/manifests/filing_momentum_ml
-```
 
 **This is a genuine, disclosed deviation from `report_current.html`'s own
 documented "both" default (§5.1: "the only gate logic actually used") —

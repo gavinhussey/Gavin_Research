@@ -23,7 +23,6 @@ from atlas_quant.data.point_in_time import ListTradingCalendar
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.strategies.filing_momentum_ml.config import FilingMomentumMLConfig
 from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
-from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
 from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
     RawFilingRecord,
     RawPriceRecord,
@@ -37,7 +36,8 @@ from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
 
 SYNTHETIC_SYMBOLS = ("AAA", "BBB")
 BENCHMARK_SYMBOL = "SPY"
-FALLBACK_SYMBOLS = ("SPY", "VGT")
+#: The ETF-sleeve tickers FilingMomentumMLConfig now defaults to.
+FALLBACK_SYMBOLS = ("VOO", "VTI")
 QUARTER_ENDS = [date(2022, 3, 31), date(2022, 6, 30), date(2022, 9, 30), date(2022, 12, 31), date(2023, 3, 31)]
 TARGET_QUARTER_END = date(2023, 3, 31)
 
@@ -166,7 +166,6 @@ def build_synthetic_manifest() -> DataProvenanceManifest:
         corporate_action_treatment="none (synthetic)", delisting_treatment="none (synthetic)",
         data_corrections=(), source_file_hashes={},
         strategy_config_identity=FilingMomentumMLConfig().identity(),
-        regime_config_identity=RegimeConfig().identity(),
         git_commit=None,
         notes=("SYNTHETIC FIXTURE DATA -- not a genuine historical dataset.",),
     )

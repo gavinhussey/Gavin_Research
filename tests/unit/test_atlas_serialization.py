@@ -143,11 +143,11 @@ class TestStrategyResultSerialization:
 
     def test_status_enum_round_trips(self):
         result = StrategyResult(
-            **{**self._base_kwargs(), "status": StrategyStatus.REGIME_BLOCKED}
+            **{**self._base_kwargs(), "status": StrategyStatus.FALLBACK}
         )
         as_dict = result.to_dict()
-        assert as_dict["status"] == "regime_blocked"
-        assert StrategyResult.from_dict(as_dict).status is StrategyStatus.REGIME_BLOCKED
+        assert as_dict["status"] == "fallback"
+        assert StrategyResult.from_dict(as_dict).status is StrategyStatus.FALLBACK
 
     def test_timestamps_round_trip_as_iso_8601(self):
         result = StrategyResult(**self._base_kwargs())
