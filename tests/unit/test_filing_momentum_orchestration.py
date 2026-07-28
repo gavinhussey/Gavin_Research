@@ -145,3 +145,58 @@ def _fake_build_info():
     from atlas_quant.strategies.filing_momentum_ml.estimator import EstimatorBuildInfo
 
     return EstimatorBuildInfo(estimator_type="FakeEstimator", parameters={}, library="test", library_version=None)
+
+
+def _with_checkpoint_root(inputs: ProductionRunInputs, checkpoint_root) -> ProductionRunInputs:
+    import dataclasses
+
+    return dataclasses.replace(inputs, checkpoint_root=checkpoint_root)
+
+
+def test_checkpoint_manifest_persisted_and_complete_after_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
+    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
+        FakeEstimator(), _fake_build_info(),
+    ))
+    monkeypatch.setattr(orchestration_module, "HmmlearnFitter", lambda: FakeHMMFitter())
+
+    inputs = _with_checkpoint_root(_build_inputs(), tmp_path)
+    result = run_filing_momentum_production_backtest(inputs)
+
+    assert result.run_manifest is not None
+    from atlas_quant.strategies.filing_momentum_ml.production.checkpoint import (
+        CheckpointName,
+        CheckpointStatus,
+        read_run_manifest,
+    )
+
+    loaded = read_run_manifest(tmp_path, result.run_identity)
+    assert loaded.overall_status == result.state.value
+    assert loaded.checkpoint(CheckpointName.BACKTEST_COMPLETED).status == CheckpointStatus.COMPLETED
+    assert loaded.checkpoint(CheckpointName.FEATURES_BUILT).status == CheckpointStatus.COMPLETED
+    # No report_options supplied -- report/comparison steps are recorded as skipped, not silently omitted.
+    assert loaded.checkpoint(CheckpointName.REPORT_COMPLETED).status == CheckpointStatus.SKIPPED
+
+
+def test_resume_rejects_manifest_with_mismatched_strategy_config_identity(monkeypatch, tmp_path):
+    from atlas_quant.strategies.filing_momentum_ml.production.checkpoint import new_run_manifest, write_run_manifest
+
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
+
+    inputs = _with_checkpoint_root(_build_inputs(), tmp_path)
+    manifest_identity = inputs.manifest.identity()
+    run_identity = orchestration_module._run_identity(inputs, manifest_identity)
+
+    tampered = new_run_manifest(
+        run_identity=run_identity,
+        dataset_manifest_identity=manifest_identity,
+        strategy_config_identity="not-the-real-strategy-config-identity",
+        regime_config_identity=inputs.backtest_config.regime_config.identity(),
+        git_commit=None, dependency_versions={}, run_mode="production",
+        created_at=datetime(2024, 1, 1),
+    )
+    write_run_manifest(tmp_path, tampered)
+
+    result = run_filing_momentum_production_backtest(inputs)
+    assert result.state == ProductionRunState.BLOCKED_IDENTITY_MISMATCH
+    assert "strategy_config_identity" in result.blocked_reason

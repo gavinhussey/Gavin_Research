@@ -24,8 +24,9 @@ documents and uses, and the same pure
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
+from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from atlas_quant.backtest.clock import BacktestPeriod
@@ -47,6 +48,19 @@ from atlas_quant.strategies.filing_momentum_ml.fallback_domain import FallbackAs
 from atlas_quant.strategies.filing_momentum_ml.forward_return import compute_forward_return
 from atlas_quant.strategies.filing_momentum_ml.performance_analysis import analyze_backtest_result
 from atlas_quant.strategies.filing_momentum_ml.performance_domain import PerformanceAnalysisConfig, PerformanceAnalysisResult
+from atlas_quant.strategies.filing_momentum_ml.production.checkpoint import (
+    CheckpointCorrupted,
+    CheckpointIdentityMismatch,
+    CheckpointMiss,
+    CheckpointName,
+    CheckpointRecord,
+    CheckpointStatus,
+    RunManifest,
+    new_run_manifest,
+    read_run_manifest,
+    validate_resume_compatibility,
+    write_run_manifest,
+)
 from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
 from atlas_quant.strategies.filing_momentum_ml.production.feature_label_build import (
     ProductionFeatureBuildResult,
@@ -168,6 +182,8 @@ class ProductionRunInputs:
     report_options: ReportOptions | None = None
     source_report_html: str | None = None
     reproducibility_status: ReproducibilityStatus = ReproducibilityStatus.NOT_RUN
+    checkpoint_root: Path | None = None
+    run_mode: str = "production"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +201,7 @@ class ProductionRunResult:
     missing_dependencies: tuple[DependencyStatus, ...] = field(default_factory=tuple)
     blocked_reason: str | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    run_manifest: RunManifest | None = None
 
 
 def _run_identity(inputs: ProductionRunInputs, manifest_identity: str) -> str:
@@ -199,16 +216,122 @@ def _run_identity(inputs: ProductionRunInputs, manifest_identity: str) -> str:
     )
 
 
+def _load_or_create_run_manifest(
+    inputs: ProductionRunInputs,
+    *,
+    run_identity: str,
+    manifest_identity: str,
+    now: datetime,
+) -> tuple[RunManifest | None, ProductionRunResult | None]:
+    """Load a resumable checkpoint manifest, or create a fresh one.
+
+    Returns ``(manifest, None)`` on success, or ``(None, blocked_result)``
+    if a manifest exists but is incompatible or corrupt -- the caller must
+    return ``blocked_result`` immediately in that case rather than
+    proceeding with a stale or unreadable checkpoint.
+    """
+    if inputs.checkpoint_root is None:
+        return None, None
+
+    strategy_config_identity = inputs.backtest_config.strategy_config.identity()
+    regime_config_identity = inputs.backtest_config.regime_config.identity()
+    dependency_versions = {s.name: s.installed_version for s in build_environment_report()}
+
+    try:
+        existing = read_run_manifest(inputs.checkpoint_root, run_identity)
+    except CheckpointMiss:
+        manifest = new_run_manifest(
+            run_identity=run_identity,
+            dataset_manifest_identity=manifest_identity,
+            strategy_config_identity=strategy_config_identity,
+            regime_config_identity=regime_config_identity,
+            git_commit=inputs.manifest.git_commit,
+            dependency_versions=dependency_versions,
+            run_mode=inputs.run_mode,
+            created_at=now,
+        )
+        return manifest, None
+    except CheckpointCorrupted as exc:
+        return None, ProductionRunResult(
+            state=ProductionRunState.BLOCKED_IDENTITY_MISMATCH,
+            run_identity=run_identity,
+            manifest_identity=manifest_identity,
+            blocked_reason=f"checkpoint manifest for this run is corrupt and cannot be resumed: {exc}",
+        )
+
+    try:
+        validate_resume_compatibility(
+            existing,
+            dataset_manifest_identity=manifest_identity,
+            strategy_config_identity=strategy_config_identity,
+            regime_config_identity=regime_config_identity,
+        )
+    except CheckpointIdentityMismatch as exc:
+        return None, ProductionRunResult(
+            state=ProductionRunState.BLOCKED_IDENTITY_MISMATCH,
+            run_identity=run_identity,
+            manifest_identity=manifest_identity,
+            blocked_reason=str(exc),
+        )
+    return existing, None
+
+
+def _record_checkpoint(
+    inputs: ProductionRunInputs,
+    manifest: RunManifest | None,
+    name: CheckpointName,
+    *,
+    status: CheckpointStatus,
+    identity: str,
+    content_hashes: Mapping[str, str] | None = None,
+    warnings: tuple[str, ...] = (),
+    notes: str | None = None,
+    now: datetime,
+) -> RunManifest | None:
+    if manifest is None:
+        return None
+    record = CheckpointRecord(
+        name=name, status=status, identity=identity,
+        content_hashes=dict(content_hashes or {}), warnings=warnings, completed_at=now, notes=notes,
+    )
+    updated = manifest.with_checkpoint(record, updated_at=now)
+    if inputs.checkpoint_root is not None:
+        write_run_manifest(inputs.checkpoint_root, updated)
+    return updated
+
+
+def _finalize_manifest(
+    inputs: ProductionRunInputs, manifest: RunManifest | None, overall_status: ProductionRunState, now: datetime
+) -> RunManifest | None:
+    if manifest is None:
+        return None
+    updated = manifest.with_overall_status(overall_status.value, updated_at=now)
+    if inputs.checkpoint_root is not None:
+        write_run_manifest(inputs.checkpoint_root, updated)
+    return updated
+
+
 def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> ProductionRunResult:
     """Run the full offline Filing Momentum ML production research workflow.
 
     Returns a :class:`ProductionRunResult` whose ``state`` explains
     exactly how far the run got -- never claims ``COMPLETED`` unless
     Stage 7's backtest, Stage 8's analysis, and (if requested) Stage 9's
-    report all actually ran.
+    report all actually ran. When ``inputs.checkpoint_root`` is set, every
+    step's outcome is persisted immediately as it completes (see
+    :mod:`.checkpoint`); a prior checkpoint manifest computed under a
+    different dataset/config identity is never silently reused --
+    :func:`~.checkpoint.validate_resume_compatibility` rejects it first.
     """
     manifest_identity = inputs.manifest.identity()
     run_identity = _run_identity(inputs, manifest_identity)
+    now = datetime.now()
+
+    run_manifest, blocked = _load_or_create_run_manifest(
+        inputs, run_identity=run_identity, manifest_identity=manifest_identity, now=now,
+    )
+    if blocked is not None:
+        return blocked
 
     environment_report = build_environment_report()
     missing = missing_required_for_production(environment_report)
@@ -222,7 +345,13 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
                 "one or more dependencies required for a genuine production backtest are "
                 f"unavailable: {', '.join(s.name for s in missing)}"
             ),
+            run_manifest=_finalize_manifest(inputs, run_manifest, ProductionRunState.BLOCKED_MISSING_DEPENDENCY, now),
         )
+
+    run_manifest = _record_checkpoint(
+        inputs, run_manifest, CheckpointName.RAW_DATA_ACQUIRED, status=CheckpointStatus.COMPLETED,
+        identity=manifest_identity, notes="raw acquisition/normalization occurred upstream of this run", now=now,
+    )
 
     target_instrument_ids = set(inputs.universe)
     issues: list[DataValidationIssue] = []
@@ -241,13 +370,24 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         )
     validation_summary = DataValidationSummary(issues=tuple(issues))
     if validation_summary.has_fatal:
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.NORMALIZED_DATA_VALIDATED, status=CheckpointStatus.FAILED,
+            identity=manifest_identity, warnings=tuple(i.message for i in issues if i.severity.value == "fatal"), now=now,
+        )
         return ProductionRunResult(
             state=ProductionRunState.BLOCKED_INVALID_DATASET,
             run_identity=run_identity,
             manifest_identity=manifest_identity,
             validation_summary=validation_summary,
             blocked_reason="fatal-severity data validation issue(s) present -- see validation_summary",
+            run_manifest=_finalize_manifest(inputs, run_manifest, ProductionRunState.BLOCKED_INVALID_DATASET, now),
         )
+    run_manifest = _record_checkpoint(
+        inputs, run_manifest, CheckpointName.NORMALIZED_DATA_VALIDATED, status=CheckpointStatus.COMPLETED,
+        identity=manifest_identity,
+        content_hashes={k: str(v) for k, v in validation_summary.counts_by_severity().items()},
+        now=now,
+    )
 
     config = inputs.backtest_config
     targets = [
@@ -267,6 +407,10 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         mode="training",
     )
     if feature_build.blocked:
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.FEATURES_BUILT, status=CheckpointStatus.FAILED,
+            identity=feature_build.build_identity, notes=feature_build.blocked_reason, now=now,
+        )
         return ProductionRunResult(
             state=ProductionRunState.BLOCKED_INVALID_DATASET,
             run_identity=run_identity,
@@ -274,7 +418,14 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
             validation_summary=feature_build.validation_summary,
             feature_build=feature_build,
             blocked_reason=feature_build.blocked_reason,
+            run_manifest=_finalize_manifest(inputs, run_manifest, ProductionRunState.BLOCKED_INVALID_DATASET, now),
         )
+    run_manifest = _record_checkpoint(
+        inputs, run_manifest, CheckpointName.FEATURES_BUILT, status=CheckpointStatus.COMPLETED,
+        identity=feature_build.build_identity,
+        content_hashes={"observation_count": str(len(feature_build.feature_pipeline_result.observations))},
+        warnings=feature_build.feature_pipeline_result.warnings, now=now,
+    )
 
     observations_by_quarter: dict[date, list] = {}
     for observation in feature_build.feature_pipeline_result.observations:
@@ -302,9 +453,25 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         benchmark_instrument_id=inputs.benchmark_instrument_id,
     )
 
+    # Stage 7's runner computes labels and trains a fresh model internally,
+    # once per quarter -- neither is a separately exposed artifact in this
+    # orchestration path, so both checkpoints are recorded together with
+    # the backtest outcome below rather than duplicating that internal loop.
     try:
         backtest_result = run_filing_momentum_backtest(inputs.periods, dependencies, config)
     except Exception as exc:  # noqa: BLE001 - a real production run must report, never crash uncaught
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.LABELS_BUILT, status=CheckpointStatus.FAILED,
+            identity=run_identity, notes=str(exc), now=now,
+        )
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.MODELS_TRAINED, status=CheckpointStatus.FAILED,
+            identity=run_identity, notes=str(exc), now=now,
+        )
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.BACKTEST_COMPLETED, status=CheckpointStatus.FAILED,
+            identity=run_identity, notes=str(exc), now=now,
+        )
         return ProductionRunResult(
             state=ProductionRunState.RUNNING_STEP_FAILED,
             run_identity=run_identity,
@@ -312,11 +479,30 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
             validation_summary=validation_summary,
             feature_build=feature_build,
             blocked_reason=f"backtest step failed: {exc}",
+            run_manifest=_finalize_manifest(inputs, run_manifest, ProductionRunState.RUNNING_STEP_FAILED, now),
         )
+    run_manifest = _record_checkpoint(
+        inputs, run_manifest, CheckpointName.LABELS_BUILT, status=CheckpointStatus.COMPLETED,
+        identity=backtest_result.run_identity, notes="computed internally per-quarter by the Stage 7 runner", now=now,
+    )
+    run_manifest = _record_checkpoint(
+        inputs, run_manifest, CheckpointName.MODELS_TRAINED, status=CheckpointStatus.COMPLETED,
+        identity=backtest_result.run_identity, notes="a fresh model is fit per-quarter by the Stage 7 runner", now=now,
+    )
+    run_manifest = _record_checkpoint(
+        inputs, run_manifest, CheckpointName.BACKTEST_COMPLETED, status=CheckpointStatus.COMPLETED,
+        identity=backtest_result.run_identity,
+        content_hashes={"completed_quarter_count": str(backtest_result.completed_quarter_count)},
+        warnings=backtest_result.warnings, now=now,
+    )
 
     try:
         performance = analyze_backtest_result(backtest_result, inputs.performance_config)
     except Exception as exc:  # noqa: BLE001
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.PERFORMANCE_COMPLETED, status=CheckpointStatus.FAILED,
+            identity=backtest_result.run_identity, notes=str(exc), now=now,
+        )
         return ProductionRunResult(
             state=ProductionRunState.RUNNING_STEP_FAILED,
             run_identity=run_identity,
@@ -325,11 +511,25 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
             feature_build=feature_build,
             backtest_result=backtest_result,
             blocked_reason=f"performance analysis step failed: {exc}",
+            run_manifest=_finalize_manifest(inputs, run_manifest, ProductionRunState.RUNNING_STEP_FAILED, now),
         )
+    run_manifest = _record_checkpoint(
+        inputs, run_manifest, CheckpointName.PERFORMANCE_COMPLETED, status=CheckpointStatus.COMPLETED,
+        identity=performance.analysis_identity, warnings=performance.warnings, now=now,
+    )
 
     report = None
     warnings = list(backtest_result.warnings) + list(performance.warnings)
-    if inputs.report_options is not None:
+    if inputs.report_options is None:
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.REPORT_COMPLETED, status=CheckpointStatus.SKIPPED,
+            identity=performance.analysis_identity, notes="report_options not supplied", now=now,
+        )
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.COMPARISON_COMPLETED, status=CheckpointStatus.SKIPPED,
+            identity=performance.analysis_identity, notes="report_options not supplied", now=now,
+        )
+    else:
         try:
             report = build_filing_momentum_report(
                 backtest_result,
@@ -341,6 +541,10 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
                 reproducibility_status=inputs.reproducibility_status,
             )
         except Exception as exc:  # noqa: BLE001
+            run_manifest = _record_checkpoint(
+                inputs, run_manifest, CheckpointName.REPORT_COMPLETED, status=CheckpointStatus.FAILED,
+                identity=performance.analysis_identity, notes=str(exc), now=now,
+            )
             return ProductionRunResult(
                 state=ProductionRunState.RUNNING_STEP_FAILED,
                 run_identity=run_identity,
@@ -350,7 +554,18 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
                 backtest_result=backtest_result,
                 performance_analysis=performance,
                 blocked_reason=f"report build step failed: {exc}",
+                run_manifest=_finalize_manifest(inputs, run_manifest, ProductionRunState.RUNNING_STEP_FAILED, now),
             )
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.REPORT_COMPLETED, status=CheckpointStatus.COMPLETED,
+            identity=report.metadata.report_identity, now=now,
+        )
+        comparison_status = CheckpointStatus.COMPLETED if report.comparison else CheckpointStatus.SKIPPED
+        comparison_notes = None if report.comparison else "no source comparison requested/available"
+        run_manifest = _record_checkpoint(
+            inputs, run_manifest, CheckpointName.COMPARISON_COMPLETED, status=comparison_status,
+            identity=report.metadata.report_identity, notes=comparison_notes, now=now,
+        )
 
     final_state = ProductionRunState.COMPLETED_WITH_WARNINGS if warnings else ProductionRunState.COMPLETED
     return ProductionRunResult(
@@ -363,6 +578,7 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         performance_analysis=performance,
         report=report,
         warnings=tuple(warnings),
+        run_manifest=_finalize_manifest(inputs, run_manifest, final_state, now),
     )
 
 
