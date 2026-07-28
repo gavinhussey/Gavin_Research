@@ -32,3 +32,17 @@ class FakeHttpClient:
         if url not in self.text_responses:
             raise KeyError(f"FakeHttpClient has no canned text response for {url!r}")
         return self.text_responses[url]
+
+
+class FakeHistoryProvider:
+    """A deterministic, injectable PriceHistoryProvider for tests -- never real yfinance I/O."""
+
+    def __init__(self, history_by_symbol: dict[str, object] | None = None):
+        self.history_by_symbol = history_by_symbol or {}
+        self.requested_symbols: list[str] = []
+
+    def fetch_daily_history(self, symbol: str):
+        self.requested_symbols.append(symbol)
+        if symbol not in self.history_by_symbol:
+            raise KeyError(f"FakeHistoryProvider has no canned history for {symbol!r}")
+        return self.history_by_symbol[symbol]
