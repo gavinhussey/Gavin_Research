@@ -368,3 +368,79 @@ class FakeEstimator:
                         row[j] = other
             rows.append(row)
         return rows
+
+
+def make_backtest_universe(n: int = 15) -> list[InstrumentId]:
+    return [instrument(f"T{i:02d}") for i in range(n)]
+
+
+def make_backtest_price_source(
+    universe: list, benchmark_ids: list, start: date, end: date
+) -> dict:
+    """A deterministic daily price history for every instrument in ``universe``
+    plus ``benchmark_ids``, spanning ``start``..``end`` (weekdays only)."""
+    import datetime as _dt
+
+    days = []
+    d = start
+    while d <= end:
+        if d.weekday() < 5:
+            days.append(d)
+        d += _dt.timedelta(days=1)
+
+    source = {}
+    for i, iid in enumerate(universe + benchmark_ids):
+        rate = 0.0002 * ((i % 7) - 3)
+        source[iid] = tuple(make_price_series(iid, days, start_price=100.0, daily_growth=rate))
+    return source
+
+
+def make_backtest_feature_observation_source(universe: list, sector: str = "Tech & Media"):
+    """Returns a callable(quarter_end) -> list[FeatureObservation] for a fixed universe."""
+    from atlas_quant.strategies.filing_momentum_ml.feature_domain import (
+        FEATURE_NAMES,
+        FeatureObservation,
+        missing_feature_names,
+    )
+
+    def source(quarter_end: date) -> list:
+        result = []
+        for i, iid in enumerate(universe):
+            features = {name: float((i + quarter_end.toordinal()) % 10) for name in FEATURE_NAMES}
+            result.append(
+                FeatureObservation(
+                    strategy_id="filing_momentum_ml", strategy_version="0.1.0", feature_schema_version="1",
+                    instrument_id=iid, fiscal_period="Q", quarter_end=quarter_end,
+                    filing_timestamp=datetime(quarter_end.year, quarter_end.month, quarter_end.day),
+                    feature_timestamp=quarter_end, data_cutoff=datetime(2035, 1, 1),
+                    sector=sector, features=features, missing_features=missing_feature_names(features),
+                    provenance=(provenance(datetime(quarter_end.year, quarter_end.month, quarter_end.day)),),
+                    config_identity="a" * 64, feature_cache_identity=None,
+                )
+            )
+        return result
+
+    return source
+
+
+def make_backtest_fallback_statistics_source(spy_return: float = 0.02, vgt_return: float = 0.03):
+    from atlas_quant.strategies.filing_momentum_ml.fallback_domain import FallbackAssetStatistics
+
+    spy = instrument("SPY", AssetClass.ETF)
+    vgt = instrument("VGT", AssetClass.ETF)
+
+    def source(period) -> tuple:
+        return (
+            FallbackAssetStatistics(
+                instrument_id=spy, measurement_cutoff=period.evaluation_timestamp,
+                quarterly_returns=(spy_return,) * 12, observation_count=12,
+                provenance=provenance(period.evaluation_timestamp),
+            ),
+            FallbackAssetStatistics(
+                instrument_id=vgt, measurement_cutoff=period.evaluation_timestamp,
+                quarterly_returns=(vgt_return,) * 12, observation_count=12,
+                provenance=provenance(period.evaluation_timestamp),
+            ),
+        )
+
+    return source
