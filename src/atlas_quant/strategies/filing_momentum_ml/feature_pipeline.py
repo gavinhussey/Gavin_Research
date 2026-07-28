@@ -9,7 +9,7 @@ missing-data handling, and assembling the result. It does not implement
 any new mathematical formula itself.
 
 Explicitly out of scope here (Stage 4+): qualification, model
-training/prediction, regime logic, position weighting (including
+training/prediction, position weighting (including
 ``score_proportional_weights``, which belongs to the later strategy stage
 and is deliberately never called from this module), portfolio
 construction, and backtesting.

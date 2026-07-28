@@ -43,15 +43,15 @@ class TestAuditRecordSerialization:
 
     def test_record_with_nested_detail_data_is_json_compatible(self):
         record = AuditRecord(
-            stage="regime",
-            message="both gates passed",
+            stage="validation",
+            message="all checks passed",
             timestamp=datetime(2026, 1, 1),
-            data={"gates": ["markov", "hmm"], "passed": True},
+            data={"checks": ["schema", "cutoff"], "passed": True},
         )
         # json.dumps must not raise -- proves the representation is
         # actually JSON-compatible, not merely dict-shaped.
         serialized = json.dumps(record.to_dict())
-        assert json.loads(serialized)["data"]["gates"] == ["markov", "hmm"]
+        assert json.loads(serialized)["data"]["checks"] == ["schema", "cutoff"]
 
 
 class TestAuditTrailSerialization:

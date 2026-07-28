@@ -66,20 +66,6 @@ class TestProtocolConformance:
             FilingMomentumMLStrategy().evaluate(context)
 
 
-class TestNoRegimeGate:
-    """The HMM/Markov regime gate is deliberately gone: nothing about market
-    or per-instrument regime can block a candidate or a quarter any more."""
-
-    def test_evaluation_inputs_have_no_regime_fields(self):
-        fields = FilingMomentumEvaluationInputs.__dataclass_fields__
-        assert "market_regime" not in fields
-        assert "per_instrument_regime" not in fields
-
-    def test_no_status_can_be_regime_blocked(self):
-        assert not hasattr(StrategyStatus, "REGIME_BLOCKED")
-        assert not hasattr(FilingMomentumOutcome, "MARKET_REGIME_BLOCKED")
-
-
 class TestPrimarySelectionAndWeighting:
     def test_three_candidates_weights_sum_to_deployable_pct(self):
         candidates = [make_scored_candidate(s, sc) for s, sc in [("AAA", 0.9), ("BBB", 0.6), ("CCC", 0.4)]]

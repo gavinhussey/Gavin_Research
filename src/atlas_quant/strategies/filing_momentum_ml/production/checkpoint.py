@@ -1,7 +1,7 @@
 """Checkpointed offline production workflow state — resumable, never silently reused.
 
 A genuine production research run is expensive (real filing/price
-acquisition, real model fits, real HMM fits) and may span multiple
+acquisition and real model fits) and may span multiple
 sessions. This module persists, per run, which of the nine ordered
 workflow steps have completed, each step's own content identity/hashes/
 warnings, and rejects resuming a checkpoint file whose stored identity

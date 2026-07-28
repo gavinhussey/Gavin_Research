@@ -26,18 +26,13 @@ For each historical quarter, in this exact order:
    `TrainingState` reason, no further steps run.
 5. If eligible: fit the model (Stage 6 `train_model`).
 6. Score the target quarter's observations (Stage 6 `score_observations`).
-7. (Removed — this strategy has no regime gate; see
-   `strategy_decision_specification.md`.)
-8. (Removed — no per-instrument regime check either. Same Stage 4
-   evaluator; Stage 5's own decision pipeline is what restricts this to
-   the Markov component — the runner does not special-case that here).
-9. Call `FilingMomentumMLStrategy.evaluate()` (Stage 5) — never
+7. Call `FilingMomentumMLStrategy.evaluate()` (Stage 5) — never
    reimplemented.
-10. Resolve entry prices for every recommendation (`accounting.py`).
-11. Resolve exit prices at the cohort's shared exit date.
-12. Compute each position's raw/capped return and contribution.
-13. Compute the SPY benchmark return over the identical interval.
-14. Record the complete `BacktestQuarterResult`.
+8. Resolve entry prices for every recommendation (`accounting.py`).
+9. Resolve exit prices at the cohort's shared exit date.
+10. Compute each position's raw/capped return and contribution.
+11. Compute the SPY benchmark return over the identical interval.
+12. Record the complete `BacktestQuarterResult`.
 
 Training/scoring/strategy chronology: a fresh model is trained
 every quarter from that quarter's own trailing window — nothing is ever
@@ -108,11 +103,11 @@ return accordingly (verified by test).
   positive labels, single-class labels, invalid features, or a model fit
   failure. `strategy_result` is `None`.
 - **Cash** (`QuarterOutcomeType.CASH`): the strategy evaluated
-  successfully but produced no exposure at all. With the regime gate
-  removed, this is an edge case only — missing ETF-sleeve statistics
-  (`MISSING_DATA`) or a disabled strategy (`DISABLED`). It is never a
-  routine outcome: a quarter that qualifies too few stocks becomes a
-  **blended** partial fill, not a cash quarter.
+  successfully but produced no exposure at all. This is an edge case
+  only: missing ETF-sleeve statistics (`MISSING_DATA`) or a disabled
+  strategy (`DISABLED`). It is never a routine outcome: a quarter that
+  qualifies too few stocks becomes a **blended** partial fill, not a cash
+  quarter.
 
 A cash quarter is never confused with or substituted by the ordinary
 partial-fill ETF sleeve — that distinction is enforced upstream by

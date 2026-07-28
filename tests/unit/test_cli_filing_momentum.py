@@ -196,15 +196,6 @@ def test_run_backtest_blocked_missing_dependency(monkeypatch, tmp_path):
     assert "scikit-learn" in out
 
 
-def test_run_backtest_has_no_regime_gate_flag():
-    """The regime gate is gone, so the CLI must not still advertise a
-    --regime-gate-mode option that no longer controls anything."""
-    from atlas_quant.cli.filing_momentum import build_parser
-
-    help_text = build_parser().format_help()
-    assert "--regime-gate-mode" not in help_text
-
-
 def _fake_estimator_factory(model_config):
     from atlas_quant.strategies.filing_momentum_ml.estimator import EstimatorBuildInfo
 

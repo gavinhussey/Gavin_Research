@@ -1,9 +1,8 @@
 """Scoring: fitted-estimator probabilities -> Stage 5 ScoredCandidate records.
 
-Never applies ``ml_threshold``, sector exclusion, regime exclusion,
-ranking, position truncation, or weighting — this module produces raw
-probabilities only; Stage 5's ``FilingMomentumMLStrategy`` decides what to
-do with them.
+Never applies ``ml_threshold``, sector exclusion, ranking, position
+truncation, or weighting — this module produces raw probabilities only;
+Stage 5's ``FilingMomentumMLStrategy`` decides what to do with them.
 """
 
 from __future__ import annotations

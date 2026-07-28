@@ -17,11 +17,6 @@ Decision sequence (this stage's own explicit ordering):
 6. Truncate to ``max_positions``.
 7. Size positions (see below) and assemble the structured decision audit.
 
-There is deliberately no regime gate at any step: the report's HMM +
-Markov market-level block and per-instrument Bear filter were removed
-from this strategy entirely. See ``config.FilingMomentumMLConfig`` and
-``docs/reproducibility_findings.md``.
-
 Sizing has exactly two cases, and neither ever holds the whole quarter
 in cash:
 

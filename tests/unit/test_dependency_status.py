@@ -45,7 +45,7 @@ def test_below_minimum_version_is_incompatible():
 
 def test_missing_required_for_production_filters_correctly():
     # A synthetic report, not the real environment's -- which of
-    # scikit-learn/hmmlearn/requests/yfinance/lxml happen to be installed
+    # scikit-learn/requests/yfinance/lxml happen to be installed
     # varies across sessions of this project (each requires a separate,
     # deliberate optional-group install), so this test must not depend on
     # that ambient state to verify the filter's own logic.

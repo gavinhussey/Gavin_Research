@@ -24,12 +24,11 @@ DISPLAY_NAME = "Filing Momentum ML"
 # Bumped whenever this module's formulas, defaults, or schema change in a
 # way that could alter results. Not the same as the platform version.
 #
-# 0.2.0: the HMM/Markov regime gate was removed entirely (no market-level
-# block, no per-instrument Bear filter) and the old "below min_positions
-# => abandon the stock picks and put 100% of deployable capital into a
-# SPY/VGT blend" fallback was replaced by the partial-fill ETF sleeve
-# described in FilingMomentumMLConfig's docstring. A real decision/sizing
-# behavior change, so results under 0.1.0 and 0.2.0 are not comparable.
+# 0.2.0: the old "below min_positions => abandon the stock picks and put
+# 100% of deployable capital into a SPY/VGT blend" fallback was replaced
+# by the partial-fill ETF sleeve described in FilingMomentumMLConfig's
+# docstring. A real decision/sizing behavior change, so results under
+# 0.1.0 and 0.2.0 are not comparable.
 STRATEGY_VERSION = "0.2.0"
 
 # sha256 of ~/Downloads/report_current.html at the time this config was
@@ -141,13 +140,6 @@ class FilingMomentumMLConfig:
 
     So ``fallback_tickers`` is now a *capital sleeve for unused deployable
     budget*, not a substitute for the strategy's stock picks.
-
-    The report's regime gate (HMM + Markov, market-level block and
-    per-instrument Bear filter) has been removed from this strategy
-    entirely — there is deliberately no ``regime_gate_mode``,
-    ``markov_years``, or ``missing_regime_policy`` field. See
-    ``docs/reproducibility_findings.md`` for why this divergence is
-    intentional and permanent.
 
     ``strategy_budget_pct`` is new relative to the report: the report
     assumed 100% of portfolio capital and had no concept of a "strategy

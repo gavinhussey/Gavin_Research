@@ -148,9 +148,6 @@ KNOWN_INTENTIONAL_DIFFERENCES: tuple[str, ...] = (
     "prototype's incidental DataFrame.nlargest(keep='first') row-order tie-break.",
     "Bounded stale-price resolution (default max 5 calendar days / 3 trading sessions) "
     "replaces the legacy/Stage 6 unlimited backward price search.",
-    "The report's two-layer HMM+Markov regime gate (market-level block and "
-    "per-instrument Bear filter) is removed entirely -- this platform deliberately "
-    "and permanently does not gate on regime. See docs/reproducibility_findings.md.",
     "Deterministic, fixed-vocabulary sector encoding replaces sklearn.LabelEncoder's "
     "run-order-dependent category assignment.",
     "A quarter with fewer than min_positions qualifying stocks keeps those stocks "

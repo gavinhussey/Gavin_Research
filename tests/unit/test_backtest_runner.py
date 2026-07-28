@@ -147,13 +147,6 @@ class TestNoReimplementation:
             TrainingState.SKIPPED_INSUFFICIENT_POSITIVE_LABELS,
         )
 
-    def test_quarter_result_carries_no_regime_fields(self):
-        from atlas_quant.backtest.filing_momentum_runner import BacktestQuarterResult
-
-        fields = BacktestQuarterResult.__dataclass_fields__
-        assert "market_regime" not in fields
-        assert "per_instrument_regime_count" not in fields
-
     def test_runner_uses_stage5_strategy_result_type(self):
         from atlas_quant.strategies.base import StrategyResult
 

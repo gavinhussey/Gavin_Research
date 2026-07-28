@@ -9,13 +9,6 @@ Configuration schema, pure report formulas, the point-in-time feature
 pipeline, model training/scoring, the strategy decision evaluator
 (qualification / ranking / weighting / partial-fill ETF sleeve),
 backtesting, performance analysis, and reporting all live here.
-
-The report's two-layer HMM+Markov regime gate is deliberately **not**
-implemented: this strategy does not gate on regime at all, and the
-report's all-or-nothing SPY/VGT fallback has been replaced by a
-partial-fill VOO/VTI capital sleeve. Both divergences are intentional
-and permanent — see ``config.FilingMomentumMLConfig`` and
-``docs/reproducibility_findings.md``.
 """
 
 from atlas_quant.domain.identifiers import AssetClass

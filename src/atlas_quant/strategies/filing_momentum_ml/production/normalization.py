@@ -1,6 +1,6 @@
 """Normalizes raw provider records into the *existing* Stage 3 domain models.
 
-Provider payloads never enter the platform's feature/label/model/regime
+Provider payloads never enter the platform's feature/label/model
 pipelines directly — every field is converted into
 ``FilingFundamentals``/``DailyPriceObservation``/``UniverseMembershipRecord``/
 ``SectorRecord`` here, and nowhere else. This module defines no second set

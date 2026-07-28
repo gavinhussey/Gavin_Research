@@ -154,7 +154,7 @@ def audit_legacy_artifact(legacy_root: Path, relative_path: str) -> LegacyArtifa
 #: own referenced production files.
 DEFAULT_LEGACY_ARTIFACT_PATHS: tuple[str, ...] = (
     "backtest_results_cache.pkl", "price_cache.parquet", "universe_cache.json",
-    "data_cache.json", "edgar_cache", "markov_backtest_cache", "report.html",
+    "data_cache.json", "edgar_cache", "report.html",
 )
 
 

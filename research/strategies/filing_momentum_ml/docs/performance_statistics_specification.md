@@ -32,7 +32,7 @@ A `FALLBACK`-classified quarter is a **blended partial fill** (stocks +
 ETF sleeve), not "ETFs instead of stocks" — the classification name is
 retained so it stays aligned with the shared `StrategyStatus.FALLBACK`
 and `SignalKind.FALLBACK` vocabulary. `REGIME_BLOCKED` no longer exists
-as a classification: there is no regime gate.
+as a classification.
 
 Report §5.4/§6's own "27 stock-pick · 33 SPY+VGT fallback · 0 cash" in the
 report's own current-default run — the two sleeves are never blended by

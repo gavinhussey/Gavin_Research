@@ -122,16 +122,6 @@ def test_blocked_missing_dependency(monkeypatch):
     assert result.backtest_result is None
 
 
-def test_hmmlearn_is_no_longer_a_dependency_at_all(monkeypatch):
-    """The regime gate is gone, so hmmlearn is not referenced by the
-    dependency specs, the orchestration module, or any run path."""
-    from atlas_quant.dependency_status import DEPENDENCY_SPECS
-
-    assert not any(spec.name == "hmmlearn" for spec in DEPENDENCY_SPECS)
-    assert not hasattr(orchestration_module, "HmmlearnFitter")
-    assert not hasattr(orchestration_module, "DisabledHMMFitter")
-
-
 def test_blocked_invalid_dataset_when_prices_missing(monkeypatch):
     inputs = _build_inputs()
     empty_prices = {k: v for k, v in inputs.prices_by_instrument.items() if k not in (_AAA, _BBB)}

@@ -17,8 +17,8 @@ from atlas_quant.domain.provenance import DataProvenance
 
 #: The only two price conventions this platform recognizes. The legacy
 #: prototype downloads via ``yfinance`` with ``auto_adjust=True``
-#: (``main.py``, ``_markov_worker.py``) — i.e. split- and
-#: dividend-adjusted close — which is the convention Filing Momentum ML's
+#: -- i.e. split- and dividend-adjusted close -- which is the convention
+#: Filing Momentum ML's
 #: price-derived features are defined against. ``unadjusted`` exists so a
 #: provider that cannot adjust is forced to say so explicitly rather than
 #: silently mixing conventions across instruments or dates.

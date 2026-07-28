@@ -1,9 +1,7 @@
 # Filing Momentum ML — strategy decision specification (Stage 5)
 
-Base source: `~/Downloads/report_current.html` §5, **with two deliberate,
-permanent divergences** documented below and in
-`reproducibility_findings.md`: this strategy has **no regime gate**, and
-its below-`min_positions` behavior is a **partial-fill ETF sleeve**, not
+Base source: `~/Downloads/report_current.html` §5, with a deliberate
+partial-fill ETF sleeve for below-`min_positions` quarters instead of
 the report's all-or-nothing SPY/VGT fallback. This document summarizes what `src/atlas_quant/strategies/filing_momentum_ml/strategy.py`
 and its supporting modules (`decision_pipeline.py`, `fallback_weighting.py`,
 `decision_domain.py`) actually implement, for readers who don't want to
@@ -29,8 +27,6 @@ has a bug.
    `StrategyResult.state_update`) and the shared `StrategyResult`/audit
    trail.
 
-There is **no regime step anywhere in this sequence**.
-
 ## Threshold semantics
 
 `score >= ml_threshold` (0.35 default) qualifies — confirmed inclusive
@@ -47,21 +43,6 @@ this evaluator performs no new normalization). Matching is case-sensitive
 and deterministic; a raw "materials" (lowercase) would not match
 "Materials" — sectors reaching this evaluator are expected to already be
 normalized, so this is intentionally strict, not lenient.
-
-## No regime gate (deliberate divergence)
-
-The report's two-layer gate — a market-level HMM+Markov block that held
-the entire quarter in cash, and a per-instrument Markov-only Bear filter
-that dropped individual candidates — has been **removed entirely**, per
-an explicit product decision. There is no `RegimeConfig`, no
-`RegimeEvaluator`, no HMM fitting, no `regime_gate_mode`, no
-`missing_regime_policy`, and no `hmmlearn` dependency anywhere in the
-decision path or its supporting modules. `StrategyStatus.REGIME_BLOCKED`
-and `FilingMomentumOutcome.MARKET_REGIME_BLOCKED` no longer exist.
-
-This is a permanent design divergence from `report_current.html`, not an
-environment limitation or an unfinished reproduction — see
-`reproducibility_findings.md`.
 
 ## Ranking and position cap
 
@@ -199,17 +180,16 @@ was needed but its statistics are absent), `invalid_input`, `disabled`.
 Each maps onto the shared `StrategyStatus` — see `_OUTCOME_TO_STATUS` in
 `strategy.py`; `blended` maps to `StrategyStatus.FALLBACK`.
 
-`market_regime_blocked`, `cash`, and `no_signal` were removed. The first
-had no mechanism left once the gate was deleted; the latter two are
-unreachable by design, since the strategy always deploys
-`deployable_pct` unless the data to do so is genuinely missing.
+`cash` and `no_signal` were removed. Both are unreachable by design,
+since the strategy always deploys `deployable_pct` unless the data to do
+so is genuinely missing.
 
 ## Recommendation roles
 
 `InstrumentRecommendation.kind` (Stage 2's existing `SignalKind` enum,
 unchanged) already distinguishes `PRIMARY` from `FALLBACK` — no new field
 was needed. Cash is represented by an empty `recommendations` tuple plus
-`capital_requested_pct` less than 1.0 (or 0.0 for a full block), not by a
+`capital_requested_pct` less than 1.0, not by a
 "cash" `InstrumentRecommendation` — cash isn't an instrument.
 
 ## Strategy-specific inputs and the protocol

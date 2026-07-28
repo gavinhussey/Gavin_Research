@@ -164,10 +164,10 @@ class TestAnalysisComposition:
         assert analysis.fallback is not None
         assert analysis.invested is not None
 
-    def test_invested_scope_excludes_cash_and_regime_blocked(self):
+    def test_invested_scope_excludes_cash(self):
         result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_skipped=0)
         analysis = analyze_backtest_result(result)
-        assert analysis.invested.return_series.included_count == 18  # 10+8, no cash/blocked
+        assert analysis.invested.return_series.included_count == 18  # 10+8, no cash
 
 
 class TestSerialization:

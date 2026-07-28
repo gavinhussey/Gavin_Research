@@ -112,11 +112,7 @@ this code) and reuses an existing Stage 3-9 service unchanged.
    with the real `build_hgbc_estimator` factory. Never substitutes
    another estimator; if scikit-learn is unavailable, reports
    `blocked=True` and stops.
-8. **(Removed)** — a regime-evaluation boundary module existed here
-   until the regime gate was deleted. There is no hmmlearn dependency and
-   no `RegimeEvaluator`. Formerly `RegimeEvaluator.evaluate_batch`/
-   `HmmlearnFitter`.
-9. **Top-level orchestration** (`production.orchestration`) —
+8. **Top-level orchestration** (`production.orchestration`) —
    `run_filing_momentum_production_backtest` coordinates all of the
    above plus Stage 7's `run_filing_momentum_backtest`, Stage 8's
    `analyze_backtest_result`, and (optionally) Stage 9's

@@ -4,7 +4,7 @@ A read-only, multi-strategy quantitative research and backtesting platform.
 
 First strategy: **Filing Momentum ML** — a quarterly, point-in-time equity
 selection strategy driven by SEC filing timing, fundamental momentum, price
-momentum, and a two-layer market/stock regime gate. Full specification:
+momentum, and ML scoring. Full specification:
 `~/Downloads/report_current.html` (not committed to this repository — it is
 the external source-of-truth document this platform is built from).
 
@@ -16,15 +16,15 @@ developed in.
 
 Through Stage 11 of a staged build. Filing Momentum ML's full pipeline
 exists as production code and tests: configuration schema and pure report
-formulas, the point-in-time feature pipeline, the canonical Markov + HMM
-regime evaluator, the strategy decision evaluator, model training/scoring,
+formulas, the point-in-time feature pipeline, the strategy decision
+evaluator, model training/scoring,
 a standalone historical backtest runner, performance analysis, and
 report/reproducibility-comparison generation. Stage 10 added the
 **offline production research workflow** around all of that: dependency-
 availability gating, a typed data-provenance manifest, a read-only legacy-
 cache audit, severity-graded raw-data validation, normalization of
 provider-shaped input into the existing domain models, model-training and
-regime-evaluation dependency boundaries, top-level orchestration with
+backtest dependency boundaries, top-level orchestration with
 checkpointed resume, a narrow `atlas-quant filing-momentum` CLI, and 11
 numbered research notebooks demonstrating the whole pipeline on synthetic
 data. Stage 11 added **real-data acquisition** (SEC EDGAR filings,
@@ -34,9 +34,7 @@ and sector data) via `atlas-quant filing-momentum acquire-data`.
 **A real, present-day acquisition has been run**: 518 universe members,
 96,852 filing rows, and 4,436,726 price rows, validated with 0 fatal
 issues, and **a genuine historical backtest has since run end-to-end on
-it**. (`hmmlearn` was previously the one blocking dependency; as of
-Stage 12 the HMM/Markov regime gate has been removed from this strategy
-entirely, so it is no longer a dependency at all.) See
+it**. See
 `research/strategies/filing_momentum_ml/docs/reproducibility_findings.md`
 for the full detail and the current classification (`NOT_RUN`) — nothing
 in this repository should be read as a strategy performance claim until

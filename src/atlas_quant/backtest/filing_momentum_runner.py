@@ -133,11 +133,10 @@ class QuarterOutcomeType(str, Enum):
     ``PRIMARY`` -- a quarter with ETF exposure must stay distinguishable
     from a pure stock-selection quarter in every downstream statistic.
 
-    ``CASH`` is now an edge case only. With the regime gate removed and
-    the strategy no longer able to produce a 100%-cash decision by
-    design, it is reachable only via ``StrategyStatus.MISSING_DATA``
-    (fallback-ticker statistics genuinely unavailable) or
-    ``StrategyStatus.DISABLED`` -- never as a routine outcome.
+    ``CASH`` is now an edge case only. The strategy no longer produces a
+    100%-cash decision by design, so it is reachable only via
+    ``StrategyStatus.MISSING_DATA`` (fallback-ticker statistics genuinely
+    unavailable) or ``StrategyStatus.DISABLED``.
     """
 
     PRIMARY = "primary"

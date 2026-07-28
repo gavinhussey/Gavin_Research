@@ -129,7 +129,7 @@ class TestScoreObservations:
 
     def test_no_qualification_applied(self):
         # Every score, regardless of value, becomes a ScoredCandidate --
-        # ml_threshold/sector/regime filtering is explicitly not this
+        # ml_threshold/sector filtering is explicitly not this
         # module's job.
         obs = [_obs("LOW")]
         estimator = FakeEstimator(fixed_scores={0: 0.01})

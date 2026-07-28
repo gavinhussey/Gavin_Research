@@ -90,7 +90,7 @@ class TestClassifyQuarter:
 
     def test_edge_case_cash(self):
         # CASH survives only for genuinely-no-exposure edge cases
-        # (missing data / disabled); no regime gate can produce one.
+        # (missing data / disabled).
         q = _quarter(date(2020, 3, 31), QuarterOutcomeType.CASH, 0.0, 0.02, status=StrategyStatus.MISSING_DATA)
         assert classify_quarter(q) == QuarterClassification.CASH
 

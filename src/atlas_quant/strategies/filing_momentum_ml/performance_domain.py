@@ -39,8 +39,7 @@ class QuarterClassification(str, Enum):
     CASH = "cash"
     """An edge-case quarter with no exposure at all (missing required data
     or a disabled strategy). No longer produced by any routine decision
-    path -- the regime gate that used to produce cash quarters is gone,
-    and a partial fill deploys rather than sitting out."""
+    path; a partial fill deploys rather than sitting out."""
 
     SKIPPED = "skipped"
     INVALID = "invalid"
