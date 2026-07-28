@@ -1,17 +1,21 @@
 """Filing Momentum ML's narrow, offline production-research CLI.
 
-Subcommands: ``validate-data``, ``build-features``, ``build-labels``,
-``run-backtest``, ``build-report``, ``compare-report``, ``run-all``.
+Subcommands: ``acquire-data``, ``validate-data``, ``build-features``,
+``build-labels``, ``run-backtest``, ``build-report``, ``compare-report``,
+``run-all``.
 
-Every subcommand operates only on files the caller points it at
-(``--raw-root``, ``--manifest``, ``--report-json``,
-``--source-report-html``) -- this CLI never reaches into the legacy
-``Arnold_Quant`` repository, never fetches data over the network itself
-(acquisition is a separate, not-yet-built provider step), and never
-accepts or prints a credential. Every artifact write refuses to
-overwrite an existing file unless ``--overwrite`` is passed explicitly,
-and ``--dry-run`` runs every step's computation without writing anything
-to disk.
+Every subcommand except ``acquire-data`` operates only on files the
+caller points it at (``--raw-root``, ``--manifest``, ``--report-json``,
+``--source-report-html``) and never fetches data over the network or
+reaches into the legacy ``Arnold_Quant`` repository. ``acquire-data`` is
+the one deliberate exception: it performs real network requests (SEC
+EDGAR, Wikipedia, yfinance) only when explicitly invoked -- never
+automatically from any other subcommand, and never from the test suite.
+It requires a real ``SEC_EDGAR_USER_AGENT`` (env var or ``--sec-user-agent``)
+per SEC's fair-access policy, and never accepts or prints a credential.
+Every artifact write refuses to overwrite an existing file unless
+``--overwrite`` is passed explicitly, and ``--dry-run`` runs every step's
+computation without writing anything to disk.
 """
 
 from __future__ import annotations
@@ -28,6 +32,14 @@ from atlas_quant.backtest.filing_momentum_runner import FilingMomentumBacktestCo
 from atlas_quant.data.point_in_time import ListTradingCalendar
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.reporting.serialization import ArtifactExistsError, write_json_atomic
+from atlas_quant.strategies.filing_momentum_ml.acquisition.http_client import RequestsHttpClient
+from atlas_quant.strategies.filing_momentum_ml.acquisition.run_acquisition import (
+    build_acquisition_manifest,
+    run_full_acquisition,
+    write_raw_data_files,
+)
+from atlas_quant.strategies.filing_momentum_ml.acquisition.sec_edgar import resolve_user_agent
+from atlas_quant.strategies.filing_momentum_ml.acquisition.yfinance_provider import YFinancePriceProvider
 from atlas_quant.strategies.filing_momentum_ml.config import FeatureCacheIdentity, FilingMomentumMLConfig
 from atlas_quant.strategies.filing_momentum_ml.feature_cache import DEFAULT_CACHE_ROOT, FeatureCachePaths
 from atlas_quant.strategies.filing_momentum_ml.production.checkpoint import DEFAULT_CHECKPOINT_ROOT
@@ -61,6 +73,7 @@ from atlas_quant.strategies.filing_momentum_ml.production.validation import (
     validate_sectors,
     validate_universe,
 )
+from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
 from atlas_quant.strategies.filing_momentum_ml.reporting.output import write_report_artifacts
 from atlas_quant.strategies.filing_momentum_ml.reporting.report_model import ReportOptions
 from atlas_quant.strategies.filing_momentum_ml.sector_encoding import SectorEncoder
@@ -347,6 +360,69 @@ def _print_comparison_dicts(comparisons: list[dict], *, as_json: bool, stream) -
 # --------------------------------------------------------------------------
 
 
+def cmd_acquire_data(args: argparse.Namespace, stdout, stderr) -> int:
+    """Acquire real universe/sector/filing/price data (SEC EDGAR, Wikipedia,
+    yfinance) and write it into ``--raw-root`` plus a real
+    ``DataProvenanceManifest`` at ``--manifest``. The only subcommand in
+    this CLI that performs real network requests."""
+    try:
+        user_agent = resolve_user_agent(args.sec_user_agent)
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+    if not args.dry_run and not args.overwrite:
+        for existing in ("filings.json", "prices.json", "universe.json", "sectors.json"):
+            if (args.raw_root / existing).exists():
+                stderr.write(f"{args.raw_root / existing} already exists -- pass --overwrite to replace it\n")
+                return 1
+        if args.manifest.exists():
+            stderr.write(f"{args.manifest} already exists -- pass --overwrite to replace it\n")
+            return 1
+
+    def _progress(symbol: str, index: int, total: int) -> None:
+        stdout.write(f"[{index}/{total}] {symbol}\n")
+
+    retrieved_at = datetime.now()
+    result = run_full_acquisition(
+        RequestsHttpClient(), YFinancePriceProvider(), sec_user_agent=user_agent, retrieved_at=retrieved_at,
+        symbol_limit=args.symbol_limit, progress_callback=_progress if not args.as_json else None,
+    )
+
+    summary = {
+        "symbols_attempted": result.symbols_attempted,
+        "symbols_with_filings": result.symbols_with_filings,
+        "symbols_with_prices": result.symbols_with_prices,
+        "filing_count": len(result.filings), "price_count": len(result.prices),
+        "universe_count": len(result.universe), "warning_count": len(result.warnings),
+    }
+    if args.as_json:
+        stdout.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    else:
+        stdout.write(
+            f"acquired {summary['filing_count']} filing row(s), {summary['price_count']} price row(s), "
+            f"{summary['universe_count']} universe member(s) across {summary['symbols_attempted']} symbol(s)\n"
+        )
+        for w in result.warnings:
+            stdout.write(f"warning: {w}\n")
+
+    if args.dry_run:
+        return 0
+
+    written = write_raw_data_files(result, args.raw_root)
+    for name, path in written.items():
+        stdout.write(f"wrote {name}: {path}\n")
+
+    manifest = build_acquisition_manifest(
+        result, dataset_identity_label=args.dataset_label, strategy_config_identity=FilingMomentumMLConfig().identity(),
+        regime_config_identity=RegimeConfig().identity(), retrieval_date=retrieved_at.date(),
+        data_cutoff=retrieved_at, git_commit=None,
+    )
+    args.manifest.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(args.manifest, manifest.to_dict(), overwrite=True)
+    stdout.write(f"wrote manifest: {args.manifest}\n")
+    return 0
+
+
 def cmd_validate_data(args: argparse.Namespace, stdout, stderr) -> int:
     bundle = load_normalized_bundle(args.raw_root)
     calendar = _build_trading_calendar(bundle)
@@ -529,6 +605,7 @@ def cmd_run_all(args: argparse.Namespace, stdout, stderr) -> int:
 
 
 _HANDLERS = {
+    "acquire-data": cmd_acquire_data,
     "validate-data": cmd_validate_data,
     "build-features": cmd_build_features,
     "build-labels": cmd_build_labels,
@@ -562,6 +639,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     fm = top.add_parser("filing-momentum", help="Filing Momentum ML production research workflow")
     sub = fm.add_subparsers(dest="subcommand", required=True)
+
+    acquire_p = sub.add_parser("acquire-data", help="acquire real universe/sector/filing/price data (real network requests)")
+    _add_common_arguments(acquire_p)
+    acquire_p.add_argument("--sec-user-agent", type=str, default=None, help="or set SEC_EDGAR_USER_AGENT")
+    acquire_p.add_argument("--symbol-limit", type=int, default=None, help="cap on how many universe members to acquire")
+    acquire_p.add_argument("--dataset-label", type=str, default="sec_edgar_yfinance_wikipedia_snapshot")
 
     validate_p = sub.add_parser("validate-data", help="validate normalized raw data")
     _add_common_arguments(validate_p)

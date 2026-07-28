@@ -231,15 +231,18 @@ def test_run_all_stops_at_first_blocked_step(tmp_path):
 
 
 def test_cli_never_imports_network_or_legacy_access():
-    """The docstring documents (in prose) that this CLI never reaches into
-    Arnold_Quant -- this test verifies that structurally: no import of
-    subprocess/urllib/requests (this CLI's only I/O is the paths the
-    caller passes on the command line), and no hardcoded reference to the
-    legacy repository's path anywhere outside that one docstring mention."""
+    """``acquire-data`` is this CLI's one deliberate, disclosed exception
+    for real network access (SEC EDGAR/Wikipedia/yfinance, via the
+    acquisition package) -- every other subcommand remains network-free.
+    This test verifies structurally that this module itself never imports
+    subprocess/urllib/requests/yfinance directly (only via the acquisition
+    package's own lazy-import boundary), and never hardcodes a reference
+    to the legacy repository's path anywhere outside the one docstring
+    disclosure sentence."""
     import atlas_quant.cli.filing_momentum as cli_module
 
     source = Path(cli_module.__file__).read_text()
-    for forbidden_import in ("import subprocess", "import requests", "import urllib"):
+    for forbidden_import in ("import subprocess", "import requests", "import urllib", "import yfinance"):
         assert forbidden_import not in source
     # The one mention is the module docstring's own disclosure sentence --
     # never a path this module actually opens or constructs.
@@ -253,3 +256,79 @@ def test_validate_data_json_output_is_well_formed(tmp_path):
     assert code == 0
     payload = json.loads(out)
     assert "counts" in payload and "issues" in payload
+
+
+def _fake_acquisition_result():
+    import atlas_quant.cli.filing_momentum as cli_module
+    from atlas_quant.strategies.filing_momentum_ml.acquisition.run_acquisition import AcquisitionResult
+    from atlas_quant.strategies.filing_momentum_ml.production.normalization import RawPriceRecord, RawUniverseRecord
+
+    now = datetime(2024, 6, 1)
+    return AcquisitionResult(
+        filings=(), prices=(RawPriceRecord("AAA", "equity", date(2024, 1, 2), 100.0, "split_dividend_adjusted", "yfinance", now),),
+        universe=(RawUniverseRecord("AAA", "equity", now, "wikipedia_sp500_nasdaq100", True, now),),
+        sectors=(), symbols_attempted=1, symbols_with_filings=0, symbols_with_prices=1,
+        warnings=("AAA: no SEC filings acquired (no CIK match or no quarterly facts found)",),
+    )
+
+
+def test_acquire_data_requires_sec_user_agent(monkeypatch, tmp_path):
+    monkeypatch.delenv("SEC_EDGAR_USER_AGENT", raising=False)
+    code, out, err = _run([
+        "filing-momentum", "acquire-data", "--raw-root", str(tmp_path / "raw"), "--dry-run",
+    ])
+    assert code == 1
+    assert "User-Agent" in err
+
+
+def test_acquire_data_dry_run_writes_nothing(monkeypatch, tmp_path):
+    import atlas_quant.cli.filing_momentum as cli_module
+
+    monkeypatch.setattr(cli_module, "run_full_acquisition", lambda *a, **k: _fake_acquisition_result())
+    raw_root = tmp_path / "raw"
+    code, out, err = _run([
+        "filing-momentum", "acquire-data", "--raw-root", str(raw_root),
+        "--sec-user-agent", "Test test@example.com", "--dry-run",
+    ])
+    assert code == 0
+    assert "acquired 0 filing row(s), 1 price row(s)" in out
+    assert not raw_root.exists()
+
+
+def test_acquire_data_writes_raw_files_and_manifest(monkeypatch, tmp_path):
+    import atlas_quant.cli.filing_momentum as cli_module
+
+    monkeypatch.setattr(cli_module, "run_full_acquisition", lambda *a, **k: _fake_acquisition_result())
+    raw_root = tmp_path / "raw"
+    manifest_path = tmp_path / "manifest.json"
+    code, out, err = _run([
+        "filing-momentum", "acquire-data", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
+        "--sec-user-agent", "Test test@example.com",
+    ])
+    assert code == 0
+    assert (raw_root / "prices.json").exists()
+    assert (raw_root / "filings.json").exists()
+    assert manifest_path.exists()
+    manifest_data = json.loads(manifest_path.read_text())
+    assert manifest_data["provider_name"] == "sec_edgar+yfinance+wikipedia"
+
+
+def test_acquire_data_refuses_overwrite_without_flag(monkeypatch, tmp_path):
+    import atlas_quant.cli.filing_momentum as cli_module
+
+    monkeypatch.setattr(cli_module, "run_full_acquisition", lambda *a, **k: _fake_acquisition_result())
+    raw_root = tmp_path / "raw"
+    manifest_path = tmp_path / "manifest.json"
+    argv = [
+        "filing-momentum", "acquire-data", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
+        "--sec-user-agent", "Test test@example.com",
+    ]
+    code, out, err = _run(argv)
+    assert code == 0
+
+    code, out, err = _run(argv)
+    assert code == 1
+    assert "already exists" in err
+
+    code, out, err = _run(argv + ["--overwrite"])
+    assert code == 0
