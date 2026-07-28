@@ -289,7 +289,7 @@ def make_scored_candidate(
     *,
     sector: str = "Tech & Media",
     strategy_id: str = "filing_momentum_ml",
-    feature_schema_version: str = "1",
+    feature_schema_version: str = "2",
     model_identifier: str = "hgbc",
     model_version: str = "1",
     feature_timestamp: date = date(2026, 1, 1),
@@ -409,13 +409,15 @@ def make_backtest_feature_observation_source(universe: list, sector: str = "Tech
             features = {name: float((i + quarter_end.toordinal()) % 10) for name in FEATURE_NAMES}
             result.append(
                 FeatureObservation(
-                    strategy_id="filing_momentum_ml", strategy_version="0.1.0", feature_schema_version="1",
+                    strategy_id="filing_momentum_ml", strategy_version="0.1.0", feature_schema_version="2",
                     instrument_id=iid, fiscal_period="Q", quarter_end=quarter_end,
                     filing_timestamp=datetime(quarter_end.year, quarter_end.month, quarter_end.day),
                     feature_timestamp=quarter_end, data_cutoff=datetime(2035, 1, 1),
                     sector=sector, features=features, missing_features=missing_feature_names(features),
                     provenance=(provenance(datetime(quarter_end.year, quarter_end.month, quarter_end.day)),),
                     config_identity="a" * 64, feature_cache_identity=None,
+                    strategy_cohort_end=quarter_end,
+                    cohort_buy_timestamp=datetime(quarter_end.year, quarter_end.month, quarter_end.day),
                 )
             )
         return result

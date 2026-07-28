@@ -22,7 +22,10 @@ EXPECTED_COLUMNS = (
 )
 
 
-def _obs(symbol: str, quarter_end: date, strategy_id="filing_momentum_ml", schema_version="1", feature_ts=None):
+def _obs(
+    symbol: str, quarter_end: date, strategy_id="filing_momentum_ml", schema_version="1",
+    feature_ts=None, cohort_end: date | None = None,
+):
     features = {name: float(i) for i, name in enumerate(FEATURE_NAMES)}
     return FeatureObservation(
         strategy_id=strategy_id, strategy_version="0.1.0", feature_schema_version=schema_version,
@@ -31,6 +34,8 @@ def _obs(symbol: str, quarter_end: date, strategy_id="filing_momentum_ml", schem
         feature_timestamp=feature_ts or quarter_end, data_cutoff=datetime(2030, 1, 1),
         sector="Tech & Media", features=features, missing_features=(), provenance=(provenance(datetime(2026, 1, 1)),),
         config_identity="a" * 64, feature_cache_identity=None,
+        strategy_cohort_end=cohort_end or quarter_end,
+        cohort_buy_timestamp=datetime(2030, 1, 1),
     )
 
 
@@ -80,19 +85,40 @@ class TestBuildFeatureMatrix:
         assert len(matrix) == 0
         assert "feature_schema_version mismatch" in matrix.rejected[0].reason
 
-    def test_duplicate_instrument_same_quarter_rejected(self):
+    def test_duplicate_instrument_same_cohort_rejected(self):
         a = _obs("AAA", date(2025, 12, 31))
         b = _obs("AAA", date(2025, 12, 31))
         matrix = build_feature_matrix([a, b], strategy_id="filing_momentum_ml", feature_schema_version="1")
         assert len(matrix) == 0
         assert len(matrix.rejected) == 2
 
-    def test_same_instrument_different_quarters_not_duplicate(self):
+    def test_same_instrument_different_cohorts_not_duplicate(self):
         a = _obs("AAA", date(2025, 9, 30))
         b = _obs("AAA", date(2025, 12, 31))
         matrix = build_feature_matrix([a, b], strategy_id="filing_momentum_ml", feature_schema_version="1")
         assert len(matrix) == 2
         assert matrix.rejected == ()
+
+    def test_same_fiscal_quarter_different_cohorts_not_duplicate(self):
+        """Recovered cohort-snapshot behavior: the same issuer fiscal
+        quarter_end legitimately recurs across multiple shared cohorts
+        (rolling reuse until a newer filing supersedes it) -- this must
+        never be flagged as a duplicate."""
+        a = _obs("AAA", date(2025, 9, 30), cohort_end=date(2025, 12, 31))
+        b = _obs("AAA", date(2025, 9, 30), cohort_end=date(2026, 3, 31))
+        matrix = build_feature_matrix([a, b], strategy_id="filing_momentum_ml", feature_schema_version="1")
+        assert len(matrix) == 2
+        assert matrix.rejected == ()
+
+    def test_different_fiscal_quarter_same_cohort_is_duplicate(self):
+        """Two rows claiming the same instrument/cohort slot are a
+        duplicate regardless of which fiscal quarter each is based on --
+        cohort identity, not fiscal quarter, is the row's true key."""
+        a = _obs("AAA", date(2025, 6, 30), cohort_end=date(2025, 12, 31))
+        b = _obs("AAA", date(2025, 9, 30), cohort_end=date(2025, 12, 31))
+        matrix = build_feature_matrix([a, b], strategy_id="filing_momentum_ml", feature_schema_version="1")
+        assert len(matrix) == 0
+        assert len(matrix.rejected) == 2
 
     def test_deterministic_row_to_observation_mapping(self):
         obs_list = [_obs(f"T{i:02d}", date(2025, 12, 31)) for i in range(5)]

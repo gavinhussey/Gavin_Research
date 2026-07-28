@@ -24,7 +24,14 @@ from atlas_quant.strategies.filing_momentum_ml.feature_domain import (
 #: Bumped whenever this module's matrix-building behavior changes in a way
 #: that could alter results, independent of FEATURE_SCHEMA_VERSION (which
 #: tracks the 17-feature shape itself, defined in config.py).
-MODEL_SCHEMA_VERSION = "1"
+#:
+#: v2 (this bump): duplicate-row detection key changed from
+#: (instrument_id, quarter_end) to (instrument_id, strategy_cohort_end) --
+#: under the corrected cohort-snapshot model, the same issuer fiscal
+#: quarter_end legitimately recurs across many different shared cohorts
+#: (rolling reuse of the most-recently-available fundamentals), which the
+#: old key would have wrongly flagged as duplicates.
+MODEL_SCHEMA_VERSION = "2"
 
 
 def compute_model_schema_identity(feature_schema_version: str, model_config_identity: str) -> str:
@@ -106,22 +113,26 @@ def build_feature_matrix(
     timestamps: list[object] = []
     rejected: list[RejectedObservation] = []
 
-    # Duplicate detection is keyed by (instrument_id, quarter_end), not
-    # instrument_id alone -- the same instrument legitimately recurs
-    # across many quarters in a multi-quarter training matrix; it is only
-    # a duplicate if the *same instrument/quarter* appears more than once.
+    # Duplicate detection is keyed by (instrument_id, strategy_cohort_end),
+    # not instrument_id alone, and *not* (instrument_id, quarter_end) --
+    # the same instrument legitimately recurs across many shared cohorts
+    # in a multi-cohort training matrix (one row per cohort), and the same
+    # issuer fiscal quarter_end legitimately recurs across many different
+    # cohorts too (rolling reuse of the most-recently-available
+    # fundamentals until a newer filing supersedes it). It is only a
+    # duplicate if the *same instrument/cohort* appears more than once.
     seen: dict[tuple[InstrumentId, object], int] = {}
     for obs in observations:
-        key = (obs.instrument_id, obs.quarter_end)
+        key = (obs.instrument_id, obs.strategy_cohort_end)
         seen[key] = seen.get(key, 0) + 1
 
     for obs in observations:
-        key = (obs.instrument_id, obs.quarter_end)
+        key = (obs.instrument_id, obs.strategy_cohort_end)
         if seen[key] > 1:
             rejected.append(
                 RejectedObservation(
                     obs.instrument_id,
-                    f"duplicate instrument/quarter ({seen[key]} entries for {obs.quarter_end!r})",
+                    f"duplicate instrument/cohort ({seen[key]} entries for {obs.strategy_cohort_end!r})",
                 )
             )
             continue

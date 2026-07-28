@@ -66,16 +66,20 @@ def build_production_features(
     config: FilingMomentumMLConfig,
     calendar: TradingCalendar,
     sector_encoder: SectorEncoder,
-    targets: Sequence[tuple[InstrumentId, date]],
+    targets: Sequence[tuple[InstrumentId, date, datetime]],
     filings_by_instrument: Mapping[InstrumentId, Sequence[FilingFundamentals]],
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
     sector_by_instrument: Mapping[InstrumentId, SectorRecord],
-    data_cutoff: datetime,
     cache_identity: FeatureCacheIdentity,
     cache_root: Path | None = None,
     mode: FilingTimingMode = "training",
 ) -> ProductionFeatureBuildResult:
     """Validate raw inputs, then run Stage 3's feature pipeline over them unchanged.
+
+    ``targets`` is ``(instrument_id, strategy_cohort_end,
+    cohort_buy_timestamp)`` triples -- each shared cohort carries its own
+    point-in-time cutoff (see :func:`~...feature_pipeline.run_feature_pipeline`),
+    never one batch-wide cutoff shared across every cohort.
 
     A ``FATAL``-severity validation issue blocks the build entirely (no
     feature pipeline call, no cache write) — the caller must inspect
@@ -85,7 +89,7 @@ def build_production_features(
     disk, which is what every non-production caller (tests, dry runs)
     should do.
     """
-    target_instrument_ids = {instrument_id for instrument_id, _ in targets}
+    target_instrument_ids = {instrument_id for instrument_id, _, _ in targets}
 
     issues: list[DataValidationIssue] = []
     for filings in filings_by_instrument.values():
@@ -125,7 +129,6 @@ def build_production_features(
         filings_by_instrument=dict(filings_by_instrument),
         prices_by_instrument=dict(prices_by_instrument),
         sector_by_instrument=dict(sector_by_instrument),
-        data_cutoff=data_cutoff,
         mode=mode,
         feature_cache_identity=cache_identity.cache_key(),
     )

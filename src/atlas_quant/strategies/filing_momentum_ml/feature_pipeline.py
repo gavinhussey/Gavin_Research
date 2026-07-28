@@ -233,7 +233,8 @@ def build_feature_observation(
     calendar: TradingCalendar,
     sector_encoder: SectorEncoder,
     instrument_id: InstrumentId,
-    target_quarter_end: date,
+    strategy_cohort_end: date,
+    cohort_buy_timestamp: datetime,
     filings: Sequence[FilingFundamentals],
     prices: Sequence[DailyPriceObservation],
     sector_record: SectorRecord | None,
@@ -241,29 +242,86 @@ def build_feature_observation(
     mode: FilingTimingMode = "training",
     feature_cache_identity: str | None = None,
 ) -> FeatureObservation | RejectedObservation:
-    """Build one instrument/quarter's :class:`FeatureObservation`, or report why not."""
+    """Build one instrument/shared-cohort's :class:`FeatureObservation`, or report why not.
+
+    Recovered report/legacy behavior (``ml_scorer.py``'s ``RollingMLScorer``
+    + ``data_sec.py``'s ``get_available_as_of``): every ticker produces one
+    candidate row per shared ``strategy_cohort_end``, built from whichever
+    fiscal history is most recently knowable as of ``data_cutoff`` --
+    ordinal ("most recent N filed quarters"), never requiring the
+    selected filing's own ``quarter_end`` to equal ``strategy_cohort_end``.
+    This function is rejected only for genuine data insufficiency (no
+    knowable fundamental history at all, or a resolved feature date past
+    ``data_cutoff``) -- never for a fiscal/calendar mismatch, which is not
+    a rejection condition at all, only a timing-precision one (see below).
+
+    An earlier implementation required exact equality between the
+    selected filing's ``quarter_end`` and ``strategy_cohort_end`` as an
+    *inclusion* condition -- this was an implementation bug (synthetic
+    test fixtures are always calendar-aligned, so the bug was invisible
+    until real data, where the majority of issuers use 52/53-week or
+    otherwise offset fiscal calendars). The report/legacy implementation
+    never had such a requirement; exact equality there is used only to
+    refine ``feature_timestamp``'s entry-timing precision.
+    """
     selection = select_point_in_time_fundamentals(
         filings, instrument_id, cutoff=data_cutoff, max_periods=_TREND_WINDOW
     )
-    if not selection.selected or selection.selected[-1].quarter_end != target_quarter_end:
+    if not selection.selected:
         return RejectedObservation(
             instrument_id=instrument_id,
-            quarter_end=target_quarter_end,
-            reason="target quarter's filing not knowable as of data_cutoff",
+            quarter_end=strategy_cohort_end,
+            reason="no fundamental history knowable as of data_cutoff",
         )
 
     target_filing = selection.selected[-1]
-    timing = resolve_feature_timestamp(
-        filed_at=target_filing.filed_at,
-        quarter_end=target_filing.quarter_end,
-        calendar=calendar,
-        earnings_lag_days=config.earnings_lag_days,
-        mode=mode,
-    )
-    if timing.feature_date > data_cutoff.date():
+    has_exact_cohort_match = target_filing.quarter_end == strategy_cohort_end
+
+    if has_exact_cohort_match:
+        # Entry-timing refinement only (report §3/§5.5): filed_at + 1
+        # trading day, capped at the shared cohort's own buy timestamp.
+        # ``quarter_end=strategy_cohort_end`` here (not
+        # ``target_filing.quarter_end``) is deliberate -- the day-42 cap is
+        # always anchored to the shared cohort's clock, never replaced by
+        # the issuer's own fiscal quarter-end.
+        timing = resolve_feature_timestamp(
+            filed_at=target_filing.filed_at,
+            quarter_end=strategy_cohort_end,
+            calendar=calendar,
+            earnings_lag_days=config.earnings_lag_days,
+            mode=mode,
+        )
+        feature_date = timing.feature_date
+        timing_message = (
+            "exact fiscal-cohort match: day-42 cap applied" if timing.capped
+            else "exact fiscal-cohort match: natural filing_date + 1 trading day used"
+        )
+        timing_data = {
+            "cohort_match": True,
+            "filed_at": timing.filed_at.isoformat(),
+            "natural_feature_date": timing.natural_feature_date.isoformat(),
+            "day42_cutoff_date": timing.day42_cutoff_date.isoformat(),
+            "feature_date": timing.feature_date.isoformat(),
+            "mode": timing.mode,
+            "capped": timing.capped,
+        }
+    else:
+        # No exact fiscal-period match to this shared cohort -- recovered
+        # report/legacy fallback (never a rejection, never nearest-date
+        # matching): use the cohort's own buy timestamp directly.
+        feature_date = cohort_buy_timestamp.date()
+        timing_message = "no exact fiscal-cohort match: cohort_buy_timestamp used directly"
+        timing_data = {
+            "cohort_match": False,
+            "issuer_fiscal_quarter_end": target_filing.quarter_end.isoformat(),
+            "strategy_cohort_end": strategy_cohort_end.isoformat(),
+            "feature_date": feature_date.isoformat(),
+        }
+
+    if feature_date > data_cutoff.date():
         return RejectedObservation(
             instrument_id=instrument_id,
-            quarter_end=target_quarter_end,
+            quarter_end=strategy_cohort_end,
             reason="resolved feature_date falls after data_cutoff",
         )
 
@@ -273,24 +331,18 @@ def build_feature_observation(
             stage="point_in_time_selection",
             message=f"selected {len(selection.selected)} filing(s), rejected {len(selection.rejected)}",
             timestamp=data_cutoff,
-            data={"rejected_reasons": [r.reason for r in selection.rejected]},
+            data={
+                "rejected_reasons": [r.reason for r in selection.rejected],
+                "selected_fiscal_quarter_ends": [f.quarter_end.isoformat() for f in selection.selected],
+            },
         )
     )
     audit_trail = audit_trail.append(
         AuditRecord(
             stage="timing_resolution",
-            message=(
-                "day-42 cap applied" if timing.capped else "natural filing_date + 1 trading day used"
-            ),
+            message=timing_message,
             timestamp=data_cutoff,
-            data={
-                "filed_at": timing.filed_at.isoformat(),
-                "natural_feature_date": timing.natural_feature_date.isoformat(),
-                "day42_cutoff_date": timing.day42_cutoff_date.isoformat(),
-                "feature_date": timing.feature_date.isoformat(),
-                "mode": timing.mode,
-                "capped": timing.capped,
-            },
+            data=timing_data,
         )
     )
 
@@ -298,7 +350,7 @@ def build_feature_observation(
     if config.fcf_mode == "raw":
         fundamentals["fcf_trend"] = compute_raw_fcf_trend(selection.selected)
 
-    price_features = compute_price_features(prices, timing.feature_date)
+    price_features = compute_price_features(prices, feature_date)
 
     raw_sector = sector_record.raw_sector if sector_record else None
     classification = sector_encoder.classify(
@@ -344,7 +396,7 @@ def build_feature_observation(
         fiscal_period=target_filing.fiscal_period,
         quarter_end=target_filing.quarter_end,
         filing_timestamp=target_filing.filed_at,
-        feature_timestamp=timing.feature_date,
+        feature_timestamp=feature_date,
         data_cutoff=data_cutoff,
         sector=classification.normalized_sector,
         features=features,
@@ -352,6 +404,8 @@ def build_feature_observation(
         provenance=tuple(provenance),
         config_identity=config.identity(),
         feature_cache_identity=feature_cache_identity,
+        strategy_cohort_end=strategy_cohort_end,
+        cohort_buy_timestamp=cohort_buy_timestamp,
         audit_trail=audit_trail,
     )
 
@@ -361,15 +415,23 @@ def run_feature_pipeline(
     config: FilingMomentumMLConfig,
     calendar: TradingCalendar,
     sector_encoder: SectorEncoder,
-    targets: Sequence[tuple[InstrumentId, date]],
+    targets: Sequence[tuple[InstrumentId, date, datetime]],
     filings_by_instrument: dict[InstrumentId, Sequence[FilingFundamentals]],
     prices_by_instrument: dict[InstrumentId, Sequence[DailyPriceObservation]],
     sector_by_instrument: dict[InstrumentId, SectorRecord],
-    data_cutoff: datetime,
     mode: FilingTimingMode = "training",
     feature_cache_identity: str | None = None,
 ) -> FeaturePipelineResult:
-    """Build feature observations for every ``(instrument_id, target_quarter_end)`` pair.
+    """Build feature observations for every ``(instrument_id, strategy_cohort_end,
+    cohort_buy_timestamp)`` triple.
+
+    Each target carries its *own* point-in-time cutoff
+    (``cohort_buy_timestamp``, used directly as that target's
+    ``data_cutoff``) rather than one batch-wide cutoff shared across every
+    cohort -- a single shared cutoff would let an early cohort in a
+    multi-cohort batch see filings only knowable as of a *later* cohort's
+    own buy date, a real lookahead bug distinct from (but previously
+    masked by) the fiscal/calendar-equality bug this module also fixes.
 
     Deterministic: iterates ``targets`` in the given order and never
     depends on dict iteration order for its own output ordering.
@@ -378,17 +440,18 @@ def run_feature_pipeline(
     rejected: list[RejectedObservation] = []
     warnings: list[str] = []
 
-    for instrument_id, target_quarter_end in targets:
+    for instrument_id, strategy_cohort_end, cohort_buy_timestamp in targets:
         result = build_feature_observation(
             config=config,
             calendar=calendar,
             sector_encoder=sector_encoder,
             instrument_id=instrument_id,
-            target_quarter_end=target_quarter_end,
+            strategy_cohort_end=strategy_cohort_end,
+            cohort_buy_timestamp=cohort_buy_timestamp,
             filings=filings_by_instrument.get(instrument_id, ()),
             prices=prices_by_instrument.get(instrument_id, ()),
             sector_record=sector_by_instrument.get(instrument_id),
-            data_cutoff=data_cutoff,
+            data_cutoff=cohort_buy_timestamp,
             mode=mode,
             feature_cache_identity=feature_cache_identity,
         )
@@ -398,7 +461,7 @@ def run_feature_pipeline(
             observations.append(result)
             if result.missing_features:
                 warnings.append(
-                    f"{result.instrument_id.symbol} {result.quarter_end.isoformat()}: "
+                    f"{result.instrument_id.symbol} {strategy_cohort_end.isoformat()}: "
                     f"{len(result.missing_features)} missing feature(s)"
                 )
 

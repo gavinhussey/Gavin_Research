@@ -32,10 +32,25 @@ SOURCE_REPORT_SHA256 = (
     "c985c6ed2f85d4cfa7e4ea13449b5e05d571b2b004935eb997c42a975f787295"
 )
 
-# Bumped whenever the 17-feature schema (§3 of the report) changes shape —
-# independent of STRATEGY_VERSION, since a cache built under one feature
-# schema is never valid input for a model expecting a different one.
-FEATURE_SCHEMA_VERSION = "1"
+# Bumped whenever the 17-feature schema (§3 of the report) changes shape,
+# or FeatureObservation's own row shape/identity changes -- independent of
+# STRATEGY_VERSION, since a cache built under one feature schema is never
+# valid input for a model expecting a different one.
+#
+# v2 (this bump): FeatureObservation gained strategy_cohort_end/
+# cohort_buy_timestamp, and build_feature_observation's inclusion rule
+# changed from "the selected filing's quarter_end must equal the target
+# cohort's calendar date" (an implementation bug -- synthetic fixtures are
+# always calendar-aligned, so this was invisible until real data, where
+# most issuers use 52/53-week or otherwise offset fiscal years) to the
+# recovered report/legacy behavior: every ticker gets one row per shared
+# cohort from its most-recently-knowable fiscal history, with exact
+# calendar alignment used only to refine entry-timing precision, never as
+# an inclusion requirement. A v1 cache reflects the old, buggy inclusion
+# rule and must never be read as if it were a v2 cache -- this bump
+# ensures FeatureCacheIdentity's own identity changes so v1 caches are
+# rejected, not silently reused.
+FEATURE_SCHEMA_VERSION = "2"
 
 FcfMode = Literal["ratio", "raw"]
 RegimeGateMode = Literal["both", "either", "markov", "hmm", "none"]

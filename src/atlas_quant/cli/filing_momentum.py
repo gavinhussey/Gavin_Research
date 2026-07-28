@@ -40,7 +40,7 @@ from atlas_quant.strategies.filing_momentum_ml.acquisition.run_acquisition impor
 )
 from atlas_quant.strategies.filing_momentum_ml.acquisition.sec_edgar import resolve_user_agent
 from atlas_quant.strategies.filing_momentum_ml.acquisition.yfinance_provider import YFinancePriceProvider
-from atlas_quant.strategies.filing_momentum_ml.config import FeatureCacheIdentity, FilingMomentumMLConfig
+from atlas_quant.strategies.filing_momentum_ml.config import FEATURE_SCHEMA_VERSION, FeatureCacheIdentity, FilingMomentumMLConfig
 from atlas_quant.strategies.filing_momentum_ml.feature_cache import DEFAULT_CACHE_ROOT, FeatureCachePaths
 from atlas_quant.strategies.filing_momentum_ml.production.checkpoint import DEFAULT_CHECKPOINT_ROOT
 from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
@@ -268,7 +268,7 @@ def _periods_from_args(args: argparse.Namespace, *, required: bool) -> tuple[Bac
 
 def _feature_cache_identity(config: FilingMomentumMLConfig, periods: Sequence[BacktestPeriod]) -> FeatureCacheIdentity:
     return FeatureCacheIdentity(
-        strategy_id=config.strategy_id, strategy_version="cli", feature_schema_version="1",
+        strategy_id=config.strategy_id, strategy_version="cli", feature_schema_version=FEATURE_SCHEMA_VERSION,
         fcf_mode=config.fcf_mode, train_years=config.ml_train_years, min_train_quarters=config.min_train_quarters,
         model_config_identity=config.identity(), universe_id="cli-universe",
         data_cutoff=max(p.quarter_end for p in periods) if periods else date.today(),
@@ -451,11 +451,11 @@ def cmd_build_features(args: argparse.Namespace, stdout, stderr) -> int:
             stderr.write(f"feature cache already exists for this identity under {cache_root} -- pass --overwrite to replace it\n")
             return 1
 
-    targets = [(instrument_id, p.quarter_end) for p in periods for instrument_id in bundle.universe]
+    targets = [(instrument_id, p.quarter_end, p.entry_timestamp) for p in periods for instrument_id in bundle.universe]
     result = build_production_features(
         config=config, calendar=calendar, sector_encoder=SectorEncoder(), targets=targets,
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
-        sector_by_instrument=bundle.sector_by_instrument, data_cutoff=max(p.evaluation_timestamp for p in periods),
+        sector_by_instrument=bundle.sector_by_instrument,
         cache_identity=cache_identity, cache_root=cache_root, mode="training",
     )
     if result.blocked:
@@ -488,11 +488,11 @@ def cmd_build_labels(args: argparse.Namespace, stdout, stderr) -> int:
         return 2
 
     config = FilingMomentumMLConfig()
-    targets = [(instrument_id, p.quarter_end) for p in periods for instrument_id in bundle.universe]
+    targets = [(instrument_id, p.quarter_end, p.entry_timestamp) for p in periods for instrument_id in bundle.universe]
     feature_result = build_production_features(
         config=config, calendar=calendar, sector_encoder=SectorEncoder(), targets=targets,
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
-        sector_by_instrument=bundle.sector_by_instrument, data_cutoff=max(p.evaluation_timestamp for p in periods),
+        sector_by_instrument=bundle.sector_by_instrument,
         cache_identity=_feature_cache_identity(config, periods), cache_root=None, mode="training",
     )
     if feature_result.blocked:
@@ -501,7 +501,9 @@ def cmd_build_labels(args: argparse.Namespace, stdout, stderr) -> int:
 
     observations_by_quarter: dict = {}
     for obs in feature_result.feature_pipeline_result.observations:
-        observations_by_quarter.setdefault(obs.quarter_end, []).append(obs)
+        # Grouped by the shared strategy cohort, never the issuer's own
+        # fiscal quarter_end -- these routinely differ.
+        observations_by_quarter.setdefault(obs.strategy_cohort_end, []).append(obs)
 
     label_result = build_production_labels(
         periods=periods, observations_by_quarter=observations_by_quarter,

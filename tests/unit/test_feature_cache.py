@@ -48,6 +48,8 @@ def _make_observation(instrument_id, revenue_qoq=0.1):
         provenance=(provenance,),
         config_identity="a" * 64,
         feature_cache_identity=None,
+        strategy_cohort_end=date(2025, 12, 31),
+        cohort_buy_timestamp=datetime(2026, 2, 10),
     )
 
 

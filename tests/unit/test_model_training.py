@@ -37,6 +37,8 @@ def _obs(symbol, quarter_end):
         feature_timestamp=quarter_end, data_cutoff=datetime(2030, 1, 1),
         sector="Tech & Media", features=features, missing_features=(), provenance=(provenance(datetime(2026, 1, 1)),),
         config_identity="a" * 64, feature_cache_identity=None,
+        strategy_cohort_end=quarter_end,
+        cohort_buy_timestamp=datetime(quarter_end.year, quarter_end.month, quarter_end.day),
     )
 
 

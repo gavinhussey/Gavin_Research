@@ -438,8 +438,15 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
     )
 
     config = inputs.backtest_config
+    # Each shared cohort carries its own cohort_buy_timestamp (== that
+    # period's own entry_timestamp/evaluation_timestamp -- all the same
+    # instant per BacktestPeriod's own design) as its point-in-time
+    # cutoff -- never one batch-wide cutoff shared across every cohort
+    # (that would leak later cohorts' knowledge into earlier ones).
     targets = [
-        (instrument_id, period.quarter_end) for period in inputs.periods for instrument_id in inputs.universe
+        (instrument_id, period.quarter_end, period.entry_timestamp)
+        for period in inputs.periods
+        for instrument_id in inputs.universe
     ]
     feature_build = build_production_features(
         config=config.strategy_config,
@@ -449,7 +456,6 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         filings_by_instrument=inputs.filings_by_instrument,
         prices_by_instrument=inputs.prices_by_instrument,
         sector_by_instrument=inputs.sector_by_instrument,
-        data_cutoff=max(p.evaluation_timestamp for p in inputs.periods),
         cache_identity=_build_feature_cache_identity(config, inputs),
         cache_root=None,
         mode="training",
@@ -477,7 +483,10 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
 
     observations_by_quarter: dict[date, list] = {}
     for observation in feature_build.feature_pipeline_result.observations:
-        observations_by_quarter.setdefault(observation.quarter_end, []).append(observation)
+        # Grouped by the shared strategy cohort, never the issuer's own
+        # fiscal quarter_end -- these routinely differ (see feature_domain
+        # .FeatureObservation's own docstring).
+        observations_by_quarter.setdefault(observation.strategy_cohort_end, []).append(observation)
 
     def _feature_observation_source(quarter_end: date):
         return tuple(observations_by_quarter.get(quarter_end, ()))
@@ -641,12 +650,12 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
 def _build_feature_cache_identity(config: FilingMomentumBacktestConfig, inputs: ProductionRunInputs):
     from datetime import datetime as _datetime
 
-    from atlas_quant.strategies.filing_momentum_ml.config import FeatureCacheIdentity
+    from atlas_quant.strategies.filing_momentum_ml.config import FEATURE_SCHEMA_VERSION, FeatureCacheIdentity
 
     return FeatureCacheIdentity(
         strategy_id=config.strategy_config.strategy_id,
         strategy_version="production",
-        feature_schema_version="1",
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
         fcf_mode=config.strategy_config.fcf_mode,
         train_years=config.strategy_config.ml_train_years,
         min_train_quarters=config.strategy_config.min_train_quarters,
