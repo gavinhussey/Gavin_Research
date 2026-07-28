@@ -112,3 +112,34 @@ def test_normalize_sector_allows_missing_raw_sector():
     sectors, issues = normalize_sectors([_raw_sector(raw_sector=None)])
     assert issues == ()
     assert sectors[0].raw_sector is None
+
+
+def test_raw_filing_to_dict_has_iso_dates_and_all_fields():
+    raw = _raw_filing()
+    data = raw.to_dict()
+    assert data["quarter_end"] == "2024-03-31"
+    assert data["filed_at"] == "2024-05-02T00:00:00+00:00"
+    assert data["revenue"] == 100.0
+    assert data["accession_number"] == "acc-1"
+
+
+def test_raw_price_to_dict_has_iso_dates():
+    raw = _raw_price()
+    data = raw.to_dict()
+    assert data["trading_date"] == "2024-03-01"
+    assert data["close"] == 150.0
+    assert data["price_convention"] == "split_dividend_adjusted"
+
+
+def test_raw_universe_to_dict_has_iso_dates():
+    raw = _raw_universe()
+    data = raw.to_dict()
+    assert data["as_of"] == "2024-05-01T00:00:00+00:00"
+    assert data["survivorship_biased"] is True
+
+
+def test_raw_sector_to_dict_has_iso_dates():
+    raw = _raw_sector()
+    data = raw.to_dict()
+    assert data["raw_sector"] == "Technology"
+    assert data["as_of"] == "2024-05-01T00:00:00+00:00"

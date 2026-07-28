@@ -63,6 +63,18 @@ class RawFilingRecord:
     source: str
     retrieved_at: datetime
 
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol, "asset_class": self.asset_class, "fiscal_period": self.fiscal_period,
+            "fiscal_year": self.fiscal_year, "quarter_end": self.quarter_end.isoformat(),
+            "filed_at": self.filed_at.isoformat(), "revenue": self.revenue, "gross_profit": self.gross_profit,
+            "operating_income": self.operating_income, "net_income": self.net_income,
+            "diluted_eps": self.diluted_eps, "stockholders_equity": self.stockholders_equity,
+            "operating_cash_flow": self.operating_cash_flow, "capital_expenditure": self.capital_expenditure,
+            "accession_number": self.accession_number, "source": self.source,
+            "retrieved_at": self.retrieved_at.isoformat(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class RawPriceRecord:
@@ -76,6 +88,13 @@ class RawPriceRecord:
     source: str
     retrieved_at: datetime
 
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol, "asset_class": self.asset_class, "trading_date": self.trading_date.isoformat(),
+            "close": self.close, "price_convention": self.price_convention, "source": self.source,
+            "retrieved_at": self.retrieved_at.isoformat(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class RawUniverseRecord:
@@ -88,6 +107,13 @@ class RawUniverseRecord:
     survivorship_biased: bool
     retrieved_at: datetime
 
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol, "asset_class": self.asset_class, "as_of": self.as_of.isoformat(),
+            "source": self.source, "survivorship_biased": self.survivorship_biased,
+            "retrieved_at": self.retrieved_at.isoformat(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class RawSectorRecord:
@@ -99,6 +125,12 @@ class RawSectorRecord:
     as_of: datetime
     source: str
     retrieved_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol, "asset_class": self.asset_class, "raw_sector": self.raw_sector,
+            "as_of": self.as_of.isoformat(), "source": self.source, "retrieved_at": self.retrieved_at.isoformat(),
+        }
 
 
 def normalize_filing(raw: RawFilingRecord) -> FilingFundamentals:
