@@ -1,10 +1,10 @@
 """Unit tests for the production regime-evaluation boundary.
 
-In this repository's venv, hmmlearn is not installed -- the primary path
-under test is therefore the clean "blocked" report, never a crash. The
-"available" branch is exercised by monkeypatching the dependency check
-and the real HMM fitter class, so this test never requires hmmlearn to
-actually be installed to verify the wiring.
+Both the "blocked" (hmmlearn unavailable) and "available" paths are
+exercised by monkeypatching the dependency check -- this test suite
+never depends on whether hmmlearn actually happens to be installed in
+the environment it runs in, since that ambient state has changed across
+sessions of this project before.
 """
 
 from datetime import datetime
@@ -25,7 +25,19 @@ def _requests():
     return [RegimeEvaluationRequest(instrument_id=_AAA, prices=(), evaluation_timestamp=now, data_cutoff=now)]
 
 
-def test_blocked_when_hmmlearn_unavailable_in_this_environment():
+def test_blocked_when_hmmlearn_unavailable(monkeypatch):
+    from atlas_quant.dependency_status import DependencyAvailability, DependencyStatus
+
+    monkeypatch.setattr(
+        regime_boundary_module,
+        "check_dependency",
+        lambda spec: DependencyStatus(
+            name=spec.name, category=spec.category,
+            availability=DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST,
+            installed_version=None, min_version=spec.min_version, detail="module 'hmmlearn' not found",
+        ),
+    )
+
     evaluator = RegimeEvaluator(RegimeConfig())
     result = evaluate_production_regime(evaluator, _requests())
     assert result.blocked is True

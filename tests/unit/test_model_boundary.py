@@ -1,10 +1,10 @@
 """Unit tests for the production model-training boundary.
 
-In this repository's venv, scikit-learn is not installed -- the primary
-path under test is therefore the clean "blocked" report, never a crash.
-The "available" branch is exercised by monkeypatching the dependency
-check and the real estimator factory, so this test never requires
-scikit-learn to actually be installed to verify the wiring.
+Both the "blocked" (scikit-learn unavailable) and "available" paths are
+exercised by monkeypatching the dependency check -- this test suite
+never depends on whether scikit-learn actually happens to be installed
+in the environment it runs in, since that ambient state has changed
+across sessions of this project before.
 """
 
 from datetime import date, datetime
@@ -50,7 +50,19 @@ def _eligibility(*, eligible: bool) -> TrainingEligibilityResult:
     )
 
 
-def test_blocked_when_sklearn_unavailable_in_this_environment():
+def test_blocked_when_sklearn_unavailable(monkeypatch):
+    from atlas_quant.dependency_status import DependencyAvailability, DependencyStatus
+
+    monkeypatch.setattr(
+        model_boundary_module,
+        "check_dependency",
+        lambda spec: DependencyStatus(
+            name=spec.name, category=spec.category,
+            availability=DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST,
+            installed_version=None, min_version=spec.min_version, detail="module 'sklearn' not found",
+        ),
+    )
+
     result = train_production_model(
         _dataset(), _eligibility(eligible=True), FilingMomentumModelConfig(),
         strategy_id="filing_momentum_ml", strategy_version="test",
@@ -58,7 +70,7 @@ def test_blocked_when_sklearn_unavailable_in_this_environment():
     assert result.blocked is True
     assert result.training_result is None
     assert "scikit-learn" in result.blocked_reason
-    assert "not found" in result.dependency_detail or result.dependency_detail is not None
+    assert result.dependency_detail == "module 'sklearn' not found"
 
 
 def test_ineligible_dataset_reported_through_training_result_when_available(monkeypatch):

@@ -44,14 +44,22 @@ def test_below_minimum_version_is_incompatible():
 
 
 def test_missing_required_for_production_filters_correctly():
-    report = build_environment_report()
-    missing = missing_required_for_production(report)
+    # A synthetic report, not the real environment's -- which of
+    # scikit-learn/hmmlearn/requests/yfinance/lxml happen to be installed
+    # varies across sessions of this project (each requires a separate,
+    # deliberate optional-group install), so this test must not depend on
+    # that ambient state to verify the filter's own logic.
+    from atlas_quant.dependency_status import DependencyCategory, DependencyStatus
+
+    synthetic_report = (
+        DependencyStatus("pandas", DependencyCategory.CORE, DependencyAvailability.AVAILABLE, "2.0.0", "2.0.0"),
+        DependencyStatus("scikit-learn", DependencyCategory.PRODUCTION_DATA, DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST, None, "1.3.0"),
+        DependencyStatus("pyarrow", DependencyCategory.PRODUCTION_DATA, DependencyAvailability.MISSING_OPTIONAL, None, "14.0.0"),
+        DependencyStatus("jupyter", DependencyCategory.RESEARCH_ONLY, DependencyAvailability.MISSING_OPTIONAL, None, None),
+    )
+    missing = missing_required_for_production(synthetic_report)
+    assert {s.name for s in missing} == {"scikit-learn"}
     assert all(s.availability == DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST for s in missing)
-    # scikit-learn/hmmlearn require a separate, deliberate install (the
-    # `model`/`regime` optional groups) even when production-data
-    # dependencies (requests/yfinance/lxml/pyarrow) are already installed.
-    names = {s.name for s in missing}
-    assert {"scikit-learn", "hmmlearn"}.issubset(names)
 
 
 def test_python_version_is_well_formed():

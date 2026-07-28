@@ -169,7 +169,20 @@ def test_build_labels_writes_output_and_refuses_overwrite(tmp_path):
     assert code == 0
 
 
-def test_run_backtest_blocked_missing_dependency_in_this_environment(tmp_path):
+def test_run_backtest_blocked_missing_dependency(monkeypatch, tmp_path):
+    import atlas_quant.strategies.filing_momentum_ml.production.orchestration as orchestration_module
+    from atlas_quant.dependency_status import DependencyAvailability, DependencyCategory, DependencyStatus
+
+    monkeypatch.setattr(
+        orchestration_module, "missing_required_for_production",
+        lambda report: (
+            DependencyStatus(
+                "scikit-learn", DependencyCategory.PRODUCTION_DATA,
+                DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST, None, "1.3.0",
+                detail="module 'sklearn' not found",
+            ),
+        ),
+    )
     raw_root = tmp_path / "raw"
     _write_raw_data(raw_root)
     manifest_path = tmp_path / "manifest.json"
