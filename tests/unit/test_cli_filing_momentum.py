@@ -1,0 +1,255 @@
+"""Unit tests for the Filing Momentum ML production-research CLI.
+
+Every test calls ``main(argv, stdout=..., stderr=...)`` directly (never a
+subprocess) so the suite stays fast and fully offline. Raw-data JSON
+fixtures are written to ``tmp_path`` -- the CLI never touches a real
+production or legacy path in this suite.
+"""
+
+import io
+import json
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from atlas_quant.strategies.filing_momentum_ml.production import orchestration as orchestration_module
+from atlas_quant.cli.filing_momentum import main
+
+from tests.fixtures.filing_momentum_ml import FakeEstimator, FakeHMMFitter
+
+
+def _write_raw_data(root: Path, *, include_universe: bool = True) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    quarter_ends = ["2022-03-31", "2022-06-30", "2022-09-30", "2022-12-31", "2023-03-31"]
+    filings = []
+    revenue = 100.0
+    for i, q in enumerate(quarter_ends):
+        y, m, d = q.split("-")
+        filed = f"{y}-{int(m):02d}-{int(d):02d}"
+        filed_dt = date.fromisoformat(filed) + timedelta(days=30)
+        filings.append({
+            "symbol": "AAA", "asset_class": "equity", "fiscal_period": f"Q{(int(m)-1)//3+1}",
+            "fiscal_year": int(y), "quarter_end": q, "filed_at": filed_dt.isoformat() + "T00:00:00",
+            "revenue": revenue, "gross_profit": revenue * 0.4, "operating_income": revenue * 0.15,
+            "net_income": revenue * 0.1, "diluted_eps": 1.0 + i * 0.05, "stockholders_equity": 500.0 + i * 10,
+            "operating_cash_flow": 20.0, "capital_expenditure": 5.0, "accession_number": f"acc-{i}",
+            "source": "fixture", "retrieved_at": "2023-06-01T00:00:00",
+        })
+        revenue += 10.0
+    (root / "filings.json").write_text(json.dumps(filings))
+
+    prices = []
+    current = date(2019, 1, 1)
+    price = 100.0
+    symbols = ["AAA", "SPY", "VGT"]
+    while current <= date(2023, 6, 30):
+        if current.weekday() < 5:
+            for symbol in symbols:
+                prices.append({
+                    "symbol": symbol, "asset_class": "equity", "trading_date": current.isoformat(),
+                    "close": price, "price_convention": "split_dividend_adjusted",
+                    "source": "fixture", "retrieved_at": "2023-06-01T00:00:00",
+                })
+            price *= 1.0003
+        current += timedelta(days=1)
+    (root / "prices.json").write_text(json.dumps(prices))
+
+    universe = []
+    if include_universe:
+        universe = [{
+            "symbol": "AAA", "asset_class": "equity", "as_of": "2023-01-01T00:00:00",
+            "source": "fixture", "survivorship_biased": True, "retrieved_at": "2023-06-01T00:00:00",
+        }]
+    (root / "universe.json").write_text(json.dumps(universe))
+
+    sectors = [{
+        "symbol": "AAA", "asset_class": "equity", "raw_sector": "Technology",
+        "as_of": "2023-01-01T00:00:00", "source": "fixture", "retrieved_at": "2023-06-01T00:00:00",
+    }]
+    (root / "sectors.json").write_text(json.dumps(sectors))
+
+
+def _write_manifest(path: Path) -> None:
+    from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
+
+    manifest = DataProvenanceManifest(
+        dataset_identity_label="cli-test", provider_name="fixture", provider_version=None,
+        retrieval_date=date(2023, 6, 1), data_cutoff=datetime(2023, 6, 1),
+        universe_identity="cli-test-universe", universe_construction_method="fixture",
+        survivorship_biased=True, filing_source="fixture", filing_point_in_time_status="fixture",
+        price_source="fixture", price_convention="split_dividend_adjusted", sector_source="fixture",
+        sector_override_identity="none", trading_calendar_source="fixture",
+        coverage_start=date(2019, 1, 1), coverage_end=date(2023, 6, 30),
+        row_counts={}, missing_data_summary={}, duplicate_summary={},
+        corporate_action_treatment="none", delisting_treatment="none", data_corrections=(),
+        source_file_hashes={}, strategy_config_identity="x", regime_config_identity="y", git_commit=None,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest.to_dict()))
+
+
+def _run(argv, **kwargs):
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(argv, stdout=stdout, stderr=stderr)
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+def test_validate_data_reports_info_only_and_exits_zero(tmp_path):
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    code, out, err = _run([
+        "filing-momentum", "validate-data", "--raw-root", str(raw_root),
+        "--start-quarter", "2023-03-31", "--end-quarter", "2023-03-31",
+    ])
+    assert code == 0
+    assert "fatal=0" in out
+
+
+def test_validate_data_empty_universe_is_fatal(tmp_path):
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root, include_universe=False)
+    code, out, err = _run(["filing-momentum", "validate-data", "--raw-root", str(raw_root)])
+    assert code == 2
+    assert "fatal=1" in out
+
+
+def test_build_features_dry_run_writes_nothing(tmp_path):
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    code, out, err = _run([
+        "filing-momentum", "build-features", "--raw-root", str(raw_root),
+        "--start-quarter", "2023-03-31", "--end-quarter", "2023-03-31", "--dry-run",
+    ])
+    assert code == 0
+    assert "built 1 feature observation(s)" in out
+    assert not (tmp_path / "cache").exists()
+
+
+def test_build_features_writes_cache_and_refuses_overwrite(tmp_path):
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    cache_root = tmp_path / "cache"
+    argv = [
+        "filing-momentum", "build-features", "--raw-root", str(raw_root),
+        "--start-quarter", "2023-03-31", "--end-quarter", "2023-03-31", "--cache-root", str(cache_root),
+    ]
+    code, out, err = _run(argv)
+    assert code == 0
+    assert cache_root.exists()
+
+    code, out, err = _run(argv)
+    assert code == 1
+    assert "already exists" in err
+
+    code, out, err = _run(argv + ["--overwrite"])
+    assert code == 0
+
+
+def test_build_labels_writes_output_and_refuses_overwrite(tmp_path):
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    output_root = tmp_path / "outputs"
+    argv = [
+        "filing-momentum", "build-labels", "--raw-root", str(raw_root),
+        "--start-quarter", "2023-03-31", "--end-quarter", "2023-03-31", "--output-root", str(output_root),
+    ]
+    code, out, err = _run(argv)
+    assert code == 0
+    labels_path = output_root / "labels.json"
+    assert labels_path.exists()
+    data = json.loads(labels_path.read_text())
+    assert "2023-03-31" in data
+
+    code, out, err = _run(argv)
+    assert code == 1
+    assert "already exists" in err
+
+    code, out, err = _run(argv + ["--overwrite"])
+    assert code == 0
+
+
+def test_run_backtest_blocked_missing_dependency_in_this_environment(tmp_path):
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    code, out, err = _run([
+        "filing-momentum", "run-backtest", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
+        "--start-quarter", "2023-03-31", "--end-quarter", "2023-03-31", "--dry-run",
+    ])
+    assert code == 3
+    assert "blocked_missing_dependency" in out
+    assert "scikit-learn" in out
+
+
+def _fake_estimator_factory(model_config):
+    from atlas_quant.strategies.filing_momentum_ml.estimator import EstimatorBuildInfo
+
+    return FakeEstimator(), EstimatorBuildInfo(estimator_type="FakeEstimator", parameters={}, library="test", library_version=None)
+
+
+def test_build_report_and_compare_report_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
+    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", _fake_estimator_factory)
+    monkeypatch.setattr(orchestration_module, "HmmlearnFitter", lambda: FakeHMMFitter())
+
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    output_root = tmp_path / "outputs"
+
+    code, out, err = _run([
+        "filing-momentum", "build-report", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
+        "--start-quarter", "2023-03-31", "--end-quarter", "2023-03-31", "--output-root", str(output_root),
+        "--checkpoint-root", str(tmp_path / "checkpoints"),
+    ])
+    assert code == 0
+    written = list(output_root.glob("*.json"))
+    assert written
+    report_path = written[0]
+
+    code, out, err = _run(["filing-momentum", "compare-report", "--report-json", str(report_path)])
+    assert code == 0
+    assert "no comparison records" in out
+
+
+def test_run_all_stops_at_first_blocked_step(tmp_path):
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root, include_universe=False)
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    output_root = tmp_path / "outputs"
+    code, out, err = _run([
+        "filing-momentum", "run-all", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
+        "--start-quarter", "2023-03-31", "--end-quarter", "2023-03-31", "--output-root", str(output_root),
+        "--dry-run",
+    ])
+    assert code == 2
+    assert not output_root.exists()
+
+
+def test_cli_never_imports_network_or_legacy_access():
+    """The docstring documents (in prose) that this CLI never reaches into
+    Arnold_Quant -- this test verifies that structurally: no import of
+    subprocess/urllib/requests (this CLI's only I/O is the paths the
+    caller passes on the command line), and no hardcoded reference to the
+    legacy repository's path anywhere outside that one docstring mention."""
+    import atlas_quant.cli.filing_momentum as cli_module
+
+    source = Path(cli_module.__file__).read_text()
+    for forbidden_import in ("import subprocess", "import requests", "import urllib"):
+        assert forbidden_import not in source
+    # The one mention is the module docstring's own disclosure sentence --
+    # never a path this module actually opens or constructs.
+    assert source.count("Arnold_Quant") == 1
+
+
+def test_validate_data_json_output_is_well_formed(tmp_path):
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    code, out, err = _run(["filing-momentum", "validate-data", "--raw-root", str(raw_root), "--json"])
+    assert code == 0
+    payload = json.loads(out)
+    assert "counts" in payload and "issues" in payload

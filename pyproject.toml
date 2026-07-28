@@ -23,6 +23,9 @@ production-data = ["requests>=2.31.0", "pyarrow>=14.0.0"]
 notebooks = ["jupyter>=1.0.0", "nbformat>=5.9.0"]
 research = ["atlas-quant[model,regime,production-data,notebooks]"]
 
+[project.scripts]
+atlas-quant = "atlas_quant.cli.main:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

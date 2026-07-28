@@ -69,6 +69,13 @@ def test_identity_changes_with_row_counts():
     assert base != changed
 
 
+def test_to_dict_from_dict_round_trips():
+    manifest = _manifest()
+    round_tripped = DataProvenanceManifest.from_dict(manifest.to_dict())
+    assert round_tripped == manifest
+    assert round_tripped.identity() == manifest.identity()
+
+
 def test_identity_insensitive_to_row_counts_dict_ordering():
     a = _manifest(row_counts={"filings": 400, "prices": 100_000}).identity()
     b = _manifest(row_counts={"prices": 100_000, "filings": 400}).identity()
