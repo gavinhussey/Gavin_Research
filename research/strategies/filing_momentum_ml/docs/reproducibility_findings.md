@@ -2,23 +2,49 @@
 
 ## Classification
 
-**`NOT_RUN`** (`atlas_quant.reporting.domain.ReproducibilityStatus`).
+**`NOT_REPRODUCIBLE_CONFIGURATION_MISMATCH`**
+(`atlas_quant.reporting.domain.ReproducibilityStatus`).
 
-As of Stage 11, real universe, sector, filing, and price data has been
-acquired and validated end-to-end (see below) — the classification is no
-longer `NOT_REPRODUCIBLE_MISSING_DATA`. A genuine historical backtest
-still has not executed, because exactly one dependency (`hmmlearn`) is
-unavailable in this specific development environment, for reasons
-unrelated to this project's own scope (see below). This document states
-that plainly, once, as the single source of truth for this project's
-reproducibility claim — every other document and notebook points back
-here rather than restating or overstating it.
+A genuine historical backtest **has now actually run to completion**
+against real, acquired data (518 symbols, 2015-03-31..2024-12-31, 32 of
+40 quarters trained and scored with a real `HistGradientBoostingClassifier`
+fit per quarter) — this is a substantial, real milestone, and this
+document states plainly what it does and does not mean.
+
+**It is not a reproduction of `report_current.html`, for two independent,
+disclosed reasons:**
+
+1. **Regime gate configuration deviation.** This run used
+   `--regime-gate-mode none` because `hmmlearn` cannot be installed on
+   this machine (see below) — a genuine, disclosed departure from the
+   report's own documented production default (§5.1, `gate_mode="both"`).
+   The regime gate never triggered cash in this run (`cash_quarter_count
+   == 0`), which is a mechanical consequence of disabling the gate, not a
+   finding about market regimes.
+2. **Benchmark/fallback price data gap (newly discovered).** SPY and VGT
+   (the report's benchmark and fallback tickers) are **not present** in
+   the acquired price data at all — Stage 11's acquisition pipeline only
+   fetches price history for actual S&P 500 + Nasdaq 100 constituents
+   scraped from Wikipedia, and SPY/VGT are index/sector ETFs, never
+   constituents of their own index. Every quarter's benchmark return
+   resolved to `None` as a direct result (confirmed:
+   `"SPY" not in {acquired price symbols}`). This did not affect this
+   particular run's own portfolio returns (every quarter qualified enough
+   candidates to stay in primary stock-picking mode — `fallback_quarter_count
+   == 0` — so the missing fallback-ticker prices were never actually
+   needed this time), but it means **no alpha-vs-SPY comparison is
+   possible from this run**, and a future run that *does* fall back would
+   be unable to price that fallback. Classified `data_provenance_required`
+   -- the acquisition step must be extended to also fetch the benchmark
+   and fallback tickers explicitly, not just universe constituents. Not
+   fixed here — out of scope for the cohort-snapshot correction this
+   document primarily reports on.
 
 **Do not use any synthetic output in this repository (notebooks 02-09,
-CLI dry-runs against fixture JSON) as a substitute for a genuine result,
-and do not cite any number they produce as evidence of reproducing
-`report_current.html`, until a real backtest has actually completed and
-been compared per the process below.**
+CLI dry-runs against fixture JSON) as a substitute for a genuine result.
+Do not cite this run's own return/Sharpe numbers as evidence of
+reproducing `report_current.html` — they are real, but computed under a
+disabled regime gate and with no benchmark comparison available.**
 
 ## What has actually been acquired and validated (Stage 11)
 
@@ -187,6 +213,32 @@ so the leakage was never observed in practice). Each target now carries
 its own `cohort_buy_timestamp` as its own cutoff; the real-data run above
 confirms zero future-filing-leakage violations.
 
+## The genuine backtest result (real data, `gate_mode="none"`)
+
+`run_filing_momentum_production_backtest` completed with `state ==
+completed` over 518 real symbols, 2015-03-31 through 2024-12-31 (40
+shared cohorts, real SEC EDGAR/yfinance/Wikipedia data throughout, real
+`HistGradientBoostingClassifier` fit per quarter):
+
+| Metric | Value |
+|---|---|
+| Completed quarters | 32 / 40 (8 skipped — insufficient trailing training quarters, the earliest ones) |
+| Outcome mix | 32 primary (stock-picking), 0 fallback, 0 cash |
+| Cumulative return | +778.8% |
+| Sharpe (overall scope) | 1.22 |
+| Sortino (overall scope) | 4.39 |
+| Win rate | 71.9% (23/32 positive quarters) |
+| Benchmark (SPY) return | **unavailable** — see the data-provenance gap above |
+
+**This is a real, substantial result** — a full, genuine walk-forward
+backtest with real point-in-time features, real labels, real per-quarter
+model training, and real position accounting. It is reported here
+transparently, with its actual limitations, rather than either
+suppressed or oversold: it does not use the report's own regime gate,
+and it cannot be compared to SPY. Neither of those is a reason to hide
+the result; both are reasons it is not a `report_current.html`
+reproduction.
+
 ## Remaining checklist for a genuine production backtest
 
 | # | Requirement | Status |
@@ -200,7 +252,10 @@ confirms zero future-filing-leakage violations.
 | 7 | A real `DataProvenanceManifest` | **Done** -- `data/manifests/filing_momentum_ml/data_manifest.json` |
 | 8 | Raw-data validation passing (no `FATAL`) | **Done** -- 0 fatal |
 | 9 | Feature build produces trainable rows for non-calendar-aligned issuers | **Done** (cohort-snapshot correction, above) |
-| 10 | Legacy `Arnold_Quant` caches independently verified, if reused | **Not attempted** -- only the diagnostic, read-only audit (notebook 01) has run; not a blocker for a fresh acquisition-based run, only relevant if legacy caches are ever reused |
+| 10 | A genuine backtest actually executes end-to-end on real data | **Done** -- 32/40 quarters completed, real model training throughout |
+| 11 | Regime gate matches report_current.html's own default (`gate_mode="both"`) | **Blocked** -- ran with `gate_mode="none"` instead, since hmmlearn is unavailable; a disclosed deviation, not a reproduction |
+| 12 | Benchmark (SPY) and fallback (VGT) price data acquired | **Not done** -- newly discovered gap; the acquisition pipeline only fetches universe constituents, and SPY/VGT are not constituents of their own index (`data_provenance_required`) |
+| 13 | Legacy `Arnold_Quant` caches independently verified, if reused | **Not attempted** -- only the diagnostic, read-only audit (notebook 01) has run; not a blocker for a fresh acquisition-based run, only relevant if legacy caches are ever reused |
 
 ## Resume commands
 
