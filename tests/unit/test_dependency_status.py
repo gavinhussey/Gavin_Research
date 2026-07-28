@@ -47,9 +47,11 @@ def test_missing_required_for_production_filters_correctly():
     report = build_environment_report()
     missing = missing_required_for_production(report)
     assert all(s.availability == DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST for s in missing)
+    # scikit-learn/hmmlearn require a separate, deliberate install (the
+    # `model`/`regime` optional groups) even when production-data
+    # dependencies (requests/yfinance/lxml/pyarrow) are already installed.
     names = {s.name for s in missing}
-    # In this environment sklearn/hmmlearn/requests are not installed.
-    assert {"scikit-learn", "hmmlearn", "requests"}.issubset(names)
+    assert {"scikit-learn", "hmmlearn"}.issubset(names)
 
 
 def test_python_version_is_well_formed():
