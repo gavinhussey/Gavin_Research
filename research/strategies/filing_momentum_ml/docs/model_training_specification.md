@@ -98,7 +98,7 @@ hyperparameter explicitly: `max_iter=300, max_depth=5, learning_rate=0.05,
 max_leaf_nodes=31, min_samples_leaf=20, l2_regularization=0.1,
 class_weight="balanced", random_state=42`. **`scikit-learn` is confirmed
 absent** from this repository's venv (`pyproject.toml` declares only
-`numpy`/`pandas`) — the same situation as `hmmlearn` in Stage 4. It was
+`numpy`/`pandas`) — an optional, explicitly gated dependency. It was
 not installed to make this stage "work." `estimator.build_hgbc_estimator`
 imports `sklearn` lazily (only inside its own body, never at module load
 time) and raises `ImportError` if absent; every unit test in this

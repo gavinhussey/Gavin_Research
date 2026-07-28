@@ -31,7 +31,7 @@ and implementation provenance (this repo's Git history) — see
 | `corporate_action_treatment` / `delisting_treatment` | `str` | How splits/dividends/delistings were handled. |
 | `data_corrections` | `tuple[str, ...]` | Any manual corrections applied, disclosed. |
 | `source_file_hashes` | `Mapping[str, str]` | Hash per raw source file, for audit. |
-| `strategy_config_identity` / `regime_config_identity` | `str` | The exact config identities this dataset was validated/built against. |
+| `strategy_config_identity` | `str` | The exact strategy-config identity this dataset was validated/built against. (A `regime_config_identity` field existed until the regime gate was removed; it is gone.) |
 | `git_commit` | `str \| None` | Implementation provenance pointer. |
 | `notes` | `tuple[str, ...]` | Free-text disclosures (e.g. `"SYNTHETIC FIXTURE DATA"` for a notebook manifest). |
 

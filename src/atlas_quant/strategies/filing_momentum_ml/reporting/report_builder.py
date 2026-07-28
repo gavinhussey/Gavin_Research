@@ -1,6 +1,6 @@
 """Builds one FilingMomentumReport from already-computed, typed Stage 3-8 results.
 
-Never recalculates feature values, labels, scores, qualification, regime
+Never recalculates feature values, labels, scores, qualification,
 classifications, position weights/returns, benchmark returns, or
 performance metrics — every field here is read directly from a supplied
 ``BacktestResult``/``PerformanceAnalysisResult``/config.
@@ -29,7 +29,6 @@ from atlas_quant.strategies.filing_momentum_ml.performance_domain import (
     QuarterClassification,
     ScopeAnalysis,
 )
-from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
 from atlas_quant.strategies.filing_momentum_ml.reporting import charts as chart_builders
 from atlas_quant.strategies.filing_momentum_ml.reporting.comparison import (
     KNOWN_INTENTIONAL_DIFFERENCES,
@@ -195,7 +194,6 @@ def build_filing_momentum_report(
     backtest_result: BacktestResult,
     performance_analysis: PerformanceAnalysisResult,
     strategy_config,
-    regime_config: RegimeConfig,
     report_options: ReportOptions | None = None,
     model_identity=None,
     source_report_html: str | None = None,
@@ -221,14 +219,14 @@ def build_filing_momentum_report(
 
     executive_summary = ExecutiveSummary(
         description="A quarterly, point-in-time equity-selection strategy driven by SEC filing "
-                    "timing, fundamental momentum, price momentum, and a two-layer regime gate.",
+                    "timing, fundamental momentum, and price momentum.",
         evaluation_frequency="quarterly", universe_assumption="present-day S&P 500 + Nasdaq 100 (survivorship-biased)",
         model_type="HistGradientBoostingClassifier", ml_threshold=strategy_config.ml_threshold,
         min_positions=strategy_config.min_positions, max_positions=strategy_config.max_positions,
         deployable_pct=strategy_config.deployable_pct,
-        fallback_description=f"{'/'.join(strategy_config.fallback_tickers)}, "
+        fallback_description=f"{'/'.join(strategy_config.fallback_tickers)} ETF sleeve over deployable "
+                              f"capital unused by a partial stock fill, "
                               f"{'dynamic' if strategy_config.fallback_dynamic_weight else 'equal'}-weighted",
-        regime_description=f"gate_mode={regime_config.gate_mode}",
         backtest_start=backtest_result.backtest_start, backtest_end=backtest_result.backtest_end,
         warnings=tuple(warnings),
     )
@@ -248,9 +246,16 @@ def build_filing_momentum_report(
             "learning_rate": strategy_config.model.learning_rate, "random_state": strategy_config.model.random_state,
         },
         ml_threshold=strategy_config.ml_threshold, excluded_sectors=strategy_config.exclude_sectors,
-        regime_gate_mode=strategy_config.regime_gate_mode,
-        weighting_summary="score-proportional over qualified candidates, deployable_pct of strategy budget",
-        fallback_weighting_summary="trailing 12-quarter average return proportional (dynamic) or equal (static)",
+        weighting_summary=(
+            "full quota (>= min_positions): score-proportional over qualified candidates, "
+            "deployable_pct of strategy budget; partial fill (< min_positions): each pick "
+            "sized at score * the most recent full-quota quarter's deployable_pct/sum(scores) "
+            "ratio, never renormalized across the small peer set"
+        ),
+        fallback_weighting_summary=(
+            "ETF sleeve over the deployable capital a partial stock fill left unused, split by "
+            "trailing 12-quarter average return (dynamic) or equally (static)"
+        ),
         entry_exit_summary="entry at quarter buy_dt, exit at next quarter's buy_dt (cohort exit)",
         instrument_return_cap=INSTRUMENT_RETURN_CAP, label_return_clip=LABEL_RETURN_CLIP,
         transaction_cost_bps=0.0,
@@ -263,7 +268,6 @@ def build_filing_momentum_report(
         primary_count=composition.get(QuarterClassification.PRIMARY, 0),
         fallback_count=composition.get(QuarterClassification.FALLBACK, 0),
         cash_count=composition.get(QuarterClassification.CASH, 0),
-        regime_blocked_count=composition.get(QuarterClassification.REGIME_BLOCKED, 0),
         skipped_count=composition.get(QuarterClassification.SKIPPED, 0),
         invalid_count=composition.get(QuarterClassification.INVALID, 0),
         missing_benchmark_count=sum(1 for q in backtest_result.quarter_results if q.benchmark_return is None and q.outcome_type.value != "skipped"),
@@ -316,7 +320,7 @@ def build_filing_momentum_report(
         model_library_status="scikit-learn not installed in this venv; scoring uses an injected Estimator",
         transaction_cost_assumption="0 bps (commission/slippage/other) per report §9",
         stale_price_policy="bounded (default max 5 calendar days / 3 trading sessions); legacy_unbounded() available for comparison",
-        missing_data_policy="missing prices/regime results reject the candidate/position rather than substituting a default",
+        missing_data_policy="missing prices reject the candidate/position rather than substituting a default",
         known_differences_from_legacy=KNOWN_INTENTIONAL_DIFFERENCES,
     )
 
@@ -348,7 +352,7 @@ def build_filing_momentum_report(
     model_config_identity = model_identity.identity() if model_identity else None
     report_identity = compute_config_identity(
         {
-            "config_identity": strategy_config.identity(), "regime_config_identity": regime_config.identity(),
+            "config_identity": strategy_config.identity(),
             "backtest_run_identity": backtest_result.run_identity,
             "performance_analysis_identity": performance_analysis.analysis_identity,
             "options_identity": options.identity(), "report_schema_version": FILING_MOMENTUM_REPORT_SCHEMA_VERSION,
@@ -368,7 +372,7 @@ def build_filing_momentum_report(
     validation = _run_validation(backtest_result, performance_analysis, {})
     audit = AuditSection(
         config_identity=strategy_config.identity(), model_config_identity=model_config_identity,
-        regime_config_identity=regime_config.identity(), backtest_run_identity=backtest_result.run_identity,
+        backtest_run_identity=backtest_result.run_identity,
         performance_analysis_identity=performance_analysis.analysis_identity,
         report_identity=report_identity, validation=validation,
     )

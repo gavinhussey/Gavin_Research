@@ -26,9 +26,9 @@ For each historical quarter, in this exact order:
    `TrainingState` reason, no further steps run.
 5. If eligible: fit the model (Stage 6 `train_model`).
 6. Score the target quarter's observations (Stage 6 `score_observations`).
-7. Evaluate the market regime (Stage 4 `RegimeEvaluator.evaluate_one` on
-   SPY, prices bounded by `evaluation_timestamp`).
-8. Evaluate every scored candidate's per-instrument regime (same Stage 4
+7. (Removed — this strategy has no regime gate; see
+   `strategy_decision_specification.md`.)
+8. (Removed — no per-instrument regime check either. Same Stage 4
    evaluator; Stage 5's own decision pipeline is what restricts this to
    the Markov component — the runner does not special-case that here).
 9. Call `FilingMomentumMLStrategy.evaluate()` (Stage 5) — never
@@ -39,7 +39,7 @@ For each historical quarter, in this exact order:
 13. Compute the SPY benchmark return over the identical interval.
 14. Record the complete `BacktestQuarterResult`.
 
-Training/scoring/regime/strategy chronology: a fresh model is trained
+Training/scoring/strategy chronology: a fresh model is trained
 every quarter from that quarter's own trailing window — nothing is ever
 carried over or reused across quarters (verified by test: fit-call count
 equals completed-quarter count in a multi-quarter run).
@@ -108,22 +108,23 @@ return accordingly (verified by test).
   positive labels, single-class labels, invalid features, or a model fit
   failure. `strategy_result` is `None`.
 - **Cash** (`QuarterOutcomeType.CASH`): the strategy evaluated
-  successfully and produced no exposure — a confirmed market Bear
-  (`StrategyStatus.REGIME_BLOCKED`), an explicit cash directive, no
-  fallback tickers configured (`NO_SIGNAL`), missing fallback data
-  (`MISSING_DATA`), or a disabled strategy. `strategy_result` is present.
+  successfully but produced no exposure at all. With the regime gate
+  removed, this is an edge case only — missing ETF-sleeve statistics
+  (`MISSING_DATA`) or a disabled strategy (`DISABLED`). It is never a
+  routine outcome: a quarter that qualifies too few stocks becomes a
+  **blended** partial fill, not a cash quarter.
 
-A market-Bear cash quarter is never confused with or substituted by the
-ordinary SPY/VGT fallback — that distinction is enforced upstream by
+A cash quarter is never confused with or substituted by the ordinary
+partial-fill ETF sleeve — that distinction is enforced upstream by
 Stage 5 itself (see `strategy_decision_specification.md`); the runner
 only reads the resulting `StrategyStatus`.
 
-## Fallback accounting
+## ETF-sleeve accounting
 
-Stage 5's SPY/VGT fallback recommendations go through the exact same
+Stage 5's VOO/VTI sleeve recommendations go through the exact same
 `resolve_position`/`compute_period_return` pipeline as primary
-recommendations — no separate fallback-specific accounting path exists. A
-fallback SPY holding (`QuarterOutcomeType.FALLBACK`, an
+recommendations — no separate sleeve-specific accounting path exists. A
+sleeve holding (`QuarterOutcomeType.FALLBACK`, an
 `InstrumentRecommendation` with `kind=FALLBACK`) is structurally distinct
 from the benchmark SPY record (`BenchmarkResult`, a different type
 entirely) and from a market-Bear cash quarter.

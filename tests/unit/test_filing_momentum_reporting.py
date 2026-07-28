@@ -9,9 +9,8 @@ from atlas_quant.backtest.clock import build_period
 from atlas_quant.backtest.filing_momentum_runner import BacktestQuarterResult, BacktestResult, QuarterOutcomeType
 from atlas_quant.domain.status import StrategyStatus
 from atlas_quant.reporting.domain import ReproducibilityStatus
-from atlas_quant.strategies.filing_momentum_ml.config import FilingMomentumMLConfig
+from atlas_quant.strategies.filing_momentum_ml.config import STRATEGY_VERSION, FilingMomentumMLConfig
 from atlas_quant.strategies.filing_momentum_ml.performance_analysis import analyze_backtest_result
-from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
 from atlas_quant.strategies.filing_momentum_ml.reporting.charts import (
     alpha_distribution_chart,
     equity_growth_chart,
@@ -41,7 +40,7 @@ def _minimal_strategy_result(status: StrategyStatus):
     from atlas_quant.strategies.base import StrategyResult
 
     return StrategyResult(
-        strategy_id="filing_momentum_ml", display_name="Filing Momentum ML", strategy_version="0.1.0",
+        strategy_id="filing_momentum_ml", display_name="Filing Momentum ML", strategy_version=STRATEGY_VERSION,
         config_identity="a" * 64, model_identity=None, evaluation_timestamp=datetime(2020, 1, 1),
         data_cutoff=datetime(2020, 1, 1), status=status,
     )
@@ -53,7 +52,7 @@ def _quarter(quarter_end, outcome_type, period_return=None, benchmark_return=Non
     strategy_result = _minimal_strategy_result(status) if status is not None else None
     return BacktestQuarterResult(
         period=period, outcome_type=outcome_type, training_state=None, model_identity=None,
-        scoring_result=None, market_regime=None, per_instrument_regime_count=0,
+        scoring_result=None,
         strategy_result=strategy_result, positions=(), period_return=period_return,
         benchmark=None, benchmark_return=benchmark_return, alpha=alpha, cash_weight=0.0,
     )
@@ -70,7 +69,7 @@ def _quarter_end(index: int, start_year: int = 2018) -> date:
 
 def _backtest_result(quarters, run_identity="run" * 16) -> BacktestResult:
     return BacktestResult(
-        strategy_id="filing_momentum_ml", strategy_version="0.1.0", config_identity="a" * 64,
+        strategy_id="filing_momentum_ml", strategy_version=STRATEGY_VERSION, config_identity="a" * 64,
         backtest_start=quarters[0].period.quarter_end if quarters else date.min,
         backtest_end=quarters[-1].period.quarter_end if quarters else date.min,
         quarter_results=tuple(quarters), run_identity=run_identity,
@@ -93,7 +92,7 @@ def _report():
     backtest_result = _mixed_result()
     analysis = analyze_backtest_result(backtest_result)
     return build_filing_momentum_report(
-        backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig(), ReportOptions(),
+        backtest_result, analysis, FilingMomentumMLConfig(), ReportOptions(),
     )
 
 
@@ -131,7 +130,7 @@ class TestReportBuilderCompatibility:
         backtest_result = _mixed_result(run_identity="A" * 64)
         analysis = analyze_backtest_result(_mixed_result(run_identity="B" * 64))
         with pytest.raises(ReportBuildError):
-            build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+            build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
 
     def test_mismatched_strategy_id_rejected(self):
         backtest_result = _mixed_result()
@@ -140,7 +139,7 @@ class TestReportBuilderCompatibility:
 
         bad_result = dataclasses.replace(backtest_result, strategy_id="other_strategy")
         with pytest.raises(ReportBuildError):
-            build_filing_momentum_report(bad_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+            build_filing_momentum_report(bad_result, analysis, FilingMomentumMLConfig())
 
     def test_mismatched_version_rejected(self):
         backtest_result = _mixed_result()
@@ -149,13 +148,13 @@ class TestReportBuilderCompatibility:
 
         bad_result = dataclasses.replace(backtest_result, strategy_version="9.9.9")
         with pytest.raises(ReportBuildError):
-            build_filing_momentum_report(bad_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+            build_filing_momentum_report(bad_result, analysis, FilingMomentumMLConfig())
 
     def test_deterministic_output(self):
         backtest_result = _mixed_result()
         analysis = analyze_backtest_result(backtest_result)
-        r1 = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
-        r2 = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+        r1 = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
+        r2 = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
         assert r1.metadata.report_identity == r2.metadata.report_identity
 
 
@@ -198,7 +197,7 @@ class TestPerformanceSections:
         # A single-quarter backtest makes Sharpe unavailable (n < 2).
         backtest_result = _backtest_result([_quarter(_quarter_end(0), QuarterOutcomeType.PRIMARY, 0.02, 0.01)])
         analysis = analyze_backtest_result(backtest_result)
-        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
         assert report.performance_scopes["primary_only"].sharpe.availability.value == "insufficient_history"
 
 
@@ -214,14 +213,14 @@ class TestAnnualAndQuarterlyTables:
         ]
         backtest_result = _backtest_result(quarters)
         analysis = analyze_backtest_result(backtest_result)
-        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
         assert any(row["outcome_type"] == "skipped" for row in report.quarterly_table.rows)
 
     def test_missing_benchmark_shown_as_none(self):
         quarters = [_quarter(_quarter_end(i), QuarterOutcomeType.PRIMARY, 0.01, None) for i in range(3)]
         backtest_result = _backtest_result(quarters)
         analysis = analyze_backtest_result(backtest_result)
-        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
         assert all(row["benchmark_return"] is None for row in report.quarterly_table.rows)
 
 
@@ -375,7 +374,7 @@ class TestReportSerialization:
     def test_availability_state_preserved(self):
         backtest_result = _backtest_result([_quarter(_quarter_end(0), QuarterOutcomeType.PRIMARY, 0.02, 0.01)])
         analysis = analyze_backtest_result(backtest_result)
-        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
         data = report_to_dict(report)
         assert data["performance_scopes"]["primary_only"]["sharpe"]["availability"] == "insufficient_history"
 
@@ -421,7 +420,7 @@ class TestReportHtml:
         quarter = dataclasses.replace(quarter, positions=(position,))
         backtest_result = _backtest_result([quarter])
         analysis = analyze_backtest_result(backtest_result)
-        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
         html = render_report_html(report)
         assert "<script>" not in html
 
@@ -432,7 +431,7 @@ class TestReportHtml:
         # report built from a minimal, mostly-empty (but valid) result.
         backtest_result = _mixed_result(n_primary=0, n_fallback=0)
         analysis = analyze_backtest_result(backtest_result)
-        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig(), RegimeConfig())
+        report = build_filing_momentum_report(backtest_result, analysis, FilingMomentumMLConfig())
         html = render_report_html(report)
         assert "<html" in html
 

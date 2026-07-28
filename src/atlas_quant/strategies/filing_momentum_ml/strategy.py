@@ -6,27 +6,46 @@ scoring — scores arrive as injected :class:`ScoredCandidate` inputs; this
 module never trains a model, derives a score from raw features, reads a
 feature cache, or reaches into the legacy repository.
 
-Decision sequence (report §5, this stage's own explicit ordering):
+Decision sequence (this stage's own explicit ordering):
 
 1. Validate the evaluation context / data cutoff (``StrategyEvaluationContext``
    already enforces no-lookahead-by-construction).
-2-3. Inspect and apply the market-level regime gate.
-4. Validate scored-candidate timestamps/provenance/structure.
-5. Apply the Materials sector exclusion.
-6. Apply the model-score threshold.
-7. Apply the per-instrument (Markov-only) regime check.
-8-9. Rank by score, descending, with a deterministic tie-break.
-10. Truncate to ``max_positions``.
-11. Compare survivor count against ``min_positions``.
-12. Choose primary / fallback / cash / no-signal / missing-data.
-13. Compute strategy-budget-relative weights.
-14. Assemble the structured decision audit.
+2. Validate scored-candidate timestamps/provenance/structure.
+3. Apply the Materials sector exclusion.
+4. Apply the model-score threshold.
+5. Rank by score, descending, with a deterministic tie-break.
+6. Truncate to ``max_positions``.
+7. Size positions (see below) and assemble the structured decision audit.
+
+There is deliberately no regime gate at any step: the report's HMM +
+Markov market-level block and per-instrument Bear filter were removed
+from this strategy entirely. See ``config.FilingMomentumMLConfig`` and
+``docs/reproducibility_findings.md``.
+
+Sizing has exactly two cases, and neither ever holds the whole quarter
+in cash:
+
+**Full quota** (``len(survivors) >= min_positions``): score-proportional
+weights across the survivors summing to ``deployable_pct``, i.e. each
+survivor gets ``score * k`` where ``k = deployable_pct / sum(scores)``.
+That ``k`` is recorded on the decision summary as
+``reference_score_to_weight_ratio`` for future partial-fill quarters.
+
+**Partial fill** (``len(survivors) < min_positions``, including zero
+survivors): every survivor is still held, sized at ``score *
+reference_k`` where ``reference_k`` is the ``k`` recorded by the most
+recent *prior* full-quota quarter (0.0 if no full-quota quarter has
+happened yet in this run). Weights are deliberately *not* renormalized
+across the small peer set -- a thin quarter's picks keep the same
+per-unit-of-score conviction a full quarter would have given them. The
+deployable capital they leave unused goes to ``fallback_tickers`` as an
+ETF sleeve. A partial-fill quarter consumes a reference ratio but never
+produces one.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Mapping
 
 from atlas_quant.domain.audit import AuditRecord, AuditTrail
@@ -40,14 +59,12 @@ from atlas_quant.strategies.filing_momentum_ml.config import (
     FilingMomentumMLConfig,
 )
 from atlas_quant.strategies.filing_momentum_ml.decision_domain import (
-    CandidateRejectionCategory,
     FallbackWeightDecision,
     FilingMomentumDecisionSummary,
     FilingMomentumOutcome,
     RejectedCandidate,
 )
 from atlas_quant.strategies.filing_momentum_ml.decision_pipeline import (
-    apply_per_instrument_regime,
     apply_sector_exclusion,
     apply_threshold,
     rank_candidates,
@@ -60,15 +77,11 @@ from atlas_quant.strategies.filing_momentum_ml.fallback_weighting import (
     static_fallback_weights,
 )
 from atlas_quant.strategies.filing_momentum_ml.formulas import score_proportional_weights
-from atlas_quant.strategies.filing_momentum_ml.regime_domain import RegimeResult
 from atlas_quant.strategies.filing_momentum_ml.scoring_domain import ScoredCandidate
 
 _OUTCOME_TO_STATUS: dict[FilingMomentumOutcome, StrategyStatus] = {
     FilingMomentumOutcome.PRIMARY_SELECTION: StrategyStatus.OK,
-    FilingMomentumOutcome.FALLBACK: StrategyStatus.FALLBACK,
-    FilingMomentumOutcome.MARKET_REGIME_BLOCKED: StrategyStatus.REGIME_BLOCKED,
-    FilingMomentumOutcome.CASH: StrategyStatus.CASH,
-    FilingMomentumOutcome.NO_SIGNAL: StrategyStatus.NO_SIGNAL,
+    FilingMomentumOutcome.BLENDED: StrategyStatus.FALLBACK,
     FilingMomentumOutcome.MISSING_REQUIRED_DATA: StrategyStatus.MISSING_DATA,
     FilingMomentumOutcome.INVALID_INPUT: StrategyStatus.ERROR,
     FilingMomentumOutcome.DISABLED: StrategyStatus.DISABLED,
@@ -88,9 +101,16 @@ class FilingMomentumEvaluationInputs:
 
     config: FilingMomentumMLConfig
     scored_candidates: tuple[ScoredCandidate, ...]
-    market_regime: RegimeResult
-    per_instrument_regime: Mapping[InstrumentId, RegimeResult]
     fallback_statistics: tuple[FallbackAssetStatistics, ...] = field(default_factory=tuple)
+    previous_reference_score_to_weight_ratio: float | None = None
+    """The most recent *prior* full-quota quarter's
+    ``deployable_pct / sum(scores)`` ratio, threaded forward by the caller
+    (see ``backtest.filing_momentum_runner``). ``None`` means no
+    full-quota quarter has occurred yet in this run, which this strategy
+    treats as a reference ratio of 0.0 -- a partial fill before any full
+    quarter puts its whole deployable budget in the ETF sleeve rather
+    than inventing a conviction level it has no basis for."""
+
     previous_state: Any = None
     enabled: bool = True
 
@@ -115,43 +135,6 @@ class FilingMomentumMLStrategy:
                 context, config, inputs, FilingMomentumOutcome.DISABLED, audit,
                 recommendations=(), weights={}, cash_weight=1.0,
                 warnings=("strategy disabled for this evaluation",),
-                rejected=(), capped=(), selected=(), fallback_decision=None,
-            )
-
-        audit = audit.append(
-            AuditRecord(
-                stage="market_regime",
-                message=(
-                    f"gate_mode={inputs.market_regime.gate_mode!r} "
-                    f"is_blocked={inputs.market_regime.is_blocked}"
-                ),
-                timestamp=context.evaluation_timestamp,
-                data={
-                    "markov_is_bear": inputs.market_regime.markov.is_bear,
-                    "hmm_is_bear": inputs.market_regime.hmm.is_bear,
-                    "block_reason": inputs.market_regime.block_reason,
-                },
-            )
-        )
-        if inputs.market_regime.warnings:
-            audit = audit.append(
-                AuditRecord(
-                    stage="market_regime",
-                    message="market regime component warning(s)",
-                    timestamp=context.evaluation_timestamp,
-                    data={"warnings": list(inputs.market_regime.warnings)},
-                )
-            )
-
-        if inputs.market_regime.is_blocked:
-            # Report §5.1/engine.py: a confirmed market Bear holds the
-            # *entire* quarter in cash -- this is not the same code path
-            # as the ordinary insufficient-position SPY/VGT fallback, and
-            # must never be conflated with it.
-            return self._result(
-                context, config, inputs, FilingMomentumOutcome.MARKET_REGIME_BLOCKED, audit,
-                recommendations=(), weights={}, cash_weight=1.0,
-                warnings=(f"market regime blocked: {inputs.market_regime.block_reason}",),
                 rejected=(), capped=(), selected=(), fallback_decision=None,
             )
 
@@ -189,18 +172,7 @@ class FilingMomentumMLStrategy:
             )
         )
 
-        regime_kept, regime_rejected = apply_per_instrument_regime(
-            threshold_kept, inputs.per_instrument_regime, config.missing_regime_policy
-        )
-        audit = audit.append(
-            AuditRecord(
-                stage="per_instrument_regime",
-                message=f"{len(regime_rejected)} rejected by per-instrument regime check",
-                timestamp=context.evaluation_timestamp,
-            )
-        )
-
-        ranked = rank_candidates(regime_kept)
+        ranked = rank_candidates(threshold_kept)
         audit = audit.append(
             AuditRecord(
                 stage="ranking",
@@ -219,9 +191,7 @@ class FilingMomentumMLStrategy:
             )
         )
 
-        all_rejected = tuple(
-            invalid_rejections + sector_rejected + threshold_rejected + regime_rejected
-        )
+        all_rejected = tuple(invalid_rejections + sector_rejected + threshold_rejected)
 
         audit = audit.append(
             AuditRecord(
@@ -236,13 +206,26 @@ class FilingMomentumMLStrategy:
                 {c.instrument_id: c.score for c in capped_kept},
                 deployable_pct=config.deployable_pct,
             )
+            # The score-to-weight ratio this quarter's full quota implies.
+            # score_proportional_weights computes weight_i = score_i * k with
+            # k = deployable_pct / sum(scores); recording k here lets a later,
+            # thinner quarter size its few picks at the same conviction rather
+            # than renormalizing them across a small peer set. Guarded against
+            # an all-zero score set (score_proportional_weights itself already
+            # handles that case; 0.0 is the honest reference for it).
+            score_total = sum(c.score for c in capped_kept)
+            reference_ratio = (config.deployable_pct / score_total) if score_total > 0.0 else 0.0
             cash_weight = max(0.0, 1.0 - sum(weights.values()))
             audit = audit.append(
                 AuditRecord(
                     stage="weighting",
                     message="primary score-proportional weighting applied",
                     timestamp=context.evaluation_timestamp,
-                    data={"deployable_pct": config.deployable_pct, "cash_weight": cash_weight},
+                    data={
+                        "deployable_pct": config.deployable_pct,
+                        "cash_weight": cash_weight,
+                        "reference_score_to_weight_ratio": reference_ratio,
+                    },
                 )
             )
             recommendations = tuple(
@@ -260,34 +243,68 @@ class FilingMomentumMLStrategy:
                 recommendations=recommendations, weights=weights, cash_weight=cash_weight,
                 warnings=(), rejected=all_rejected, capped=tuple(capped_rejected),
                 selected=tuple(capped_kept), fallback_decision=None,
+                reference_score_to_weight_ratio=reference_ratio,
             )
 
-        # Fewer than min_positions survived -- report §5.4 fallback.
+        # Partial fill: fewer than min_positions survived. The survivors are
+        # never discarded and the quarter is never held in cash -- the picks
+        # are sized off the most recent prior full-quota quarter's ratio and
+        # the unused deployable budget goes to the ETF sleeve.
+        reference_k = inputs.previous_reference_score_to_weight_ratio or 0.0
         audit = audit.append(
             AuditRecord(
-                stage="fallback_activation",
+                stage="partial_fill",
                 message=(
-                    f"only {len(capped_kept)} candidate(s) survived, "
-                    f"below min_positions={config.min_positions} -- activating fallback"
+                    f"only {len(capped_kept)} candidate(s) survived, below "
+                    f"min_positions={config.min_positions} -- sizing them off the prior "
+                    "full-quota quarter's score-to-weight ratio and routing the "
+                    "remaining deployable capital to the ETF sleeve"
                 ),
                 timestamp=context.evaluation_timestamp,
+                data={
+                    "reference_score_to_weight_ratio": reference_k,
+                    "bootstrap": inputs.previous_reference_score_to_weight_ratio is None,
+                },
             )
         )
 
-        if not config.fallback_tickers:
-            return self._result(
-                context, config, inputs, FilingMomentumOutcome.NO_SIGNAL, audit,
-                recommendations=(), weights={}, cash_weight=1.0,
-                warnings=("no fallback_tickers configured",),
-                rejected=all_rejected, capped=tuple(capped_rejected),
-                selected=(), fallback_decision=None,
+        stock_weights = {c.instrument_id: c.score * reference_k for c in capped_kept}
+        stock_total = sum(stock_weights.values())
+        clamped = False
+        if stock_total > config.deployable_pct:
+            # Defensive, and genuinely reachable: reference_k comes from a
+            # *different* quarter, so nothing structurally bounds
+            # sum(score_i * reference_k) here. A prior quarter with many
+            # low-scoring picks produces a large k; if this quarter's few
+            # picks score much higher, their unnormalized total can exceed
+            # the deployable budget. Scaling proportionally preserves the
+            # relative sizing between picks while guaranteeing the stock
+            # sleeve alone never borrows against the cash reserve.
+            scale = config.deployable_pct / stock_total
+            stock_weights = {iid: w * scale for iid, w in stock_weights.items()}
+            stock_total = config.deployable_pct
+            clamped = True
+            audit = audit.append(
+                AuditRecord(
+                    stage="partial_fill_clamp",
+                    message=(
+                        "stock sleeve sized off the prior reference ratio exceeded "
+                        f"deployable_pct={config.deployable_pct}; scaled down proportionally"
+                    ),
+                    timestamp=context.evaluation_timestamp,
+                    data={"scale": scale},
+                )
             )
+
+        etf_budget = max(0.0, config.deployable_pct - stock_total)
 
         # Resolve fallback tickers to InstrumentId via the supplied statistics
         # (never fabricate an ETF InstrumentId from a bare string here).
         stats_by_symbol = {s.instrument_id.symbol: s for s in inputs.fallback_statistics}
         missing_tickers = [t for t in config.fallback_tickers if t not in stats_by_symbol]
         if missing_tickers:
+            # A genuine data-availability failure, not a "no fallback
+            # configured" case -- the sleeve is always configured now.
             return self._result(
                 context, config, inputs, FilingMomentumOutcome.MISSING_REQUIRED_DATA, audit,
                 recommendations=(), weights={}, cash_weight=1.0,
@@ -304,40 +321,66 @@ class FilingMomentumMLStrategy:
             raw_weights = static_fallback_weights([s.instrument_id for s in ordered_stats])
             mode = "static"
 
-        # Report §5.4 + engine.py: the fallback sleeve is deployed under the
-        # same deployable_pct / cash-buffer convention as the primary sleeve.
-        final_weights = {iid: w * config.deployable_pct for iid, w in raw_weights.items()}
+        # raw_weights sum to 1.0 across the sleeve; scaling by etf_budget
+        # spends exactly the deployable capital the stock picks left unused.
+        # When etf_budget is 0.0 every ETF leg is 0.0-weighted, which is the
+        # correct representation of "the stocks consumed the whole budget".
+        etf_weights = {iid: w * etf_budget for iid, w in raw_weights.items()}
+
+        final_weights: dict[InstrumentId, float] = {**stock_weights, **etf_weights}
         cash_weight = max(0.0, 1.0 - sum(final_weights.values()))
 
         fallback_decision = FallbackWeightDecision(
             mode=mode,
-            weights=final_weights,
+            weights=etf_weights,
             lookback_quarters=config.fallback_lookback_quarters,
             statistics=ordered_stats,
+            warnings=("stock sleeve clamped to deployable_pct",) if clamped else (),
         )
         audit = audit.append(
             AuditRecord(
                 stage="fallback_weighting",
-                message=f"{mode} fallback weighting applied",
+                message=f"{mode} ETF-sleeve weighting applied over etf_budget={etf_budget}",
                 timestamp=context.evaluation_timestamp,
-                data={"weights": {str(k): v for k, v in final_weights.items()}, "cash_weight": cash_weight},
+                data={
+                    "stock_total": stock_total,
+                    "etf_budget": etf_budget,
+                    "weights": {str(k): v for k, v in final_weights.items()},
+                    "cash_weight": cash_weight,
+                },
             )
         )
+        sleeve_symbols = "/".join(config.fallback_tickers)
         recommendations = tuple(
+            InstrumentRecommendation(
+                instrument_id=c.instrument_id,
+                kind=SignalKind.PRIMARY,
+                weight=stock_weights[c.instrument_id],
+                score=c.score,
+                rationale=(
+                    "primary Filing Momentum ML selection (partial fill, prior "
+                    "full-quota quarter's score-to-weight ratio)"
+                ),
+            )
+            for c in capped_kept
+        ) + tuple(
             InstrumentRecommendation(
                 instrument_id=stats.instrument_id,
                 kind=SignalKind.FALLBACK,
-                weight=final_weights[stats.instrument_id],
+                weight=etf_weights[stats.instrument_id],
                 score=None,
-                rationale=f"{mode} SPY/VGT fallback (below min_positions)",
+                rationale=(
+                    f"{sleeve_symbols} capital sleeve -- unused capital from partial "
+                    f"stock fill, {mode} trailing-return weighted"
+                ),
             )
             for stats in ordered_stats
         )
         return self._result(
-            context, config, inputs, FilingMomentumOutcome.FALLBACK, audit,
+            context, config, inputs, FilingMomentumOutcome.BLENDED, audit,
             recommendations=recommendations, weights=final_weights, cash_weight=cash_weight,
             warnings=(), rejected=all_rejected, capped=tuple(capped_rejected),
-            selected=(), fallback_decision=fallback_decision,
+            selected=tuple(capped_kept), fallback_decision=fallback_decision,
         )
 
     def _result(
@@ -356,6 +399,7 @@ class FilingMomentumMLStrategy:
         capped: tuple[RejectedCandidate, ...],
         selected: tuple[ScoredCandidate, ...],
         fallback_decision: FallbackWeightDecision | None,
+        reference_score_to_weight_ratio: float | None = None,
     ) -> StrategyResult:
         summary = FilingMomentumDecisionSummary(
             strategy_id=config.strategy_id,
@@ -364,7 +408,6 @@ class FilingMomentumMLStrategy:
             data_cutoff=context.data_cutoff,
             strategy_budget_pct=context.capital_budget_pct,
             config_identity=config.identity(),
-            market_regime=inputs.market_regime,
             initial_candidate_count=len(inputs.scored_candidates),
             rejected_candidates=rejected,
             capped_candidates=capped,
@@ -374,6 +417,7 @@ class FilingMomentumMLStrategy:
             cash_weight=cash_weight,
             fallback_decision=fallback_decision,
             warnings=warnings,
+            reference_score_to_weight_ratio=reference_score_to_weight_ratio,
             audit_trail=audit,
         )
         return StrategyResult(

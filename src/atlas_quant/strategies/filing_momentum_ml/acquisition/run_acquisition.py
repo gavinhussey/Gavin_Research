@@ -140,7 +140,6 @@ def build_acquisition_manifest(
     *,
     dataset_identity_label: str,
     strategy_config_identity: str,
-    regime_config_identity: str,
     retrieval_date: date,
     data_cutoff: datetime,
     git_commit: str | None,
@@ -173,7 +172,7 @@ def build_acquisition_manifest(
         corporate_action_treatment="split_dividend_adjusted_close (yfinance auto_adjust=True)",
         delisting_treatment="not handled -- present-day universe only, no delisted names included",
         data_corrections=(), source_file_hashes={},
-        strategy_config_identity=strategy_config_identity, regime_config_identity=regime_config_identity,
+        strategy_config_identity=strategy_config_identity,
         git_commit=git_commit,
         notes=tuple(result.warnings[:50]),  # first 50 warnings inline; full list belongs in run logs
     )

@@ -1,10 +1,10 @@
 """Status vocabulary shared by every strategy's result.
 
-The Filing Momentum ML report requires distinguishing primary stock
-selections from ETF fallback, regime-blocked, cash, no-signal, missing-data,
-and disabled outcomes (see project brief, "Strategy fallback distinction").
-These enums exist so that distinction is structural, not something each
-strategy re-invents with ad hoc strings.
+Distinguishing a strategy's primary signal-based recommendations from
+fallback exposure, cash, no-signal, missing-data, and disabled outcomes
+(see project brief, "Strategy fallback distinction") must be structural,
+not something each strategy re-invents with ad hoc strings — hence these
+enums.
 """
 
 from __future__ import annotations
@@ -19,12 +19,11 @@ class StrategyStatus(str, Enum):
     """Strategy produced primary signal-based recommendations."""
 
     FALLBACK = "fallback"
-    """Strategy's primary signal was unavailable/insufficient; a documented
-    fallback policy (e.g. Filing Momentum ML's SPY/VGT blend) was used
-    instead."""
-
-    REGIME_BLOCKED = "regime_blocked"
-    """A regime gate blocked deployment (e.g. market-level Bear gate)."""
+    """At least one recommendation was routed to the strategy's documented
+    fallback / ETF-sleeve mechanism because its primary signal was
+    insufficient on its own. Does not imply the primary signal was
+    abandoned — a strategy may return primary and fallback
+    recommendations together (see ``SignalKind``)."""
 
     CASH = "cash"
     """Strategy recommends holding cash (distinct from FALLBACK — this is

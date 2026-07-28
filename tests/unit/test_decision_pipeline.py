@@ -7,7 +7,6 @@ import pytest
 
 from atlas_quant.strategies.filing_momentum_ml.decision_domain import CandidateRejectionCategory
 from atlas_quant.strategies.filing_momentum_ml.decision_pipeline import (
-    apply_per_instrument_regime,
     apply_sector_exclusion,
     apply_threshold,
     rank_candidates,
@@ -15,8 +14,6 @@ from atlas_quant.strategies.filing_momentum_ml.decision_pipeline import (
     validate_candidates,
 )
 from fixtures.filing_momentum_ml import (
-    instrument,
-    make_regime_result,
     make_scored_candidate,
 )
 
@@ -164,53 +161,6 @@ class TestSectorExclusion:
         kept, rejected = apply_sector_exclusion([a, b, c], ("Materials", "Energy"))
         assert kept == [c]
         assert len(rejected) == 2
-
-
-class TestPerInstrumentRegime:
-    def test_bear_candidate_rejected(self):
-        c = make_scored_candidate("AAA", 0.5)
-        regime = {c.instrument_id: make_regime_result(c.instrument_id, markov_bear=True)}
-        kept, rejected = apply_per_instrument_regime([c], regime, "reject")
-        assert kept == []
-        assert rejected[0].category == CandidateRejectionCategory.PER_INSTRUMENT_BEAR
-
-    def test_bull_candidate_retained(self):
-        c = make_scored_candidate("AAA", 0.5)
-        regime = {c.instrument_id: make_regime_result(c.instrument_id, markov_bear=False)}
-        kept, _ = apply_per_instrument_regime([c], regime, "reject")
-        assert kept == [c]
-
-    def test_hmm_bear_alone_does_not_reject_markov_only_gate(self):
-        # report/main.py: per-stock gate is Markov-only, HMM must be ignored.
-        c = make_scored_candidate("AAA", 0.5)
-        regime = {c.instrument_id: make_regime_result(c.instrument_id, markov_bear=False, hmm_bear=True)}
-        kept, _ = apply_per_instrument_regime([c], regime, "reject")
-        assert kept == [c]
-
-    def test_missing_result_reject_policy(self):
-        c = make_scored_candidate("AAA", 0.5)
-        kept, rejected = apply_per_instrument_regime([c], {}, "reject")
-        assert kept == []
-        assert rejected[0].category == CandidateRejectionCategory.MISSING_REGIME_RESULT
-
-    def test_missing_result_allow_policy(self):
-        c = make_scored_candidate("AAA", 0.5)
-        kept, rejected = apply_per_instrument_regime([c], {}, "allow")
-        assert kept == [c]
-        assert rejected == []
-
-    def test_unavailable_component_follows_missing_policy_not_bull(self):
-        c = make_scored_candidate("AAA", 0.5)
-        from atlas_quant.strategies.filing_momentum_ml.regime_domain import ComponentAvailability
-
-        regime = {
-            c.instrument_id: make_regime_result(
-                c.instrument_id, markov_availability=ComponentAvailability.INSUFFICIENT_HISTORY
-            )
-        }
-        kept, rejected = apply_per_instrument_regime([c], regime, "reject")
-        assert kept == []
-        assert rejected[0].category == CandidateRejectionCategory.MISSING_REGIME_RESULT
 
 
 class TestRanking:

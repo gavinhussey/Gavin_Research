@@ -1,9 +1,9 @@
 """Orchestration tests for atlas_quant.backtest.filing_momentum_runner.
 
-These prove the runner *calls* Stage 3-6 functionality in the report-
-defined sequence rather than reimplementing it, and exercise full
-multi-quarter scenarios (skipped/primary/fallback/cash mixes,
-determinism, no leakage).
+These prove the runner *calls* Stage 3-6 functionality in sequence
+rather than reimplementing it, and exercise full multi-quarter scenarios
+(skipped / full-quota primary / blended partial-fill mixes, the
+cross-quarter reference-ratio threading, determinism, no leakage).
 """
 
 import json
@@ -22,13 +22,11 @@ from atlas_quant.backtest.filing_momentum_runner import (
 )
 from atlas_quant.backtest.price_resolution import PriceResolutionPolicy
 from atlas_quant.domain.identifiers import AssetClass
-from atlas_quant.domain.status import StrategyStatus
 from atlas_quant.strategies.filing_momentum_ml.config import FilingMomentumMLConfig
 from atlas_quant.strategies.filing_momentum_ml.estimator import EstimatorBuildInfo
 from atlas_quant.strategies.filing_momentum_ml.model_training import TrainingState
 from fixtures.filing_momentum_ml import (
     FakeEstimator,
-    FakeHMMFitter,
     instrument,
     make_backtest_feature_observation_source,
     make_backtest_fallback_statistics_source,
@@ -39,8 +37,10 @@ from atlas_quant.data.point_in_time import ListTradingCalendar
 import datetime as _dt
 
 
-SPY = instrument("SPY", AssetClass.ETF)
-VGT = instrument("VGT", AssetClass.ETF)
+SPY = instrument("SPY", AssetClass.ETF)   # benchmark
+VOO = instrument("VOO", AssetClass.ETF)   # ETF sleeve leg
+VTI = instrument("VTI", AssetClass.ETF)   # ETF sleeve leg
+SLEEVE = [SPY, VOO, VTI]
 
 
 def _weekday_calendar(start, end):
@@ -55,7 +55,7 @@ def _weekday_calendar(start, end):
 
 def _default_deps(universe=None, spy_score=None, default_score=0.9, fit_error=None):
     universe = universe or make_backtest_universe(15)
-    price_source = make_backtest_price_source(universe, [SPY, VGT], date(2015, 1, 1), date(2023, 6, 1))
+    price_source = make_backtest_price_source(universe, SLEEVE, date(2015, 1, 1), date(2023, 6, 1))
     feature_source = make_backtest_feature_observation_source(universe)
     fallback_source = make_backtest_fallback_statistics_source()
     fitter = FakeEstimator(default_score=default_score, fit_error=fit_error)
@@ -67,7 +67,7 @@ def _default_deps(universe=None, spy_score=None, default_score=0.9, fit_error=No
     return FilingMomentumBacktestDependencies(
         feature_observation_source=feature_source, price_source=price_source,
         fallback_statistics_source=fallback_source, estimator_factory=estimator_factory,
-        hmm_fitter=FakeHMMFitter(), trading_calendar=calendar, universe=tuple(universe),
+        trading_calendar=calendar, universe=tuple(universe),
         benchmark_instrument_id=SPY,
     ), fitter
 
@@ -111,7 +111,7 @@ class TestFullyOrchestration:
     def test_no_target_observations_yields_no_scored_candidates(self):
         periods = generate_quarterly_periods(date(2018, 3, 31), date(2020, 3, 31))
         universe = make_backtest_universe(15)
-        price_source = make_backtest_price_source(universe, [SPY, VGT], date(2015, 1, 1), date(2023, 6, 1))
+        price_source = make_backtest_price_source(universe, SLEEVE, date(2015, 1, 1), date(2023, 6, 1))
         fallback_source = make_backtest_fallback_statistics_source()
         fitter = FakeEstimator()
 
@@ -125,7 +125,7 @@ class TestFullyOrchestration:
         deps = FilingMomentumBacktestDependencies(
             feature_observation_source=empty_source, price_source=price_source,
             fallback_statistics_source=fallback_source, estimator_factory=estimator_factory,
-            hmm_fitter=FakeHMMFitter(), trading_calendar=calendar, universe=tuple(universe),
+            trading_calendar=calendar, universe=tuple(universe),
             benchmark_instrument_id=SPY,
         )
         result = run_filing_momentum_backtest(periods, deps)
@@ -147,15 +147,12 @@ class TestNoReimplementation:
             TrainingState.SKIPPED_INSUFFICIENT_POSITIVE_LABELS,
         )
 
-    def test_runner_uses_stage4_regime_result_type(self):
-        from atlas_quant.strategies.filing_momentum_ml.regime_domain import RegimeResult
+    def test_quarter_result_carries_no_regime_fields(self):
+        from atlas_quant.backtest.filing_momentum_runner import BacktestQuarterResult
 
-        periods = generate_quarterly_periods(date(2018, 3, 31), date(2020, 12, 31))
-        deps, _ = _default_deps()
-        result = run_filing_momentum_backtest(periods, deps)
-        completed = [q for q in result.quarter_results if q.market_regime is not None]
-        assert completed
-        assert isinstance(completed[0].market_regime, RegimeResult)
+        fields = BacktestQuarterResult.__dataclass_fields__
+        assert "market_regime" not in fields
+        assert "per_instrument_regime_count" not in fields
 
     def test_runner_uses_stage5_strategy_result_type(self):
         from atlas_quant.strategies.base import StrategyResult
@@ -177,7 +174,7 @@ class TestMultiQuarterRun:
         # cached/reused model).
         periods = generate_quarterly_periods(date(2018, 3, 31), date(2021, 12, 31))
         universe = make_backtest_universe(15)
-        price_source = make_backtest_price_source(universe, [SPY, VGT], date(2015, 1, 1), date(2023, 6, 1))
+        price_source = make_backtest_price_source(universe, SLEEVE, date(2015, 1, 1), date(2023, 6, 1))
         feature_source = make_backtest_feature_observation_source(universe)
         fallback_source = make_backtest_fallback_statistics_source()
 
@@ -197,7 +194,7 @@ class TestMultiQuarterRun:
         deps = FilingMomentumBacktestDependencies(
             feature_observation_source=feature_source, price_source=price_source,
             fallback_statistics_source=fallback_source, estimator_factory=estimator_factory,
-            hmm_fitter=FakeHMMFitter(), trading_calendar=calendar, universe=tuple(universe),
+            trading_calendar=calendar, universe=tuple(universe),
             benchmark_instrument_id=SPY,
         )
         result = run_filing_momentum_backtest(periods, deps)
@@ -258,3 +255,106 @@ class TestConfigAndTransactionCosts:
     def test_backtest_config_rejects_invalid_budget(self):
         with pytest.raises(ValueError):
             FilingMomentumBacktestConfig(strategy_budget_pct=1.5)
+
+
+class TestReferenceRatioThreading:
+    """The single piece of cross-quarter state: the most recent *full-quota*
+    quarter's ``deployable_pct / sum(scores)`` ratio, threaded into the next
+    partial-fill quarter and never cleared by one."""
+
+    #: Evaluated quarters we deliberately starve down to a single candidate,
+    #: forcing a partial fill. Everything else keeps the full 15-name
+    #: universe and therefore fills its quota (capped at max_positions=10).
+    PARTIAL_QUARTERS = (date(2020, 6, 30), date(2020, 9, 30))
+
+    def _deps(self):
+        universe = make_backtest_universe(15)
+        price_source = make_backtest_price_source(universe, SLEEVE, date(2015, 1, 1), date(2023, 6, 1))
+        # A real (past) data cutoff, so candidates survive Stage 5 validation
+        # instead of being rejected as FUTURE_DATA_CUTOFF.
+        base_source = make_backtest_feature_observation_source(universe, point_in_time_cutoff=True)
+
+        def feature_source(quarter_end):
+            observations = base_source(quarter_end)
+            if quarter_end in self.PARTIAL_QUARTERS:
+                return observations[:1]
+            return observations
+
+        fitter = FakeEstimator(default_score=0.9)
+
+        def estimator_factory(model_config):
+            return fitter, EstimatorBuildInfo(
+                estimator_type="Fake", parameters={}, library="fake", library_version=None
+            )
+
+        calendar = _weekday_calendar(date(2015, 1, 1), date(2023, 6, 1))
+        return FilingMomentumBacktestDependencies(
+            feature_observation_source=feature_source, price_source=price_source,
+            fallback_statistics_source=make_backtest_fallback_statistics_source(),
+            estimator_factory=estimator_factory, trading_calendar=calendar,
+            universe=tuple(universe), benchmark_instrument_id=SPY,
+        )
+
+    def _run(self):
+        """Returns (evaluated quarter results, ratio each evaluated quarter
+        *received* as its previous-reference input)."""
+        from atlas_quant.strategies.filing_momentum_ml.strategy import FilingMomentumMLStrategy
+
+        periods = generate_quarterly_periods(date(2018, 3, 31), date(2021, 12, 31))
+        received = []
+        real_evaluate = FilingMomentumMLStrategy.evaluate
+
+        def spy_evaluate(self, context):
+            received.append(context.strategy_config.previous_reference_score_to_weight_ratio)
+            return real_evaluate(self, context)
+
+        FilingMomentumMLStrategy.evaluate = spy_evaluate
+        try:
+            result = run_filing_momentum_backtest(periods, self._deps())
+        finally:
+            FilingMomentumMLStrategy.evaluate = real_evaluate
+        evaluated = [q for q in result.quarter_results if q.strategy_result is not None]
+        return evaluated, received
+
+    def test_scenario_produces_both_full_quota_and_partial_fill_quarters(self):
+        evaluated, _ = self._run()
+        outcomes = {q.period.quarter_end: q.outcome_type for q in evaluated}
+        assert QuarterOutcomeType.PRIMARY in outcomes.values()
+        assert QuarterOutcomeType.FALLBACK in outcomes.values()
+        for quarter_end in self.PARTIAL_QUARTERS:
+            assert outcomes[quarter_end] == QuarterOutcomeType.FALLBACK
+
+    def test_first_evaluated_quarter_bootstraps_with_none(self):
+        _, received = self._run()
+        assert received
+        assert received[0] is None
+
+    def test_full_quota_quarter_publishes_a_ratio_partial_fill_does_not(self):
+        evaluated, _ = self._run()
+        for q in evaluated:
+            ratio = q.strategy_result.state_update.reference_score_to_weight_ratio
+            if q.outcome_type == QuarterOutcomeType.PRIMARY:
+                # 10 picks (max_positions) each scored 0.9 -> 0.95 / 9.0
+                assert ratio == pytest.approx(0.95 / 9.0)
+            else:
+                assert ratio is None
+
+    def test_partial_fill_uses_the_prior_full_quota_ratio_and_never_clears_it(self):
+        evaluated, received = self._run()
+        by_quarter = dict(zip([q.period.quarter_end for q in evaluated], received))
+        expected = pytest.approx(0.95 / 9.0)
+        # Q1 (full quota) published R1; both intervening partial quarters
+        # receive exactly R1 -- the first partial fill's own None never
+        # overwrote the carried value for the second.
+        for quarter_end in self.PARTIAL_QUARTERS:
+            assert by_quarter[quarter_end] == expected
+
+    def test_partial_fill_stock_weight_equals_score_times_prior_ratio(self):
+        evaluated, _ = self._run()
+        partial = next(q for q in evaluated if q.period.quarter_end == self.PARTIAL_QUARTERS[1])
+        recommendations = {r.instrument_id.symbol: r for r in partial.strategy_result.recommendations}
+        stock = next(r for r in recommendations.values() if r.score is not None)
+        assert stock.weight == pytest.approx(0.9 * (0.95 / 9.0))
+        # ...and the sleeve absorbs the rest of the deployable budget.
+        sleeve_total = sum(r.weight for r in recommendations.values() if r.score is None)
+        assert stock.weight + sleeve_total == pytest.approx(0.95)

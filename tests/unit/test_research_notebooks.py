@@ -27,7 +27,6 @@ EXPECTED_NOTEBOOKS = [
     "04_feature_engineering.ipynb",
     "05_labeling.ipynb",
     "06_model_training.ipynb",
-    "07_regime_evaluation.ipynb",
     "08_backtest_orchestration.ipynb",
     "09_performance_and_report.ipynb",
     "10_reproducibility_summary.ipynb",
@@ -91,7 +90,7 @@ def test_notebook_has_findings_and_limitations_sections(name):
 
 _PLAIN_SYNTHETIC_NOTEBOOKS = [
     "02_data_validation.ipynb", "03_normalization.ipynb", "04_feature_engineering.ipynb",
-    "05_labeling.ipynb", "06_model_training.ipynb", "07_regime_evaluation.ipynb",
+    "05_labeling.ipynb", "06_model_training.ipynb",
     "08_backtest_orchestration.ipynb",
 ]
 
@@ -154,7 +153,7 @@ def test_notebook_never_writes_to_a_protected_production_path(name):
 
 def test_09_uses_test_fakes_only_with_explicit_disclosure():
     source = _all_source(_load("09_performance_and_report.ipynb"))
-    assert "FakeEstimator" in source and "FakeHMMFitter" in source
+    assert "FakeEstimator" in source
     assert "explicitly labeled" in source.lower()
     assert "NOT_RUN" in source
 

@@ -46,7 +46,7 @@ def _quarter(quarter_end, outcome_type, period_return=None, benchmark_return=Non
     strategy_result = _minimal_strategy_result(status) if status is not None else None
     return BacktestQuarterResult(
         period=period, outcome_type=outcome_type, training_state=None, model_identity=None,
-        scoring_result=None, market_regime=None, per_instrument_regime_count=0,
+        scoring_result=None,
         strategy_result=strategy_result, positions=(), period_return=period_return,
         benchmark=None, benchmark_return=benchmark_return, alpha=alpha, cash_weight=0.0,
     )
@@ -61,7 +61,7 @@ def _backtest_result(quarters) -> BacktestResult:
     )
 
 
-def _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_regime_blocked=1, n_skipped=3):
+def _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_skipped=3):
     quarters = []
     idx = 0
     for _ in range(n_primary):
@@ -71,10 +71,7 @@ def _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_regime_blocke
         quarters.append(_quarter(_quarter_end(idx), QuarterOutcomeType.FALLBACK, 0.01, 0.01))
         idx += 1
     for _ in range(n_cash):
-        quarters.append(_quarter(_quarter_end(idx), QuarterOutcomeType.CASH, 0.0, 0.01, StrategyStatus.NO_SIGNAL))
-        idx += 1
-    for _ in range(n_regime_blocked):
-        quarters.append(_quarter(_quarter_end(idx), QuarterOutcomeType.CASH, 0.0, -0.05, StrategyStatus.REGIME_BLOCKED))
+        quarters.append(_quarter(_quarter_end(idx), QuarterOutcomeType.CASH, 0.0, 0.01, StrategyStatus.DISABLED))
         idx += 1
     for _ in range(n_skipped):
         quarters.append(_quarter(_quarter_end(idx), QuarterOutcomeType.SKIPPED))
@@ -99,7 +96,7 @@ class TestScopeDefinitionValidation:
             ScopeDefinition.custom(frozenset(), "empty")
 
     def test_custom_scope_allows_valid_combination(self):
-        defn = ScopeDefinition.custom(frozenset({QuarterClassification.CASH, QuarterClassification.REGIME_BLOCKED}), "cash-like")
+        defn = ScopeDefinition.custom(frozenset({QuarterClassification.CASH, QuarterClassification.FALLBACK}), "cash-or-blended")
         assert defn.scope == PerformanceScope.CUSTOM
 
     def test_deterministic_identity(self):
@@ -137,22 +134,21 @@ class TestPerformanceAnalysisConfigValidation:
 
 class TestAnalysisComposition:
     def test_primary_fallback_cash_skipped_counts(self):
-        result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_regime_blocked=1, n_skipped=3)
+        result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_skipped=3)
         analysis = analyze_backtest_result(result)
         assert analysis.classification_composition[QuarterClassification.PRIMARY] == 10
         assert analysis.classification_composition[QuarterClassification.FALLBACK] == 8
         assert analysis.classification_composition[QuarterClassification.CASH] == 2
-        assert analysis.classification_composition[QuarterClassification.REGIME_BLOCKED] == 1
         assert analysis.classification_composition[QuarterClassification.SKIPPED] == 3
 
     def test_overall_vs_primary_only_differ(self):
-        result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_regime_blocked=1, n_skipped=3)
+        result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_skipped=3)
         analysis = analyze_backtest_result(result)
-        assert analysis.overall.return_series.included_count == 21  # 10+8+2+1
+        assert analysis.overall.return_series.included_count == 20  # 10+8+2
         assert analysis.primary.return_series.included_count == 10
 
     def test_fallback_performance_not_attributed_to_primary(self):
-        result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=0, n_regime_blocked=0, n_skipped=0)
+        result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=0, n_skipped=0)
         analysis = analyze_backtest_result(result)
         primary_returns = analysis.primary.return_series.strategy_returns()
         fallback_returns = analysis.fallback.return_series.strategy_returns()
@@ -169,7 +165,7 @@ class TestAnalysisComposition:
         assert analysis.invested is not None
 
     def test_invested_scope_excludes_cash_and_regime_blocked(self):
-        result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_regime_blocked=1, n_skipped=0)
+        result = _mixed_backtest_result(n_primary=10, n_fallback=8, n_cash=2, n_skipped=0)
         analysis = analyze_backtest_result(result)
         assert analysis.invested.return_series.included_count == 18  # 10+8, no cash/blocked
 
@@ -188,7 +184,7 @@ class TestSerialization:
         assert d1 == d2
 
     def test_availability_states_preserved(self):
-        result = _mixed_backtest_result(n_primary=1, n_fallback=0, n_cash=0, n_regime_blocked=0, n_skipped=0)
+        result = _mixed_backtest_result(n_primary=1, n_fallback=0, n_cash=0, n_skipped=0)
         analysis = analyze_backtest_result(result)
         d = performance_analysis_to_dict(analysis)
         assert d["primary"]["sharpe"]["availability"] == MetricAvailability.INSUFFICIENT_HISTORY.value

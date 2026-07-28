@@ -34,7 +34,6 @@ def _manifest(**overrides) -> DataProvenanceManifest:
         data_corrections=(),
         source_file_hashes={"filings.json": "abc123"},
         strategy_config_identity="strategy-config-hash",
-        regime_config_identity="regime-config-hash",
         git_commit="deadbeef",
         notes=(),
     )

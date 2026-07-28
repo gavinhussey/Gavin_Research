@@ -50,7 +50,6 @@ class DataProvenanceManifest:
     data_corrections: tuple[str, ...]
     source_file_hashes: Mapping[str, str]
     strategy_config_identity: str
-    regime_config_identity: str
     git_commit: str | None
     notes: tuple[str, ...] = field(default_factory=tuple)
 
@@ -85,7 +84,6 @@ class DataProvenanceManifest:
                 "data_corrections": list(self.data_corrections),
                 "source_file_hashes": dict(sorted(self.source_file_hashes.items())),
                 "strategy_config_identity": self.strategy_config_identity,
-                "regime_config_identity": self.regime_config_identity,
                 "git_commit": self.git_commit,
             }
         )
@@ -117,7 +115,6 @@ class DataProvenanceManifest:
             "data_corrections": list(self.data_corrections),
             "source_file_hashes": dict(self.source_file_hashes),
             "strategy_config_identity": self.strategy_config_identity,
-            "regime_config_identity": self.regime_config_identity,
             "git_commit": self.git_commit,
             "notes": list(self.notes),
         }
@@ -150,7 +147,6 @@ class DataProvenanceManifest:
             data_corrections=tuple(data.get("data_corrections", ())),
             source_file_hashes=dict(data.get("source_file_hashes", {})),
             strategy_config_identity=data["strategy_config_identity"],
-            regime_config_identity=data["regime_config_identity"],
             git_commit=data.get("git_commit"),
             notes=tuple(data.get("notes", ())),
         )

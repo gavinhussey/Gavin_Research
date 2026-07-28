@@ -12,8 +12,8 @@ historical run. This stage implements calculation infrastructure only.
 
 ## Quarter scopes
 
-`PerformanceScope`: `ALL_EVALUATED` (primary + fallback + cash +
-regime-blocked), `INVESTED` (primary + fallback only), `PRIMARY_ONLY`,
+`PerformanceScope`: `ALL_EVALUATED` (primary + blended + cash),
+`INVESTED` (primary + blended only), `PRIMARY_ONLY`,
 `FALLBACK_ONLY`, and `CUSTOM` (caller-defined, but `ScopeDefinition`
 structurally forbids ever including `SKIPPED`/`INVALID` — even a custom
 scope cannot silently treat a skipped quarter as a return observation).
@@ -21,16 +21,20 @@ scope cannot silently treat a skipped quarter as a return observation).
 ## Evaluated vs. skipped semantics
 
 `classify_quarter` reads (never recomputes) a quarter's classification
-from Stage 7's existing `BacktestQuarterResult.outcome_type` and, for a
-`CASH`-bucketed quarter, its existing `strategy_result.status` — this is
-how a confirmed market-Bear block (`REGIME_BLOCKED`) is distinguished
-from an ordinary intentional-cash/no-signal/missing-data/disabled
-outcome, without Stage 7 needing any change. A `SKIPPED` quarter (Stage 6
-training/fit failure) is never treated as a 0% return.
+from Stage 7's existing `BacktestQuarterResult.outcome_type`; the only
+judgement it makes of its own is that a quarter with no computable
+`period_return` is `INVALID` rather than `CASH`. A `SKIPPED` quarter
+(Stage 6 training/fit failure) is never treated as a 0% return.
 
-## Primary vs. fallback distinction
+## Primary vs. blended distinction
 
-Report §5.4/§6: "27 stock-pick · 33 SPY+VGT fallback · 0 cash" in the
+A `FALLBACK`-classified quarter is a **blended partial fill** (stocks +
+ETF sleeve), not "ETFs instead of stocks" — the classification name is
+retained so it stays aligned with the shared `StrategyStatus.FALLBACK`
+and `SignalKind.FALLBACK` vocabulary. `REGIME_BLOCKED` no longer exists
+as a classification: there is no regime gate.
+
+Report §5.4/§6's own "27 stock-pick · 33 SPY+VGT fallback · 0 cash" in the
 report's own current-default run — the two sleeves are never blended by
 default. `analyze_backtest_result` always produces `primary` and
 `fallback` as separate `ScopeAnalysis` results alongside `overall`
@@ -51,7 +55,7 @@ IR      = mean(alpha) / std(alpha) * sqrt(4),  alpha = r_port - r_SPY
 ```
 
 All three are, per the report's own text, "computed only over quarters
-not held in cash" — i.e. the **invested** scope (primary + fallback).
+not held in cash" — i.e. the **invested** scope (primary + blended).
 `analyze_backtest_result` computes its headline Sharpe/Sortino/IR (used
 for the standard-error/confidence-interval/Bayesian-combination steps)
 over the invested scope for exactly this reason, while still exposing

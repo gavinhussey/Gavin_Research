@@ -1,7 +1,10 @@
 # Filing Momentum ML — strategy decision specification (Stage 5)
 
-Authoritative source: `~/Downloads/report_current.html` §5. This document
-summarizes what `src/atlas_quant/strategies/filing_momentum_ml/strategy.py`
+Base source: `~/Downloads/report_current.html` §5, **with two deliberate,
+permanent divergences** documented below and in
+`reproducibility_findings.md`: this strategy has **no regime gate**, and
+its below-`min_positions` behavior is a **partial-fill ETF sleeve**, not
+the report's all-or-nothing SPY/VGT fallback. This document summarizes what `src/atlas_quant/strategies/filing_momentum_ml/strategy.py`
 and its supporting modules (`decision_pipeline.py`, `fallback_weighting.py`,
 `decision_domain.py`) actually implement, for readers who don't want to
 re-derive it from the report. It is not itself authoritative — production
@@ -12,25 +15,21 @@ has a bug.
 
 1. Validate context/data cutoff (enforced by `StrategyEvaluationContext`
    itself — no lookahead by construction).
-2-3. Inspect and apply the market-level regime gate (`RegimeResult.is_blocked`,
-   computed upstream by Stage 4's `RegimeEvaluator` — this evaluator never
-   computes regime itself, only consumes the result).
-4. Validate scored candidates (`decision_pipeline.validate_candidates`):
+2. Validate scored candidates (`decision_pipeline.validate_candidates`):
    structural checks, duplicate rejection, timestamp/provenance checks.
-5. Materials sector exclusion (`apply_sector_exclusion`), against the
+3. Materials sector exclusion (`apply_sector_exclusion`), against the
    already-normalized sector the Stage 3 feature layer produced.
-6. `ml_threshold` qualification (`apply_threshold`), inclusive (`score >= threshold`).
-7. Per-instrument regime check (`apply_per_instrument_regime`) —
-   **Markov component only**, never the combined gate.
-8-9. Rank by descending score, ties broken by ascending instrument symbol
+4. `ml_threshold` qualification (`apply_threshold`), inclusive (`score >= threshold`).
+5. Rank by descending score, ties broken by ascending instrument symbol
    (`rank_candidates`).
-10. Truncate to `max_positions` (`truncate_to_max_positions`).
-11. Compare survivor count to `min_positions`.
-12. Choose primary / fallback / cash / no-signal / missing-data.
-13. Compute strategy-budget-relative weights.
-14. Assemble `FilingMomentumDecisionSummary` (attached to
-    `StrategyResult.state_update`) and the shared `StrategyResult`/audit
-    trail.
+6. Truncate to `max_positions` (`truncate_to_max_positions`).
+7. Compare survivor count to `min_positions` and size positions: full
+   quota or partial fill (both below).
+8. Assemble `FilingMomentumDecisionSummary` (attached to
+   `StrategyResult.state_update`) and the shared `StrategyResult`/audit
+   trail.
+
+There is **no regime step anywhere in this sequence**.
 
 ## Threshold semantics
 
@@ -49,27 +48,20 @@ and deterministic; a raw "materials" (lowercase) would not match
 "Materials" — sectors reaching this evaluator are expected to already be
 normalized, so this is intentionally strict, not lenient.
 
-## Regime integration
+## No regime gate (deliberate divergence)
 
-- **Market-level**: `RegimeResult.is_blocked` from the injected
-  `market_regime`, computed using whatever `gate_mode` that result was
-  built with (Stage 4's full truth table — both/either/markov/hmm/none).
-  A block means **full cash** for the entire quarter (report §5.1,
-  `engine.py`'s `*** MARKET BEAR — cash ***` path: `r_port=0.0, n_stocks=0`
-  appended and the quarter `continue`s) — this is a distinct outcome
-  (`FilingMomentumOutcome.MARKET_REGIME_BLOCKED` / `StrategyStatus
-  .REGIME_BLOCKED`) from the ordinary insufficient-position fallback, and
-  the two are never conflated.
-- **Per-instrument**: `main.py`'s own code comment is explicit — "Per-stock
-  Bear filter: observable Markov only (no HMM — matches backtest spec)."
-  `apply_per_instrument_regime` therefore reads `result.markov.is_bear`
-  directly, never `result.is_blocked` (which would incorrectly also weigh
-  HMM for a decision the report says is Markov-only).
-- **Missing/unavailable per-instrument result**: not addressed by the
-  report. `FilingMomentumMLConfig.missing_regime_policy` (new, Stage 5)
-  makes this an explicit, conservative choice: `"reject"` (default) drops
-  the candidate; `"allow"` keeps it without applying the per-stock filter.
-  Never silently treated as Bull.
+The report's two-layer gate — a market-level HMM+Markov block that held
+the entire quarter in cash, and a per-instrument Markov-only Bear filter
+that dropped individual candidates — has been **removed entirely**, per
+an explicit product decision. There is no `RegimeConfig`, no
+`RegimeEvaluator`, no HMM fitting, no `regime_gate_mode`, no
+`missing_regime_policy`, and no `hmmlearn` dependency anywhere in the
+decision path or its supporting modules. `StrategyStatus.REGIME_BLOCKED`
+and `FilingMomentumOutcome.MARKET_REGIME_BLOCKED` no longer exist.
+
+This is a permanent design divergence from `report_current.html`, not an
+environment limitation or an unfinished reproduction — see
+`reproducibility_findings.md`.
 
 ## Ranking and position cap
 
@@ -77,13 +69,78 @@ Descending score; ties broken by ascending instrument symbol (a
 deterministic, canonical ordering — never dict/input iteration order).
 Capped at `max_positions` (10) strictly after every other filter.
 
-## Minimum-position fallback
+## Position sizing: full quota vs. partial fill
 
-Fewer than `min_positions` (3) survivors activates the SPY/VGT fallback —
-**never** a 1-or-2-stock-plus-fallback blend (report §5.4 describes only
-a clean either/or; the legacy `engine.py` has a separate `fill_to_min`
-code path that blends, but the report's own described/default behavior,
-and this platform's, is the clean fallback branch, not `fill_to_min`).
+Let `S` be the survivors after ranking and the `max_positions` cap, and
+`d = deployable_pct` (0.95). Exactly one of two branches runs.
+
+### Full quota — `len(S) >= min_positions` (3)
+
+Unchanged from the report: score-proportional weighting over `S`.
+
+```
+k              = d / sum(score_i for i in S)      (0.0 if that sum is 0.0)
+stock_weight_i = score_i * k                       -> sums to d
+cash_weight    = max(0.0, 1.0 - sum(stock_weight)) -> 1 - d
+```
+
+`k` is recorded on the decision summary as
+`reference_score_to_weight_ratio`. This is the **only** value that
+crosses a quarter boundary (see "Cross-quarter state" below). No ETF
+sleeve is added; `fallback_decision` is `None`.
+
+### Partial fill — `0 <= len(S) < min_positions`
+
+The survivors are **never discarded** and the quarter is **never held in
+cash**. Let `reference_k` be the `reference_score_to_weight_ratio`
+recorded by the most recent **prior full-quota** quarter, or `0.0` if no
+full-quota quarter has occurred yet in this run (bootstrap).
+
+```
+stock_weight_i = score_i * reference_k             (NOT renormalized over S)
+stock_total    = sum(stock_weight_i)
+
+# Safety clamp -- reference_k comes from a different quarter, so nothing
+# structurally bounds stock_total. Scale proportionally if it overruns:
+if stock_total > d:
+    stock_weight_i *= d / stock_total
+    stock_total     = d
+
+etf_budget     = d - stock_total                   (>= 0 after the clamp)
+etf_weight_j   = sleeve_weight_j * etf_budget      (sleeve_weight sums to 1.0)
+cash_weight    = max(0.0, 1.0 - stock_total - sum(etf_weight)) -> 1 - d
+```
+
+The deliberate non-renormalization is the point of the mechanism: a thin
+quarter's few picks keep the same per-unit-of-score conviction a full
+quarter would have given them, rather than being inflated to absorb the
+whole budget just because they had few peers. Whatever budget they leave
+unused is parked in the ETF sleeve instead of in cash.
+
+`etf_budget == 0.0` (the clamp consumed the whole budget) yields
+zero-weighted sleeve legs, which is the correct representation and needs
+no special case.
+
+Survivors are emitted as `SignalKind.PRIMARY` recommendations; sleeve
+legs as `SignalKind.FALLBACK`. The outcome is
+`FilingMomentumOutcome.BLENDED` -> `StrategyStatus.FALLBACK`.
+
+If the injected `fallback_statistics` do not cover every configured
+`fallback_ticker`, the quarter returns
+`FilingMomentumOutcome.MISSING_REQUIRED_DATA` — a genuine
+data-availability failure, since the sleeve is always configured.
+
+## Cross-quarter state
+
+`reference_score_to_weight_ratio` is the strategy's only cross-quarter
+state. `backtest.filing_momentum_runner` carries it in a local
+`carried_reference_ratio` across its period loop and passes it into each
+quarter's `FilingMomentumEvaluationInputs
+.previous_reference_score_to_weight_ratio`. It is updated **only** when a
+quarter publishes a non-`None` ratio — i.e. only on a full quota. A
+partial-fill quarter publishes `None`, which must never overwrite the
+carried value, so "most recent full-quota quarter" survives any number of
+intervening thin quarters.
 
 ## Primary weighting
 
@@ -96,9 +153,13 @@ this evaluator reports that 50% as-is — it never multiplies by
 this stage) converts strategy-relative weights into total-portfolio
 exposure.
 
-## Fallback weighting
+## ETF-sleeve weighting
 
-**`score_proportional_weights` must never be used for fallback** — it is
+The sleeve is `fallback_tickers`, defaulting to `("VOO", "VTI")` — a
+platform design decision, not a report value (the report specified
+SPY/VGT). How the sleeve is *split* is unchanged from the report's rule.
+
+**`score_proportional_weights` must never be used for the sleeve** — it is
 score-proportional over *qualified stock candidates*, a different
 concept entirely. `fallback_weighting.dynamic_fallback_weights`
 implements the report's own rule instead (§5.4: trailing 12-quarter
@@ -123,22 +184,25 @@ whatever is available (no minimum-count requirement, matching legacy's
 mode is equal weighting, per the report's own "...rather than equal
 weight" phrasing implying that as the alternative.
 
-**Fallback deployment percentage**: confirmed **not** assumed — the
-legacy `engine.py` computes fallback quarter return as `deployable_pct *
-sum(fb_wts[t] * fb_rets[t] ...)`, i.e. the same 95%/5%-cash-buffer
-convention applies to the fallback sleeve. This evaluator scales the raw
-(sum-to-1.0) fallback weights by `config.deployable_pct` before emitting
-them as recommendations, for the same reason.
+**Sleeve deployment percentage**: the same 95%/5%-cash-buffer convention
+applies to the sleeve as to the stock legs — the raw (sum-to-1.0) sleeve
+weights are scaled by `etf_budget`, which is itself carved out of
+`deployable_pct`. So stock legs + sleeve legs always total exactly
+`deployable_pct`, and cash is always the same `1 - deployable_pct`
+reserve regardless of which branch ran.
 
 ## Outcome states
 
-`FilingMomentumOutcome`: `primary_selection`, `fallback`,
-`market_regime_blocked`, `cash` (reserved for a future explicit-cash
-directive; not reachable via the current decision paths, which only
-produce cash via a market regime block), `no_signal` (no fallback tickers
-configured at all), `missing_required_data` (fallback needed but its
-statistics are absent), `invalid_input`, `disabled`. Each maps onto the
-shared `StrategyStatus` — see `_OUTCOME_TO_STATUS` in `strategy.py`.
+`FilingMomentumOutcome`: `primary_selection` (full quota), `blended`
+(partial fill: stocks + ETF sleeve), `missing_required_data` (the sleeve
+was needed but its statistics are absent), `invalid_input`, `disabled`.
+Each maps onto the shared `StrategyStatus` — see `_OUTCOME_TO_STATUS` in
+`strategy.py`; `blended` maps to `StrategyStatus.FALLBACK`.
+
+`market_regime_blocked`, `cash`, and `no_signal` were removed. The first
+had no mechanism left once the gate was deleted; the latter two are
+unreachable by design, since the strategy always deploys
+`deployable_pct` unless the data to do so is genuinely missing.
 
 ## Recommendation roles
 
@@ -150,8 +214,9 @@ was needed. Cash is represented by an empty `recommendations` tuple plus
 
 ## Strategy-specific inputs and the protocol
 
-`FilingMomentumEvaluationInputs` (config + scored candidates + market/
-per-instrument regime results + fallback statistics) is passed through
+`FilingMomentumEvaluationInputs` (config + scored candidates + ETF-sleeve
+statistics + the previous full-quota quarter's reference ratio) is passed
+through
 `StrategyEvaluationContext.strategy_config` — Stage 2's own designated
 per-strategy extension point — rather than adding fields to the shared
 context. `FilingMomentumMLStrategy.evaluate()` raises `TypeError` if
@@ -160,9 +225,11 @@ carry Filing Momentum ML's shape.
 
 ## Unresolved ambiguities
 
-- The report never states a minimum fallback-quarter-count requirement;
+- The report never states a minimum sleeve-quarter-count requirement;
   the legacy behavior (use whatever's available) was adopted as
   mathematically coherent and not contradicted.
-- `FilingMomentumOutcome.CASH` exists in the vocabulary but has no current
-  trigger path distinct from `MARKET_REGIME_BLOCKED` — reserved for a
-  future explicit cash directive if one is ever needed.
+- The partial-fill mechanism is this platform's own design, so the report
+  offers no guidance on its edge cases. Every one of them is decided
+  explicitly above (bootstrap reference of 0.0, the proportional safety
+  clamp, zero-weight sleeve legs when `etf_budget` is 0.0) rather than
+  left to emerge from the arithmetic.
