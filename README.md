@@ -14,40 +14,59 @@ developed in.
 
 ## Status
 
-Stage 2.1 of a staged rebuild: platform foundation only (shared domain
-types, typed configuration, the strategy protocol/registry, and Filing
-Momentum ML's configuration schema + pure report formulas, including
-score-proportional weighting). No data acquisition, model training,
-regime gate, qualification, backtest engine, or reporting exists yet —
-see the Stage 2 deliverable report for the exact Stage 3 scope.
+Through Stage 10 of a staged build. Filing Momentum ML's full pipeline
+exists as production code and tests: configuration schema and pure report
+formulas, the point-in-time feature pipeline, the canonical Markov + HMM
+regime evaluator, the strategy decision evaluator, model training/scoring,
+a standalone historical backtest runner, performance analysis, and
+report/reproducibility-comparison generation. Stage 10 adds the
+**offline production research workflow** around all of that: dependency-
+availability gating, a typed data-provenance manifest, a read-only legacy-
+cache audit, severity-graded raw-data validation, normalization of
+provider-shaped input into the existing domain models, model-training and
+regime-evaluation dependency boundaries, top-level orchestration with
+checkpointed resume, a narrow `atlas-quant filing-momentum` CLI, and 11
+numbered research notebooks demonstrating the whole pipeline on synthetic
+data.
+
+**No genuine historical backtest has been run.** This environment does
+not have scikit-learn, hmmlearn, or requests installed, and no real
+filing/price/universe/sector data has been acquired (no provider adapter
+exists yet). See
+`research/strategies/filing_momentum_ml/docs/reproducibility_findings.md`
+for the exact blocking checklist, install commands, and the stated
+classification (`NOT_REPRODUCIBLE_MISSING_DATA`) — nothing in this
+repository should be read as a strategy performance claim.
 
 `~/Downloads/report_current.html` is the strategy specification's sole
 source of truth; this is independent of this repository's Git history.
-Git tracks *implementation* history going forward (this repository was
-`git init`-ed as part of Stage 2.1) — it does not establish or replace
+Git tracks *implementation* history — it does not establish or replace
 strategy provenance. The separate legacy `Arnold_Quant` prototype
 repository is a reference only, not an authority: its code may be
 cross-checked or reused for infrastructure ideas, but its historical
 cached backtest results are not treated as authoritative unless their
 data, model settings, feature mode, and configuration identity can be
-independently verified against this platform's own configuration.
+independently verified against this platform's own configuration (see
+`production/legacy_audit.py`, which performs only a read-only,
+diagnostic-only pass over it and never deserializes its pickle caches).
 
-Stage 2.1 closed the Stage 2 gaps found during the recovery audit: it
-added the `score_proportional_weights` pure formula (report §5.3) and its
-tests, added round-trip serialization (`to_dict`/`from_dict`) and tests
-for `StrategyResult`, `AuditRecord`, and `AuditTrail`, and investigated
-(but did not add) a proposed `min_positive_labels` configuration field —
-see the provenance note in
-`strategies/filing_momentum_ml/config.py:FilingMomentumMLConfig` for why:
-the report defines no such independent parameter.
+See `docs/adding_a_strategy.md` for the pattern a second strategy would
+follow — no second strategy exists yet.
 
 ## Layout
 
 ```
 src/atlas_quant/           production code — the only authoritative
                            strategy logic lives here
+  cli/                     the `atlas-quant` console script
+  strategies/filing_momentum_ml/production/
+                           Stage 10's offline production-research workflow
 research/                  notebooks and research artifacts; never
                            authoritative, must import from src/
+  strategies/filing_momentum_ml/notebooks/
+                           the 00-10 numbered production-research notebooks
+  strategies/filing_momentum_ml/docs/
+                           strategy-specific research documentation
 tests/                     unit/integration/regression/golden tests
 docs/                      platform-level documentation
 config/                    environment-specific configuration files
@@ -63,3 +82,47 @@ config/                    environment-specific configuration files
 
 No network access, subprocess execution, or production-cache writes occur
 in the default test run — see `tests/_safety.py`.
+
+## Optional dependency groups
+
+The core package (pandas/numpy) always imports without any of these.
+Install only what a given task needs — nothing here is installed
+automatically by any code in this repository:
+
+```
+pip install -e '.[model]'           # scikit-learn>=1.3.0,<2.0.0 — real model training
+pip install -e '.[regime]'          # hmmlearn>=0.3.0,<0.4.0 — real HMM regime evaluation
+pip install -e '.[production-data]' # requests, pyarrow — real data acquisition (once a provider adapter exists)
+pip install -e '.[notebooks]'       # jupyter, nbformat — to open the research notebooks interactively
+pip install -e '.[research]'        # all of the above
+```
+
+`atlas-quant filing-momentum` (installed via this package's console
+script) reports exactly which of these are missing before attempting any
+step that needs them — see
+`.venv/bin/atlas-quant filing-momentum run-backtest --help` and
+`src/atlas_quant/dependency_status.py`.
+
+## Filing Momentum ML production research CLI
+
+```
+atlas-quant filing-momentum validate-data --raw-root data/raw/filing_momentum_ml
+atlas-quant filing-momentum build-features --raw-root data/raw/filing_momentum_ml --start-quarter 2015-03-31 --end-quarter 2024-12-31
+atlas-quant filing-momentum build-labels   --raw-root data/raw/filing_momentum_ml --start-quarter 2015-03-31 --end-quarter 2024-12-31
+atlas-quant filing-momentum run-backtest   --raw-root data/raw/filing_momentum_ml --manifest data/manifests/filing_momentum_ml/data_manifest.json \
+    --start-quarter 2015-03-31 --end-quarter 2024-12-31 --checkpoint-root data/manifests/filing_momentum_ml
+atlas-quant filing-momentum build-report   --raw-root data/raw/filing_momentum_ml --manifest data/manifests/filing_momentum_ml/data_manifest.json \
+    --start-quarter 2015-03-31 --end-quarter 2024-12-31 --source-report-html ~/Downloads/report_current.html
+atlas-quant filing-momentum compare-report --report-json research/strategies/filing_momentum_ml/outputs/<report_identity>.json
+atlas-quant filing-momentum run-all        --raw-root data/raw/filing_momentum_ml --manifest data/manifests/filing_momentum_ml/data_manifest.json \
+    --start-quarter 2015-03-31 --end-quarter 2024-12-31
+```
+
+Raw data is read only from JSON files the caller supplies under
+`--raw-root` (see
+`research/strategies/filing_momentum_ml/docs/data_provenance_manifest.md`
+for the exact schema) — this CLI never fetches data over the network and
+never reaches into the legacy `Arnold_Quant` repository automatically.
+Every artifact write refuses to overwrite an existing file unless
+`--overwrite` is passed; `--dry-run` computes every step without writing
+anything to disk.
