@@ -49,13 +49,19 @@ import pytest
 # .DEFAULT_CACHE_ROOT = <repo>/data/cache/filing_momentum_ml/features).
 # Stage 9 introduces the report output root
 # (atlas_quant.strategies.filing_momentum_ml.reporting.report_builder
-# .DEFAULT_REPORT_OUTPUT_ROOT = <repo>/outputs/reports). The substrings
-# below match these paths (and their atomic-write temp files, which live
-# alongside them in the same directory) whether referenced as an absolute
-# or a repo-relative path.
+# .DEFAULT_REPORT_OUTPUT_ROOT = <repo>/outputs/reports). Stage 10 introduces
+# the production research dataset roots (raw provider payloads, normalized
+# Stage 3 records, dataset/run manifests) and the research notebook output
+# directory. The substrings below match these paths (and their atomic-write
+# temp files, which live alongside them in the same directory) whether
+# referenced as an absolute or a repo-relative path.
 PROTECTED_PATH_NAMES: tuple[str, ...] = (
     "data/cache/filing_momentum_ml",
     "outputs/reports",
+    "data/raw/filing_momentum_ml",
+    "data/normalized/filing_momentum_ml",
+    "data/manifests/filing_momentum_ml",
+    "research/strategies/filing_momentum_ml/outputs",
 )
 
 

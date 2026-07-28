@@ -14,6 +14,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
+# Stage 10: none of these are installed by default, and the core package
+# must keep importing without them (verified by tests/_safety.py-adjacent
+# import-smoke tests). Install only the group(s) a given task needs.
+model = ["scikit-learn>=1.3.0,<2.0.0"]
+regime = ["hmmlearn>=0.3.0,<0.4.0"]
+production-data = ["requests>=2.31.0", "pyarrow>=14.0.0"]
+notebooks = ["jupyter>=1.0.0", "nbformat>=5.9.0"]
+research = ["atlas-quant[model,regime,production-data,notebooks]"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

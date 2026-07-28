@@ -12,3 +12,13 @@ htmlcov/
 .DS_Store
 .env
 .env.*
+
+# Filing Momentum ML production research data -- never committed: raw
+# provider payloads, normalized records, feature/model/regime caches,
+# dataset manifests, generated reports, and notebook run outputs.
+data/raw/filing_momentum_ml/
+data/normalized/filing_momentum_ml/
+data/cache/filing_momentum_ml/
+data/manifests/filing_momentum_ml/
+outputs/reports/
+research/strategies/filing_momentum_ml/outputs/
