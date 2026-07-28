@@ -83,6 +83,30 @@ this code) and reuses an existing Stage 3-9 service unchanged.
    the Stage 7 runner itself calls internally, in the same order, so a
    standalone feature/label build can never diverge from what a full
    backtest would compute.
+
+   **Shared strategy cohort vs. issuer fiscal history.** Each shared
+   calendar cohort evaluates every eligible ticker using that ticker's
+   most recent filed fundamental history available as of the cohort's own
+   buy timestamp — an *ordinal* rule (`data_sec.py`'s own
+   `get_available_as_of`: "capped at the most recent 8 filed quarters"),
+   never a requirement that the issuer's own fiscal quarter-end equal the
+   shared cohort's calendar date. `FeatureObservation` records both
+   concepts explicitly and never conflates them: `quarter_end`/
+   `fiscal_period` (the issuer's own actual fiscal quarter — orders its
+   history, resolves amendments, computes QoQ/trend features) and
+   `strategy_cohort_end`/`cohort_buy_timestamp` (the shared cohort used
+   for global labeling, rolling training windows, portfolio entry/exit,
+   and benchmark comparison). An exact issuer fiscal-quarter-end match to
+   the shared cohort end is used only to refine the feature/entry
+   timestamp (`filed_at + 1 trading day`, capped at the cohort's own buy
+   timestamp — never the issuer's own fiscal quarter-end, which never
+   replaces the shared cohort's clock in this cap); absence of an exact
+   match falls back to the shared cohort's buy timestamp directly and
+   does not exclude the ticker. This is recovered report/legacy behavior
+   (`ml_scorer.py`'s `RollingMLScorer`), not newly invented logic — see
+   `reproducibility_findings.md` for the investigation, real-data
+   recovery counts, and why a "nearest calendar quarter" mapping was
+   considered and rejected.
 7. **Model-training boundary** (`production.model_boundary`) — checks
    scikit-learn's availability *before* calling Stage 6's `train_model`
    with the real `build_hgbc_estimator` factory. Never substitutes

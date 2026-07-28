@@ -88,6 +88,105 @@ project does not perform autonomously. Once resolved on a given machine:
 pip install -e '.[regime]'   # hmmlearn>=0.3.0,<0.4.0
 ```
 
+## The cohort-snapshot correction (`implementation_bug`)
+
+A first real-backtest attempt against the acquired dataset above showed
+**zero trainable quarters across the entire universe, for every
+requested quarter** — not a dependency block, a genuine architectural
+bug surfaced for the first time by real data.
+
+**Root cause**: `build_feature_observation` required the selected
+filing's own fiscal `quarter_end` to *exactly equal* the shared strategy
+cohort's calendar quarter-end as a condition for the row to exist at
+all. Classified as `implementation_bug`, not a missing report rule —
+every synthetic test fixture in this project is calendar-aligned by
+construction, so this was invisible until real data, where most real
+issuers use 52/53-week or otherwise offset fiscal years:
+
+| | |
+|---|---|
+| Real filing rows exactly calendar-aligned | 75,938 / 96,852 (78.4%) |
+| Symbols fully calendar-aligned | 336 / 507 |
+| Symbols with **zero** calendar-aligned quarters | 61 / 507 |
+| AAPL offset from nearest calendar quarter-end | -1 to -6 days (52/53-week, last-Saturday fiscal calendar) |
+| WMT offset from nearest calendar quarter-end | consistently -30 to -31 days (fiscal year ends January 31 — a genuinely different fiscal year, not a rounding artifact) |
+
+**Investigation** (`report_current.html` + the legacy implementation,
+per this project's own required process before changing any timing
+rule): `report_current.html` §4.1 documents `get_available_as_of` as
+"only quarters with filing dates on or before the as-of date are
+included, **capped at the most recent 8 filed quarters**" — an *ordinal*
+rule, never a calendar-date-match rule. Reverse-engineering the legacy
+`ml_scorer.py`/`data_sec.py` confirms this precisely: every ticker
+produces **one candidate row per shared cohort**, built via
+`get_available_as_of(ed, buy_dt)` (ordinal, filed-date-based — no exact
+calendar matching at all) from whichever fiscal history is most recently
+knowable as of that cohort's own buy timestamp. The *only* place exact
+calendar alignment appears in the legacy code is a minor
+entry-timing refinement (`feature_dt = min(filed+1, buy_dt)` when an
+exact `filed_map[qend_str]` match exists; otherwise `feature_dt =
+buy_dt` directly) — never an inclusion requirement, never nearest-date
+matching.
+
+**Candidate mapping rules considered**:
+1. *Exact date equality* (the original, buggy behavior) — rejects 21.6%
+   of all real filing rows outright, and 61 symbols entirely, permanently.
+2. *Nearest calendar quarter, bounded tolerance* — works for AAPL/KO-style
+   issuers (offset ≤6 days) but fails for WMT-style issuers without a
+   ~35-day tolerance, which is a third of a quarter's length and risks
+   cross-cohort ambiguity for other issuers near a boundary — **rejected**,
+   not supported by legacy evidence.
+3. *Ordinal cohort-snapshot* (recovered report/legacy behavior, adopted) —
+   every ticker gets one row per shared cohort from its most-recently-
+   knowable fiscal history; exact alignment only refines entry timing.
+
+**Correction implemented**: `FeatureObservation` now records
+`quarter_end`/`fiscal_period` (the issuer's own actual fiscal quarter —
+orders history, resolves amendments, computes trend features) and
+`strategy_cohort_end`/`cohort_buy_timestamp` (the shared cohort used for
+global labeling, rolling training, portfolio entry/exit, benchmark
+comparison) as explicit, never-conflated fields. `build_feature_observation`
+rejects only for genuine data insufficiency, never fiscal/calendar
+misalignment. The day-42 entry-timing cap is always anchored to the
+shared cohort's own clock (`strategy_cohort_end + 42 days`), never the
+issuer's own fiscal quarter-end — correcting an additional, related
+misreading found during this fix. `FEATURE_SCHEMA_VERSION`/
+`MODEL_SCHEMA_VERSION` were both bumped so a cache built under the old,
+buggy behavior is rejected (different cache key) rather than silently
+reused (none existed in production at the time of this fix).
+
+**Real-data recovery** (518 symbols, 2015-03-31..2024-12-31, 40 shared
+cohorts):
+
+| Metric | Before correction | After correction |
+|---|---|---|
+| Successful feature observations | 0 (every quarter rejected) | 18,960 / 20,720 candidate attempts (91.5%) |
+| Rejection reason | fiscal/calendar mismatch (masking a separate per-cohort-cutoff bug this fix also corrected) | 1,760 rejections, 100% genuine data insufficiency ("no fundamental history knowable as of data_cutoff") |
+| Unique symbols represented | 0 | 502 / 518 |
+| Exact-match timing vs. cohort-buy fallback | n/a | 10,932 exact-match / 8,028 fallback |
+| Training-quarter eligibility | 0 of every requested quarter | 32 of 39 candidate target quarters |
+| Total positive labels across cohorts | 0 | 400 |
+| Future filing leakage / duplicate (instrument, cohort) rows | n/a | 0 / 0 |
+
+Focused per-issuer diagnostics (observations / exact-match / fallback / rejected, across all 40 cohorts):
+
+| Symbol | Observations | Exact match | Fallback | Rejected |
+|---|---|---|---|---|
+| AAPL | 40 | 4 | 36 | 0 |
+| WMT | 40 | 0 | 40 | 0 |
+| MMM | 40 | 30 | 10 | 0 |
+| KO | 40 | 6 | 34 | 0 |
+| ZTS | 40 | 21 | 19 | 0 |
+
+A second, related bug this correction also fixed: `run_feature_pipeline`
+previously took one batch-wide `data_cutoff` shared across every target
+cohort in a multi-cohort build, letting an early cohort see filings only
+knowable as of a *later* cohort's own buy date — a real lookahead bug
+masked by the exact-match bug (which rejected nearly everything anyway,
+so the leakage was never observed in practice). Each target now carries
+its own `cohort_buy_timestamp` as its own cutoff; the real-data run above
+confirms zero future-filing-leakage violations.
+
 ## Remaining checklist for a genuine production backtest
 
 | # | Requirement | Status |
@@ -100,9 +199,13 @@ pip install -e '.[regime]'   # hmmlearn>=0.3.0,<0.4.0
 | 6 | Real price data acquired | **Done** -- 4,436,726 rows, yfinance |
 | 7 | A real `DataProvenanceManifest` | **Done** -- `data/manifests/filing_momentum_ml/data_manifest.json` |
 | 8 | Raw-data validation passing (no `FATAL`) | **Done** -- 0 fatal |
-| 9 | Legacy `Arnold_Quant` caches independently verified, if reused | **Not attempted** -- only the diagnostic, read-only audit (notebook 01) has run; not a blocker for a fresh acquisition-based run, only relevant if legacy caches are ever reused |
+| 9 | Feature build produces trainable rows for non-calendar-aligned issuers | **Done** (cohort-snapshot correction, above) |
+| 10 | Legacy `Arnold_Quant` caches independently verified, if reused | **Not attempted** -- only the diagnostic, read-only audit (notebook 01) has run; not a blocker for a fresh acquisition-based run, only relevant if legacy caches are ever reused |
 
 ## Resume commands
+
+Once `hmmlearn` is installed on a machine with a working C++ toolchain,
+the report-compliant command (using the default `gate_mode="both"`) is:
 
 ```bash
 atlas-quant filing-momentum run-backtest \
@@ -112,13 +215,31 @@ atlas-quant filing-momentum run-backtest \
     --checkpoint-root data/manifests/filing_momentum_ml
 ```
 
-Once `hmmlearn` is installed on a machine with a working C++ toolchain,
-this exact command (or `build-report --source-report-html
-~/Downloads/report_current.html` to also generate the comparison) is
-what actually attempts the genuine historical backtest. Re-running it
-resumes from the last completed checkpoint; a checkpoint computed under a
-different dataset/config identity is rejected
-(`BLOCKED_IDENTITY_MISMATCH`), never silently reused.
+(or `build-report --source-report-html ~/Downloads/report_current.html`
+to also generate the comparison). Re-running it resumes from the last
+completed checkpoint; a checkpoint computed under a different
+dataset/config identity is rejected (`BLOCKED_IDENTITY_MISMATCH`), never
+silently reused.
+
+**On this machine specifically**, since `hmmlearn` cannot be installed,
+`--regime-gate-mode none` was used to run the pipeline end-to-end anyway:
+
+```bash
+atlas-quant filing-momentum run-backtest \
+    --raw-root data/raw/filing_momentum_ml \
+    --manifest data/manifests/filing_momentum_ml/data_manifest.json \
+    --start-quarter 2015-03-31 --end-quarter 2024-12-31 \
+    --regime-gate-mode none \
+    --checkpoint-root data/manifests/filing_momentum_ml
+```
+
+**This is a genuine, disclosed deviation from `report_current.html`'s own
+documented "both" default (§5.1: "the only gate logic actually used") —
+`gate_mode="none"` was already an existing, spec-exposed `RegimeConfig`
+value (not invented for this purpose), and its use here is captured in
+the run's own `config_identity`. A result produced this way must never
+be presented as reproducing the report's documented regime-gated
+behavior — see the next section.**
 
 ## What a genuine reproduction classification still requires
 
