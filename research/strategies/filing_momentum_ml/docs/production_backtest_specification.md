@@ -118,14 +118,27 @@ this code) and reuses an existing Stage 3-9 service unchanged.
     automatically). Every artifact write refuses to overwrite an existing
     file unless `--overwrite` is passed; `--dry-run` computes without
     writing anything.
+12. **Real-data acquisition** (`production.acquisition`, Stage 11;
+    `atlas-quant filing-momentum acquire-data`) — the one CLI subcommand
+    that performs real network requests, producing input for step 2's
+    manifest and step 5's normalization, never a second data pipeline.
+    SEC EDGAR's XBRL company-facts API for filings (grouped by
+    accession number so multiple concepts from one real filing are
+    merged correctly), yfinance for daily prices (`split_dividend_adjusted`),
+    and the S&P 500 + Nasdaq 100 Wikipedia pages for universe/sector data.
+    Requires a real `SEC_EDGAR_USER_AGENT` per SEC's fair-access policy;
+    never hardcodes one. A per-symbol failure is caught and recorded as a
+    warning, never aborting the whole acquisition run.
 
 ## What this stage explicitly does not include
 
-- **No provider adapters.** Nothing in this stage fetches SEC EDGAR
-  filings, real daily prices, a real S&P 500 + Nasdaq 100 universe
-  snapshot, or real sector classifications over the network. The CLI's
-  raw-data JSON schema (see `data_provenance_manifest.md`) is the
-  boundary a future acquisition step would need to produce data in.
+- **Real data acquisition exists as of Stage 11** (`strategies/filing_momentum_ml/acquisition/`):
+  SEC EDGAR filings, yfinance daily prices, and Wikipedia-sourced S&P 500
+  + Nasdaq 100 universe/sector data, all converted into the CLI's
+  existing raw-data JSON schema (see `data_provenance_manifest.md`) via
+  `atlas-quant filing-momentum acquire-data`. This still does not, by
+  itself, complete a genuine backtest -- see `reproducibility_findings.md`
+  for the current, single remaining blocker.
 - **No live/paper trading.** No streaming, scheduling, alerting, broker
   authentication, order generation/placement, or execution.
 - **No second strategy and no multi-strategy allocation.** Only
