@@ -47,10 +47,16 @@ import pytest
 # Stage 3 introduces the Filing Momentum ML feature cache
 # (atlas_quant.strategies.filing_momentum_ml.feature_cache
 # .DEFAULT_CACHE_ROOT = <repo>/data/cache/filing_momentum_ml/features).
-# The substring below matches that path (and its atomic-write temp files,
-# which live alongside it in the same directory) whether referenced as an
-# absolute or a repo-relative path.
-PROTECTED_PATH_NAMES: tuple[str, ...] = ("data/cache/filing_momentum_ml",)
+# Stage 9 introduces the report output root
+# (atlas_quant.strategies.filing_momentum_ml.reporting.report_builder
+# .DEFAULT_REPORT_OUTPUT_ROOT = <repo>/outputs/reports). The substrings
+# below match these paths (and their atomic-write temp files, which live
+# alongside them in the same directory) whether referenced as an absolute
+# or a repo-relative path.
+PROTECTED_PATH_NAMES: tuple[str, ...] = (
+    "data/cache/filing_momentum_ml",
+    "outputs/reports",
+)
 
 
 def _is_protected(path: object) -> bool:
