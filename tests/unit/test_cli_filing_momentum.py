@@ -196,6 +196,39 @@ def test_run_backtest_blocked_missing_dependency(monkeypatch, tmp_path):
     assert "scikit-learn" in out
 
 
+def test_run_backtest_regime_gate_mode_none_skips_hmmlearn_requirement(monkeypatch, tmp_path):
+    """--regime-gate-mode none is a genuine, disclosed deviation from
+    report_current.html's "both" default -- verifies it actually reaches
+    the CLI's ProductionRunInputs, and that a missing hmmlearn no longer
+    blocks the run when it's set."""
+    import atlas_quant.strategies.filing_momentum_ml.production.orchestration as orchestration_module
+    from atlas_quant.dependency_status import DependencyAvailability, DependencyCategory, DependencyStatus
+
+    monkeypatch.setattr(
+        orchestration_module, "missing_required_for_production",
+        lambda report: (
+            DependencyStatus(
+                "hmmlearn", DependencyCategory.PRODUCTION_DATA,
+                DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST, None, "0.3.0",
+                detail="module 'hmmlearn' not found",
+            ),
+        ),
+    )
+    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", _fake_estimator_factory)
+
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+    code, out, err = _run([
+        "filing-momentum", "run-backtest", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
+        "--start-quarter", "2023-03-31", "--end-quarter", "2023-03-31",
+        "--regime-gate-mode", "none", "--dry-run",
+    ])
+    assert code != 3
+    assert "blocked_missing_dependency" not in out
+
+
 def _fake_estimator_factory(model_config):
     from atlas_quant.strategies.filing_momentum_ml.estimator import EstimatorBuildInfo
 

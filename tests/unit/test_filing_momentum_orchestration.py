@@ -1,11 +1,11 @@
 """Unit tests for the top-level Filing Momentum ML production orchestration.
 
-In this repository's venv, scikit-learn/hmmlearn/requests are not
-installed -- the primary path under test is the clean
-BLOCKED_MISSING_DEPENDENCY report. A monkeypatched "dependencies
-available" path exercises the full Stage 3/6/7/8 wiring with fake
-estimator/HMM fitter (test-only, never production code) to prove the
-orchestration reaches COMPLETED given a working environment.
+Dependency availability is monkeypatched throughout rather than assumed
+from the ambient environment (which packages happen to be installed has
+changed across sessions of this project before) -- both the
+BLOCKED_MISSING_DEPENDENCY report and the "dependencies available" path
+(full Stage 3/6/7/8 wiring with fake estimator/HMM fitter, test-only,
+never production code) are exercised this way.
 """
 
 from datetime import date, datetime, timedelta
@@ -102,11 +102,75 @@ def _build_inputs() -> ProductionRunInputs:
     )
 
 
-def test_blocked_missing_dependency_in_this_environment():
+def _missing_hmmlearn_only(report):
+    from atlas_quant.dependency_status import DependencyAvailability, DependencyCategory, DependencyStatus
+
+    return (
+        DependencyStatus(
+            "hmmlearn", DependencyCategory.PRODUCTION_DATA,
+            DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST, None, "0.3.0",
+            detail="module 'hmmlearn' not found",
+        ),
+    )
+
+
+def test_blocked_missing_dependency(monkeypatch):
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", _missing_hmmlearn_only)
     result = run_filing_momentum_production_backtest(_build_inputs())
     assert result.state == ProductionRunState.BLOCKED_MISSING_DEPENDENCY
     assert result.missing_dependencies
     assert result.backtest_result is None
+
+
+def test_gate_mode_both_still_requires_hmmlearn(monkeypatch):
+    """report_current.html's own documented production default ("both")
+    genuinely needs the HMM component's verdict -- hmmlearn stays required."""
+    import dataclasses
+
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", _missing_hmmlearn_only)
+    inputs = _build_inputs()
+    assert inputs.backtest_config.regime_config.gate_mode == "both"
+    result = run_filing_momentum_production_backtest(inputs)
+    assert result.state == ProductionRunState.BLOCKED_MISSING_DEPENDENCY
+    assert any(d.name == "hmmlearn" for d in result.missing_dependencies)
+
+
+def test_gate_mode_none_does_not_require_hmmlearn(monkeypatch):
+    """A deliberate, disclosed deviation from report_current.html's default
+    -- gate_mode="none" never consults the HMM component's verdict, so a
+    missing hmmlearn no longer blocks the run."""
+    import dataclasses
+
+    from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
+
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", _missing_hmmlearn_only)
+    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
+        FakeEstimator(), _fake_build_info(),
+    ))
+
+    inputs = _build_inputs()
+    inputs = dataclasses.replace(
+        inputs,
+        backtest_config=FilingMomentumBacktestConfig(
+            strategy_config=inputs.backtest_config.strategy_config,
+            regime_config=RegimeConfig(gate_mode="none"),
+        ),
+    )
+    result = run_filing_momentum_production_backtest(inputs)
+    assert result.state != ProductionRunState.BLOCKED_MISSING_DEPENDENCY
+    assert not any(d.name == "hmmlearn" for d in result.missing_dependencies)
+    # The regime gate never blocks a quarter to cash when gate_mode="none".
+    for quarter in result.backtest_result.quarter_results:
+        if quarter.market_regime is not None:
+            assert quarter.market_regime.is_blocked is False
+
+
+def test_disabled_hmm_fitter_reports_unavailable_without_importing_hmmlearn():
+    fitter = orchestration_module.DisabledHMMFitter()
+    result = fitter.fit_predict([(0.01, 0.02)], n_states=3, covariance_type="diag", n_iter=200, random_state=42)
+    assert result.converged is False
+    assert result.predicted_states == ()
+    assert result.error is not None and "disabled" in result.error
 
 
 def test_blocked_invalid_dataset_when_prices_missing(monkeypatch):

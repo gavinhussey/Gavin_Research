@@ -538,8 +538,11 @@ def _build_run_inputs(args: argparse.Namespace, bundle: NormalizedBundle, calend
     source_html = None
     if with_report and getattr(args, "source_report_html", None):
         source_html = Path(args.source_report_html).read_text()
+
+    regime_gate_mode = getattr(args, "regime_gate_mode", None) or RegimeConfig().gate_mode
+    backtest_config = FilingMomentumBacktestConfig(regime_config=RegimeConfig(gate_mode=regime_gate_mode))
     return ProductionRunInputs(
-        backtest_config=FilingMomentumBacktestConfig(), periods=periods, universe=bundle.universe,
+        backtest_config=backtest_config, periods=periods, universe=bundle.universe,
         benchmark_instrument_id=benchmark, trading_calendar=calendar, sector_encoder=SectorEncoder(),
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
         sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
@@ -628,6 +631,15 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--end-quarter", type=str, default=None, help="YYYY-MM-DD, a valid calendar quarter-end")
     parser.add_argument("--benchmark", type=str, default="SPY")
     parser.add_argument("--earnings-lag-days", type=int, default=None)
+    parser.add_argument(
+        "--regime-gate-mode", type=str, default=None, choices=("both", "either", "markov", "hmm", "none"),
+        help=(
+            "default: report_current.html's own documented production value ('both'). "
+            "'none'/'markov' do not require hmmlearn to be installed, but are a genuine, "
+            "disclosed DEVIATION from the report's specified behavior -- never claim a run "
+            "using anything but 'both' as a reproduction of report_current.html"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="compute but never write any artifact to disk")
     parser.add_argument("--overwrite", action="store_true", help="allow replacing an existing artifact")
     parser.add_argument("--json", action="store_true", dest="as_json", help="machine-readable JSON output")
