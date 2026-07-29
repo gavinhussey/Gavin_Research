@@ -29,7 +29,9 @@ def test_defaults_match_report_current_html():
     assert config.min_train_quarters == 8  # report §4.4
     assert config.n_winners == 10  # report §4.2
     assert config.max_positions == 10  # report §5.4
-    assert config.min_positions == 3  # report §5.4
+    # min_positions is a deliberate, disclosed divergence from report §5.4's 3 --
+    # see docs/reproducibility_findings.md and walkforward/filing_momentum_ml/.
+    assert config.min_positions == 6
     assert config.deployable_pct == 0.95  # report §5.3
     assert config.return_cap == 0.50  # report §5.5
     assert config.earnings_lag_days == 42  # report §5.5

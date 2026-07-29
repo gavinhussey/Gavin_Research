@@ -108,7 +108,10 @@ class FilingMomentumMLConfig:
     - ``ml_train_years`` = 3 — report §4.4 (``ML_TRAIN_YEARS``)
     - ``min_train_quarters`` = 8 — report §4.4 (``MIN_TRAIN_Q``)
     - ``n_winners`` = 10 — report §4.2 (``N_WINNERS``)
-    - ``max_positions`` = 10, ``min_positions`` = 3 — report §5.4
+    - ``max_positions`` = 10 — report §5.4. ``min_positions`` is report
+      §5.4's 3, **deliberately overridden to 6** -- see
+      ``docs/reproducibility_findings.md`` for the disclosed divergence and
+      the walk-forward evidence behind it.
     - ``deployable_pct`` = 0.95 — report §5.3 (``ML_DEPLOYABLE_PCT``)
     - ``return_cap`` = 0.50 — report §5.5 (``RETURN_CAP``)
     - ``earnings_lag_days`` = 42 — report §5.5
@@ -170,7 +173,7 @@ class FilingMomentumMLConfig:
     n_winners: int = 10
 
     max_positions: int = 10
-    min_positions: int = 3
+    min_positions: int = 6  # disclosed divergence from report §5.4's 3 -- see docs/reproducibility_findings.md
     deployable_pct: float = 0.95
     return_cap: float = 0.50
     earnings_lag_days: int = 42

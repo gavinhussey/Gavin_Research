@@ -66,10 +66,17 @@ class TestProtocolConformance:
             FilingMomentumMLStrategy().evaluate(context)
 
 
+#: Full-quota tests below use 3 candidates against an explicit
+#: min_positions=3 config -- decoupled from the production default
+#: (currently 6, see FilingMomentumMLConfig) so these generic full-quota
+#: mechanism tests don't break every time that default is retuned.
+_FULL_QUOTA_AT_3 = FilingMomentumMLConfig(min_positions=3)
+
+
 class TestPrimarySelectionAndWeighting:
     def test_three_candidates_weights_sum_to_deployable_pct(self):
         candidates = [make_scored_candidate(s, sc) for s, sc in [("AAA", 0.9), ("BBB", 0.6), ("CCC", 0.4)]]
-        result = _evaluate(candidates=candidates)
+        result = _evaluate(candidates=candidates, config=_FULL_QUOTA_AT_3)
         assert result.status == StrategyStatus.OK
         assert sum(r.weight for r in result.recommendations) == pytest.approx(0.95)
         assert result.capital_requested_pct == pytest.approx(0.95)
@@ -86,17 +93,20 @@ class TestPrimarySelectionAndWeighting:
 
     def test_unequal_scores_produce_unequal_weights(self):
         candidates = [make_scored_candidate(s, sc) for s, sc in [("AAA", 0.9), ("BBB", 0.4), ("CCC", 0.4)]]
-        result = _evaluate(candidates=candidates)
+        result = _evaluate(candidates=candidates, config=_FULL_QUOTA_AT_3)
         weights = {r.instrument_id.symbol: r.weight for r in result.recommendations}
         assert weights["AAA"] > weights["BBB"]
 
     def test_all_recommendations_are_primary_kind(self):
         candidates = [make_scored_candidate(s, 0.9) for s in ["AAA", "BBB", "CCC"]]
-        assert all(r.kind == SignalKind.PRIMARY for r in _evaluate(candidates=candidates).recommendations)
+        assert all(
+            r.kind == SignalKind.PRIMARY
+            for r in _evaluate(candidates=candidates, config=_FULL_QUOTA_AT_3).recommendations
+        )
 
     def test_full_quota_never_adds_an_etf_sleeve(self):
         candidates = [make_scored_candidate(s, 0.9) for s in ["AAA", "BBB", "CCC"]]
-        result = _evaluate(candidates=candidates)
+        result = _evaluate(candidates=candidates, config=_FULL_QUOTA_AT_3)
         assert not any(r.kind == SignalKind.FALLBACK for r in result.recommendations)
         assert result.state_update.fallback_decision is None
 
@@ -115,7 +125,7 @@ class TestReferenceScoreToWeightRatio:
     def test_full_quota_records_deployable_over_score_sum(self):
         # scores 0.9 + 0.6 + 0.4 = 1.9; k = 0.95 / 1.9 = 0.5
         candidates = [make_scored_candidate(s, sc) for s, sc in [("AAA", 0.9), ("BBB", 0.6), ("CCC", 0.4)]]
-        result = _evaluate(candidates=candidates)
+        result = _evaluate(candidates=candidates, config=_FULL_QUOTA_AT_3)
         assert result.state_update.reference_score_to_weight_ratio == pytest.approx(0.5)
         # and that ratio is exactly what produced the weights
         weights = {r.instrument_id.symbol: r.weight for r in result.recommendations}
@@ -179,7 +189,7 @@ class TestPartialFillSleeve:
 
     def test_exactly_three_survivors_uses_primary(self):
         candidates = [make_scored_candidate(s, 0.9) for s in ["AAA", "BBB", "CCC"]]
-        assert _evaluate(candidates=candidates).status == StrategyStatus.OK
+        assert _evaluate(candidates=candidates, config=_FULL_QUOTA_AT_3).status == StrategyStatus.OK
 
     def test_safety_clamp_scales_stocks_down_to_deployable_pct(self):
         # A prior quarter of many low-scoring picks yields a large k (0.95);
@@ -218,7 +228,7 @@ class TestDecisionStates:
 class TestAudit:
     def test_audit_records_every_decision_stage(self):
         candidates = [make_scored_candidate(s, 0.9) for s in ["AAA", "BBB", "CCC"]]
-        stages = [r.stage for r in _evaluate(candidates=candidates).audit_trail]
+        stages = [r.stage for r in _evaluate(candidates=candidates, config=_FULL_QUOTA_AT_3).audit_trail]
         for expected_stage in [
             "validation", "sector_exclusion", "threshold",
             "ranking", "position_cap", "min_positions_check", "weighting",

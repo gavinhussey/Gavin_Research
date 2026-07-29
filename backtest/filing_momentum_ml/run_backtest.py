@@ -1,9 +1,15 @@
 #!/usr/bin/env python
-"""Convenience wrapper around `atlas-quant filing-momentum run-backtest`.
+"""filing_momentum_ml's standard backtest: a convenience wrapper around
+`atlas-quant filing-momentum run-backtest`.
+
+One subfolder per strategy lives under `backtest/` (this is
+filing_momentum_ml's); add a sibling subfolder for each new strategy rather
+than growing this one to cover more than one. Within a strategy's subfolder,
+add one file per kind of backtest as needed (this is the standard one).
 
 Edit the constants below to change the backtest window or flags, then run:
 
-    .venv/bin/python scripts/run_backtest.py
+    .venv/bin/python backtest/filing_momentum_ml/run_backtest.py
 
 Equivalent to (and just calls straight into) the CLI command documented in
 research/strategies/filing_momentum_ml/docs/production_backtest_specification.md.
@@ -14,7 +20,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # --- edit these to change what gets run ---
 START_QUARTER = "2015-03-31"

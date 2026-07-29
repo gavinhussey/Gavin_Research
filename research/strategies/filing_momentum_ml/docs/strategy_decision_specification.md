@@ -55,7 +55,7 @@ Capped at `max_positions` (10) strictly after every other filter.
 Let `S` be the survivors after ranking and the `max_positions` cap, and
 `d = deployable_pct` (0.95). Exactly one of two branches runs.
 
-### Full quota — `len(S) >= min_positions` (3)
+### Full quota — `len(S) >= min_positions` (6 — see "min_positions divergence" below)
 
 Unchanged from the report: score-proportional weighting over `S`.
 

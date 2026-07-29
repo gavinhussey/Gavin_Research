@@ -30,6 +30,22 @@ backtest window.
 
 - Below-`min_positions` quarters keep surviving stock picks and route only
   unused deployable capital to the VOO/VTI ETF sleeve.
+- `min_positions` default is **6**, not report §5.4's **3**. This is a
+  deliberate, disclosed divergence, not an unresolved reproduction gap.
+  Rationale: a walk-forward robustness check (select the best candidate
+  from {2..10} using only 2011-2020 real data, then validate blind on
+  2021-2025) picked 6 and it ranked #1/9 out-of-sample; a rolling,
+  expanding-window re-selection at the start of every year 2015-2025
+  independently picked 6 every time, with no drift. See
+  `walkforward/filing_momentum_ml/single_split.py` and `rolling.py` for
+  the runnable checks and their full findings, documented in each
+  script's own docstring. Caveat carried over from that research: the
+  choice is driven by a small, sparse number of quarters where the
+  fallback ETF sleeve actually triggers (as few as 0, as many as ~13 out
+  of 40 real quarters depending on the candidate) — one single quarter
+  (2011-03-31) alone determined which candidate won the entire 2011-2020
+  selection window. Treat 6 as a reasonable, evidence-backed tail-risk-
+  cushioning default, not a provably optimal constant for all time.
 - Stale-price lookup is bounded by the configured price-resolution
   limits.
 - Label tie-breaking is deterministic by instrument symbol.
