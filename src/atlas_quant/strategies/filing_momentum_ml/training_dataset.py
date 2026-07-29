@@ -6,9 +6,13 @@ years of labelled data": D_train^(q) = {(x_i,q', y_i,q') : q - 3yr <= q' < q}
 excluded, and only *earlier* quarters may contribute. This module adds
 one requirement the report's set-builder notation doesn't spell out but
 that is essential for point-in-time correctness: a labeled row may only
-be used once its own label is knowable (``label_available_at <=
+be used once its own label is knowable (``label_available_at <
 training_cutoff``), not merely because its quarter falls inside the
-trailing window.
+trailing window. The comparison is strict: a label whose availability
+timestamp exactly equals ``training_cutoff`` (e.g. the immediately
+preceding quarter's exit close, which lands on the same calendar day as
+the current quarter's entry) is not yet knowable at the moment entry
+decisions are made, since that price is only realized at market close.
 """
 
 from __future__ import annotations
@@ -92,12 +96,17 @@ def build_training_dataset(
 
     Excludes: the target quarter itself, any quarter on/after it, any
     quarter before the trailing-window start, and any individual labeled
-    row whose ``label_available_at`` is after ``training_cutoff`` (even
-    if its quarter otherwise falls inside the window) — this is the
+    row whose ``label_available_at`` is on or after ``training_cutoff``
+    (even if its quarter otherwise falls inside the window) — this is the
     leakage guard: a quarter can be partially included if some of its
     rows' outcomes were knowable by ``training_cutoff`` and others were
     not, though in practice every row sharing one quarter also shares one
-    ``sell_timestamp``/``label_available_at``.
+    ``sell_timestamp``/``label_available_at``. The comparison is strict
+    (``<``, not ``<=``) because a label available *exactly at*
+    ``training_cutoff`` is not yet realized at the instant entry
+    decisions are made — this matters at the boundary, since a quarter's
+    ``sell_timestamp`` is defined to equal the following quarter's own
+    ``training_cutoff``/``entry_timestamp``.
     """
     window_start = _trailing_window_start(target_quarter_end, ml_train_years)
     audit = AuditTrail()
@@ -116,7 +125,7 @@ def build_training_dataset(
             continue
 
         rows_for_quarter = labeled_quarters[quarter_end]
-        knowable = [r for r in rows_for_quarter if r.label_available_at <= training_cutoff]
+        knowable = [r for r in rows_for_quarter if r.label_available_at < training_cutoff]
         if not knowable:
             excluded.append(ExcludedQuarter(quarter_end, "label not yet available by training_cutoff"))
             continue

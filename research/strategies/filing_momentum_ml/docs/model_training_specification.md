@@ -70,11 +70,21 @@ before the exit price exists. `training_dataset.build_training_dataset`
 enforces `D_train^(q) = {(x_i,q', y_i,q') : q - 3yr <= q' < q}` (report's
 own set notation, note the strict `q' < q`) *and* an additional,
 essential requirement the report's notation doesn't spell out:
-`label_available_at <= training_cutoff` for every included row — even a
-quarter inside the trailing window is excluded if its own outcome wasn't
-yet knowable by the training cutoff. The 3-year window boundary uses
-calendar-year arithmetic (`date.replace(year=...)`), an explicit,
-documented approximation of "3 years," not a trading-day-exact boundary.
+`label_available_at < training_cutoff` (strict) for every included row —
+even a quarter inside the trailing window is excluded if its own outcome
+wasn't yet knowable by the training cutoff. The comparison is strict, not
+`<=`, because a quarter's own `sell_timestamp`/`label_available_at` is
+defined to land on the exact same calendar day as the *next* quarter's
+`entry_timestamp`/`training_cutoff` (each period's exit lag equals the
+next period's entry lag from its own quarter-end). Under `<=`, that
+immediately-prior quarter's label would be treated as knowable at the
+literal instant it is realized — a same-day lookahead into a price that
+would not, in practice, be available before that day's entry decisions
+are placed. `<` correctly excludes exactly that one quarter, every
+retrain, disclosed as a fix in `reproducibility_findings.md`. The 3-year
+window boundary uses calendar-year arithmetic (`date.replace(year=...)`),
+an explicit, documented approximation of "3 years," not a
+trading-day-exact boundary.
 
 ## Training gates — verified as two separate, non-conflated requirements
 

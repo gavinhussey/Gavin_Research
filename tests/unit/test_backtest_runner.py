@@ -258,7 +258,13 @@ class TestReferenceRatioThreading:
     #: Evaluated quarters we deliberately starve down to a single candidate,
     #: forcing a partial fill. Everything else keeps the full 15-name
     #: universe and therefore fills its quota (capped at max_positions=10).
-    PARTIAL_QUARTERS = (date(2020, 6, 30), date(2020, 9, 30))
+    #: Chosen late enough that a full-quota PRIMARY quarter (and its
+    #: published ratio) precedes both -- training eligibility now onsets
+    #: one quarter later than before the training-window boundary fix
+    #: (the immediately-prior quarter's label is no longer counted as
+    #: knowable at the exact instant it becomes available; see
+    #: training_dataset.build_training_dataset).
+    PARTIAL_QUARTERS = (date(2021, 6, 30), date(2021, 9, 30))
 
     def _deps(self):
         universe = make_backtest_universe(15)

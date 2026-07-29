@@ -517,12 +517,17 @@ class TestFullCohortSnapshotIntegration:
             strategy_id=config.strategy_id, feature_schema_version=feature_result.feature_schema_version,
             ml_train_years=config.ml_train_years, model_config_identity=config.model.identity(),
         )
-        # All prior cohorts (every one of them, mixed-calendar universe
-        # included) contributed rows -- this is exactly what was
-        # impossible before the correction (every non-calendar-aligned
-        # issuer was previously rejected out of every cohort).
+        # All prior cohorts except the immediately preceding one (every
+        # non-calendar-aligned issuer's rows included) contributed rows --
+        # the calendar-alignment rejection is exactly what was impossible
+        # before the correction. The single remaining exclusion is the
+        # target quarter's own immediately-prior quarter: its
+        # label_available_at (= its own exit_timestamp) is exactly equal
+        # to the target's training_cutoff (= the target's own
+        # entry_timestamp, since one quarter's exit lands the same day as
+        # the next quarter's entry), so it is correctly not yet knowable.
         assert dataset.total_row_count > 0
-        assert dataset.quarter_count == len(periods) - 1  # every prior cohort, none excluded for calendar reasons
+        assert dataset.quarter_count == len(periods) - 2
 
         eligibility = check_training_eligibility(
             dataset, min_train_quarters=1, n_winners=1,  # relaxed thresholds -- this fixture is intentionally small

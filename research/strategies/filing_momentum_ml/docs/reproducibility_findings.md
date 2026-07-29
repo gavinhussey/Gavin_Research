@@ -51,6 +51,23 @@ backtest window.
 - Label tie-breaking is deterministic by instrument symbol.
 - Sector encoding uses a fixed vocabulary.
 
+## Corrected implementation bugs
+
+- **Training-window boundary leakage (`implementation_bug`, fixed
+  2026-07-29)**: `training_dataset.build_training_dataset` previously
+  filtered knowable labels with `label_available_at <= training_cutoff`.
+  Because a quarter's `sell_timestamp`/`label_available_at` is defined to
+  land on the exact same calendar day as the *next* quarter's
+  `entry_timestamp`/`training_cutoff`, the `<=` comparison let the
+  immediately-prior quarter's label into the training set for every
+  retrain, one day before that price would realistically be known. Fixed
+  to a strict `<`. Effect: every quarterly retrain now excludes one fewer
+  quarter's rows than before (the most-recently-completed quarter), and
+  training eligibility (`quarter_count >= min_train_quarters`) onsets one
+  quarter later across the whole backtest. Any previously recorded
+  backtest run predates this fix and should be re-run before being cited
+  against the external report.
+
 ## Re-run command
 
 ```bash
