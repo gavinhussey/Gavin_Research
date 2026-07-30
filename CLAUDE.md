@@ -4,9 +4,13 @@ See `README.md` for what the platform is. This file is *how* to work in it.
 
 ## Non-negotiable safety constraints
 
-- **Never edit or delete** `~/Downloads/report_current.html` (the strategy's
-  external source-of-truth spec) or anything under `~/Downloads/Arnold_Quant`
-  (a separate legacy reference repo, read-only for cross-checking only).
+- **Never edit or delete** `~/Downloads/report_current.html` or anything
+  under `~/Downloads/Arnold_Quant` (legacy reference material, read-only).
+  As of 2026-07-30, `report_current.html` is **retired as this strategy's
+  reproduction target** — the current codebase is the authoritative
+  strategy definition and is not required to match it — but the file
+  itself is still never edited or deleted; it's kept only as historical
+  reference.
 - **Never substitute synthetic data for a genuine result.** If real data is
   missing or a dependency is unavailable, say so explicitly and classify it
   (see "Reproducibility/provenance classifications" below) — do not
@@ -15,9 +19,7 @@ See `README.md` for what the platform is. This file is *how* to work in it.
   data knowable as of its own cutoff. When touching feature/label/backtest
   code, explicitly check this before calling a change done.
 - Confirm before: destructive git operations, pushing, merging to `main`,
-  deleting acquired data files, or any change to `report_current.html`'s
-  documented behavior that isn't something the user explicitly asked to
-  diverge from.
+  or deleting acquired data files.
 
 ## Removing strategy logic
 
@@ -49,25 +51,34 @@ references the deleted mechanism afterward.
    while iterating). All tests must pass — don't skip/xfail/delete a test to
    force a pass unless it tested behavior that was genuinely, intentionally
    removed.
-2. If the change alters strategy behavior, formulas, config defaults, or
-   report-reproduction status, update in the same pass:
+2. If the change alters strategy behavior, formulas, or config defaults,
+   update in the same pass:
    - the relevant file(s) under `research/strategies/filing_momentum_ml/docs/`
    - the relevant notebook(s) under `research/strategies/filing_momentum_ml/notebooks/`
      (re-verify they still execute — `tests/unit/test_research_notebooks.py`)
    - `research/strategies/filing_momentum_ml/docs/reproducibility_findings.md`
-     if it changes what's reproducible, and its classification
-3. Any deliberate, disclosed divergence from `report_current.html` (e.g. a
-   user-requested change to strategy logic) must be written down in
-   `reproducibility_findings.md` as a disclosed divergence — never silently
-   left implicit or conflated with an unresolved reproduction gap.
+     if it changes a known data-provenance/implementation caveat recorded
+     there
+3. Any deliberate design decision with real financial-logic consequences
+   (e.g. a user-requested change to strategy logic, a data-source
+   substitution) should still be written down in `reproducibility_findings.md`
+   for provenance transparency — never left implicit — but is not tracked
+   as a divergence from `report_current.html` to resolve; see that file's
+   policy note.
 
 ## Reproducibility/provenance classifications
 
-Use the existing five-category vocabulary when explaining why something
-doesn't match the report, rather than inventing new language:
-`source_specification_required`, `data_provenance_required`,
+`report_current.html` is retired as a reproduction target (see
+"Non-negotiable safety constraints" above); these classifications are now
+used for documenting data-provenance/implementation caveats in the current
+implementation itself, not for explaining mismatches against the report.
+Use the existing five-category vocabulary rather than inventing new
+language: `source_specification_required`, `data_provenance_required`,
 `implementation_bug`, `data_quality_issue`, `expected_legacy_difference`.
-Overall run status uses `atlas_quant.reporting.domain.ReproducibilityStatus`.
+`atlas_quant.reporting.domain.ReproducibilityStatus` remains in the
+codebase for the `--source-report-html` report-comparison feature if it's
+ever invoked directly, but is no longer this strategy's default/expected
+workflow.
 
 ## Scratch / diagnostic scripts
 

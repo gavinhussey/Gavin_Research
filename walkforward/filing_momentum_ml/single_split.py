@@ -1,58 +1,30 @@
 #!/usr/bin/env python
-"""filing_momentum_ml's walk-forward robustness check for `min_positions`
-(the fallback-trigger threshold, report §5.4).
+"""filing_momentum_ml's single-split walk-forward robustness check.
 
 One subfolder per strategy lives under `walkforward/` (this is
 filing_momentum_ml's); add a sibling subfolder for each new strategy's own
 walk-forward checks rather than growing this one to cover more than one
 strategy. Within a strategy's subfolder, one file per *kind* of walk-forward
 check -- this one does a single select-then-test split; see `rolling.py`
-alongside it for the expanding-window re-selection variant.
+alongside it for the expanding-window, year-by-year variant.
 
-Picking a `min_positions` value by scanning candidates against one fixed
-historical window (as in the ad hoc sweep this script formalizes) risks
-selecting a threshold that is overfit to that specific sample. This script
-tests that risk directly: it picks the best candidate using only an
-in-sample ("selection") window, then reports how that exact choice performs
-on a later, disjoint out-of-sample ("test") window it never saw during
-selection -- true walk-forward validation, not just a bigger backtest.
+This was originally used to sweep `min_positions` candidates and pick the
+best one by in-sample performance, then check whether that choice held up
+out-of-sample. That question is settled: `min_positions=6` is the strategy's
+final, adopted fallback-trigger threshold (report §5.4's default of 3,
+deliberately overridden -- see
+`research/strategies/filing_momentum_ml/docs/reproducibility_findings.md`).
+This script no longer searches for a value; it runs the single production
+config through a standard walk-forward split -- train/select window, then a
+later, disjoint, out-of-sample test window -- to check whether the
+strategy's real performance holds up out-of-sample, not to pick a parameter.
 
 Reuses the existing, tested atlas_quant functions unchanged (feature build,
 training-eligibility check, model training, scoring, the strategy decision
 evaluator, position/benchmark resolution, and performance analysis) in the
 same order the production runner (`filing_momentum_runner.run_filing_momentum_backtest`)
-uses them. The only new logic here is: (1) sharing the feature/train/score
-step across `min_positions` candidates per quarter, since none of those
-steps depend on `min_positions` -- only the strategy's decision/sizing step
-does -- and (2) splitting quarters into selection vs. test windows for the
-walk-forward comparison. No strategy formula is reimplemented, and no
-production config default is changed by running this.
-
-## Finding (2026-07-28 run, SELECTION=[2011-03-31, 2020-12-31], TEST=[2021-03-31, 2025-12-31])
-
-`min_positions` selection over this history is dominated by a small number
-of quarters where the fallback ETF sleeve actually triggers -- 0 to 13
-quarters out of 40 in the selection window, depending on the candidate --
-not by a broad, consistent pattern across most quarters. In particular, the
-single quarter 2011-03-31 alone flips which candidate wins the *entire*
-2011-2020 selection: a concentrated 5-stock full-quota quarter for
-min_positions<=5 returned -22.5% that quarter (one holding fell ~43%),
-while min_positions>=6 treated the same 5 survivors as a partial fill and
-blended in a VOO/VTI sleeve, cushioning the same quarter to -12.4%. Include
-that one quarter and min_positions=6-8 wins the decade on Sharpe/Sortino;
-exclude it (an earlier version of this script's SELECTION_START began one
-quarter later, at 2011-06-30, and did exactly that) and min_positions=2-3
-wins instead. Both the selection window (2011-2020) and the test window
-(2021-2025) that were actually run picked/favored min_positions=6-8 once
-this one-quarter boundary was fixed.
-
-Read this as: the fallback threshold's real value is tail-risk cushioning
-in rare bad quarters, not a persistent stock-selection edge -- and because
-those triggering quarters are sparse (a handful over 15 years), "the
-optimal minimum" is a thinner, noisier statistical claim than a headline
-Sharpe-ranking table makes it look. Treat any single number this script
-selects as a reasonable, cheap-insurance default, not a provably optimal
-constant.
+uses them. No strategy formula is reimplemented, and no production config
+default is changed by running this.
 
 Edit the constants below, then run:
 
@@ -61,7 +33,6 @@ Edit the constants below, then run:
 from __future__ import annotations
 
 import bisect
-import dataclasses
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -73,11 +44,10 @@ RAW_ROOT = REPO_ROOT / "data" / "raw" / "filing_momentum_ml"
 MANIFEST = REPO_ROOT / "data" / "manifests" / "filing_momentum_ml" / "data_manifest.json"
 
 # --- edit these to change what gets tested ---
-MIN_POSITIONS_CANDIDATES = list(range(2, 11))
 TRAIN_BUFFER_YEARS = 3          # matches ml_train_years -- warm-up quarters, excluded from both windows
-SELECTION_START = date(2011, 3, 31)   # in-sample window: candidates are scored here
+SELECTION_START = date(2011, 3, 31)   # in-sample window
 SELECTION_END = date(2020, 12, 31)
-TEST_START = date(2021, 3, 31)        # out-of-sample window: the SELECTED candidate is re-scored here, blind
+TEST_START = date(2021, 3, 31)        # out-of-sample window, blind to selection
 TEST_END = date(2025, 12, 31)
 SELECTION_METRIC = "sharpe"           # one of: sharpe, sortino, avg_yearly_alpha
 # ------------------------------------------
@@ -197,35 +167,34 @@ def main() -> int:
     calendar = _build_trading_calendar(bundle)
     manifest = _load_manifest(MANIFEST)
     benchmark_id = InstrumentId(symbol="SPY", asset_class=AssetClass.EQUITY)
-    base_config = FilingMomentumMLConfig()
+    config = FilingMomentumMLConfig()
     sector_encoder = SectorEncoder()
     price_source = {k: tuple(v) for k, v in bundle.prices_by_instrument.items()}
     price_index = _price_lookup_index(price_source)
 
     buffer_start = _shift_years(SELECTION_START, TRAIN_BUFFER_YEARS)
-    periods = generate_quarterly_periods(buffer_start, TEST_END, earnings_lag_days=base_config.earnings_lag_days)
+    periods = generate_quarterly_periods(buffer_start, TEST_END, earnings_lag_days=config.earnings_lag_days)
     selection_qends = {p.quarter_end for p in periods if SELECTION_START <= p.quarter_end <= SELECTION_END}
     test_qends = {p.quarter_end for p in periods if TEST_START <= p.quarter_end <= TEST_END}
     log(f"buffer_start={buffer_start} selection=[{SELECTION_START}, {SELECTION_END}] "
         f"({len(selection_qends)}q) test=[{TEST_START}, {TEST_END}] ({len(test_qends)}q) "
-        f"total_periods={len(periods)}")
+        f"total_periods={len(periods)} min_positions={config.min_positions}")
 
-    backtest_config = FilingMomentumBacktestConfig(strategy_config=base_config)
+    backtest_config = FilingMomentumBacktestConfig(strategy_config=config)
 
-    # --- shared, min_positions-independent feature build ---
     targets = [
         (instrument_id, period.quarter_end, period.entry_timestamp)
         for period in periods for instrument_id in bundle.universe
     ]
     cache_identity = FeatureCacheIdentity(
-        strategy_id=base_config.strategy_id, strategy_version="production",
-        feature_schema_version=FEATURE_SCHEMA_VERSION, fcf_mode=base_config.fcf_mode,
-        train_years=base_config.ml_train_years, min_train_quarters=base_config.min_train_quarters,
-        model_config_identity=base_config.identity(), universe_id=manifest.universe_identity,
+        strategy_id=config.strategy_id, strategy_version="production",
+        feature_schema_version=FEATURE_SCHEMA_VERSION, fcf_mode=config.fcf_mode,
+        train_years=config.ml_train_years, min_train_quarters=config.min_train_quarters,
+        model_config_identity=config.identity(), universe_id=manifest.universe_identity,
         data_cutoff=max(p.quarter_end for p in periods), created_at=datetime.now(),
     )
     feature_build = build_production_features(
-        config=base_config, calendar=calendar, sector_encoder=sector_encoder, targets=targets,
+        config=config, calendar=calendar, sector_encoder=sector_encoder, targets=targets,
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
         sector_by_instrument=bundle.sector_by_instrument, cache_identity=cache_identity,
         cache_root=None, mode="training",
@@ -239,13 +208,12 @@ def main() -> int:
         observations_by_quarter.setdefault(obs.strategy_cohort_end, []).append(obs)
 
     fallback_source = build_fallback_statistics_source(
-        fallback_tickers=base_config.fallback_tickers, asset_class=benchmark_id.asset_class,
+        fallback_tickers=config.fallback_tickers, asset_class=benchmark_id.asset_class,
         prices_by_instrument=bundle.prices_by_instrument, ordered_periods=periods,
-        lookback_quarters=base_config.fallback_lookback_quarters,
+        lookback_quarters=config.fallback_lookback_quarters,
     )
     benchmark_prices = price_source.get(benchmark_id, ())
 
-    # --- shared labeling (pure historical fact, independent of min_positions) ---
     labeled_quarters: dict[date, list] = {}
     for period in periods:
         observations = tuple(observations_by_quarter.get(period.quarter_end, ()))
@@ -256,17 +224,16 @@ def main() -> int:
             )
             for obs in observations
         ]
-        labeling = assign_quarterly_labels(outcomes, period.quarter_end, n_winners=base_config.n_winners)
+        labeling = assign_quarterly_labels(outcomes, period.quarter_end, n_winners=config.n_winners)
         label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
         labeled_quarters[period.quarter_end] = [
             LabeledObservation(obs, label_by_id[obs.instrument_id], period.label_availability_cutoff)
             for obs in observations
         ]
 
-    variant_configs = {n: dataclasses.replace(base_config, min_positions=n) for n in MIN_POSITIONS_CANDIDATES}
-    variant_carried_ratio: dict[int, float | None] = {n: None for n in MIN_POSITIONS_CANDIDATES}
-    selection_quarters: dict[int, list] = {n: [] for n in MIN_POSITIONS_CANDIDATES}
-    test_quarters: dict[int, list] = {n: [] for n in MIN_POSITIONS_CANDIDATES}
+    reference_ratio: float | None = None
+    selection_quarters: list = []
+    test_quarters: list = []
 
     strategy = FilingMomentumMLStrategy()
     n_periods = len(periods)
@@ -275,13 +242,13 @@ def main() -> int:
         dataset = build_training_dataset(
             period.quarter_end, period.training_cutoff, labeled_quarters,
             strategy_id=STRATEGY_ID, feature_schema_version=FEATURE_SCHEMA_VERSION,
-            ml_train_years=base_config.ml_train_years, model_config_identity=base_config.model.identity(),
+            ml_train_years=config.ml_train_years, model_config_identity=config.model.identity(),
         )
         eligibility = check_training_eligibility(
-            dataset, min_train_quarters=base_config.min_train_quarters, n_winners=base_config.n_winners,
+            dataset, min_train_quarters=config.min_train_quarters, n_winners=config.n_winners,
         )
         training_result = train_model(
-            dataset, eligibility, base_config.model, build_hgbc_estimator,
+            dataset, eligibility, config.model, build_hgbc_estimator,
             strategy_id=STRATEGY_ID, strategy_version=STRATEGY_VERSION,
         )
 
@@ -293,21 +260,20 @@ def main() -> int:
 
         if training_result.state != TrainingState.TRAINED:
             if target_bucket is not None:
-                for n in MIN_POSITIONS_CANDIDATES:
-                    target_bucket[n].append(BacktestQuarterResult(
-                        period=period, outcome_type=QuarterOutcomeType.SKIPPED,
-                        training_state=training_result.state, model_identity=None,
-                        scoring_result=None, strategy_result=None, positions=(), period_return=None,
-                        benchmark=None, benchmark_return=None, alpha=None, cash_weight=0.0,
-                        warnings=(f"training skipped: {training_result.state.value}",),
-                        rejection_reasons=tuple(eligibility.reasons), audit_trail=training_result.audit_trail,
-                    ))
+                target_bucket.append(BacktestQuarterResult(
+                    period=period, outcome_type=QuarterOutcomeType.SKIPPED,
+                    training_state=training_result.state, model_identity=None,
+                    scoring_result=None, strategy_result=None, positions=(), period_return=None,
+                    benchmark=None, benchmark_return=None, alpha=None, cash_weight=0.0,
+                    warnings=(f"training skipped: {training_result.state.value}",),
+                    rejection_reasons=tuple(eligibility.reasons), audit_trail=training_result.audit_trail,
+                ))
             log(f"  [{i+1}/{n_periods}] {period.quarter_end} SKIPPED ({training_result.state.value})")
             continue
 
         scoring_result = score_observations(
             training_result.fitted_estimator, training_result.model_identity, target_obs,
-            period.evaluation_timestamp, config_identity=base_config.identity(),
+            period.evaluation_timestamp, config_identity=config.identity(),
         )
         fallback_stats = fallback_source(period)
         benchmark = resolve_benchmark(
@@ -316,47 +282,46 @@ def main() -> int:
         )
         benchmark_return = benchmark.raw_return
 
-        for n in MIN_POSITIONS_CANDIDATES:
-            inputs = FilingMomentumEvaluationInputs(
-                config=variant_configs[n], scored_candidates=scoring_result.scored_candidates,
-                fallback_statistics=fallback_stats, previous_reference_score_to_weight_ratio=variant_carried_ratio[n],
-            )
-            context = StrategyEvaluationContext(
-                strategy_id=STRATEGY_ID, evaluation_timestamp=period.evaluation_timestamp,
-                data_cutoff=period.evaluation_timestamp, capital_budget_pct=backtest_config.strategy_budget_pct,
-                strategy_config=inputs,
-            )
-            strategy_result = strategy.evaluate(context)
+        inputs = FilingMomentumEvaluationInputs(
+            config=config, scored_candidates=scoring_result.scored_candidates,
+            fallback_statistics=fallback_stats, previous_reference_score_to_weight_ratio=reference_ratio,
+        )
+        context = StrategyEvaluationContext(
+            strategy_id=STRATEGY_ID, evaluation_timestamp=period.evaluation_timestamp,
+            data_cutoff=period.evaluation_timestamp, capital_budget_pct=backtest_config.strategy_budget_pct,
+            strategy_config=inputs,
+        )
+        strategy_result = strategy.evaluate(context)
 
-            new_reference = getattr(strategy_result.state_update, "reference_score_to_weight_ratio", None)
-            if new_reference is not None:
-                variant_carried_ratio[n] = new_reference
+        new_reference = getattr(strategy_result.state_update, "reference_score_to_weight_ratio", None)
+        if new_reference is not None:
+            reference_ratio = new_reference
 
-            positions = tuple(
-                resolve_position(
-                    rec, price_source.get(rec.instrument_id, ()), period.entry_timestamp.date(),
-                    period.exit_timestamp.date(), backtest_config.price_policy, period.exit_timestamp,
-                    calendar, return_cap=backtest_config.instrument_return_cap,
-                )
-                for rec in strategy_result.recommendations
+        positions = tuple(
+            resolve_position(
+                rec, price_source.get(rec.instrument_id, ()), period.entry_timestamp.date(),
+                period.exit_timestamp.date(), backtest_config.price_policy, period.exit_timestamp,
+                calendar, return_cap=backtest_config.instrument_return_cap,
             )
-            cash_weight = max(0.0, 1.0 - strategy_result.capital_requested_pct)
-            period_return = compute_period_return(positions, cash_weight)
-            alpha = (period_return - benchmark_return) if benchmark_return is not None else None
+            for rec in strategy_result.recommendations
+        )
+        cash_weight = max(0.0, 1.0 - strategy_result.capital_requested_pct)
+        period_return = compute_period_return(positions, cash_weight)
+        alpha = (period_return - benchmark_return) if benchmark_return is not None else None
 
-            if target_bucket is not None:
-                status_val = strategy_result.status.value if strategy_result.status else None
-                outcome_type = QuarterOutcomeType.PRIMARY if status_val == "ok" else (
-                    QuarterOutcomeType.FALLBACK if status_val == "fallback" else QuarterOutcomeType.CASH
-                )
-                target_bucket[n].append(BacktestQuarterResult(
-                    period=period, outcome_type=outcome_type, training_state=training_result.state,
-                    model_identity=training_result.model_identity, scoring_result=scoring_result,
-                    strategy_result=strategy_result, positions=positions, period_return=period_return,
-                    benchmark=benchmark, benchmark_return=benchmark_return, alpha=alpha,
-                    cash_weight=cash_weight, warnings=strategy_result.warnings,
-                    rejection_reasons=(), audit_trail=AuditTrail(),
-                ))
+        if target_bucket is not None:
+            status_val = strategy_result.status.value if strategy_result.status else None
+            outcome_type = QuarterOutcomeType.PRIMARY if status_val == "ok" else (
+                QuarterOutcomeType.FALLBACK if status_val == "fallback" else QuarterOutcomeType.CASH
+            )
+            target_bucket.append(BacktestQuarterResult(
+                period=period, outcome_type=outcome_type, training_state=training_result.state,
+                model_identity=training_result.model_identity, scoring_result=scoring_result,
+                strategy_result=strategy_result, positions=positions, period_return=period_return,
+                benchmark=benchmark, benchmark_return=benchmark_return, alpha=alpha,
+                cash_weight=cash_weight, warnings=strategy_result.warnings,
+                rejection_reasons=(), audit_trail=AuditTrail(),
+            ))
 
         log(f"  [{i+1}/{n_periods}] {period.quarter_end} trained+scored")
 
@@ -380,40 +345,26 @@ def main() -> int:
             "daily_max_drawdown": daily_dd["max_drawdown"],
         }
 
-    log("=== SELECTION WINDOW (in-sample) ===")
-    selection_summary = {}
-    for n in MIN_POSITIONS_CANDIDATES:
-        s = _summarize(selection_quarters[n], SELECTION_START, SELECTION_END)
-        selection_summary[n] = s
-        print(f"  min={n:>2}  sharpe={s['sharpe']:.3f}  sortino={('%.3f' % s['sortino']) if s['sortino'] is not None else 'n/a':>6}  "
+    def _print_summary(label: str, s: dict) -> None:
+        print(f"  {label:<28} sharpe={s['sharpe']:.3f}  sortino={('%.3f' % s['sortino']) if s['sortino'] is not None else 'n/a':>6}  "
               f"avg_yr_alpha={s['avg_yearly_alpha']:+.2%}  fallback={s['fallback_quarters']}/{s['n_quarters']}  "
               f"daily_maxDD={s['daily_max_drawdown']:.2%}")
 
+    log(f"=== WALK-FORWARD CHECK (min_positions={config.min_positions}) ===")
+    selection_summary = _summarize(selection_quarters, SELECTION_START, SELECTION_END)
+    test_summary = _summarize(test_quarters, TEST_START, TEST_END)
+    _print_summary(f"in-sample [{SELECTION_START}, {SELECTION_END}]", selection_summary)
+    _print_summary(f"out-of-sample [{TEST_START}, {TEST_END}]", test_summary)
+
     metric_key = {"sharpe": "sharpe", "sortino": "sortino", "avg_yearly_alpha": "avg_yearly_alpha"}[SELECTION_METRIC]
-    ranked = sorted(
-        (n for n in MIN_POSITIONS_CANDIDATES if selection_summary[n][metric_key] is not None),
-        key=lambda n: selection_summary[n][metric_key], reverse=True,
-    )
-    selected = ranked[0]
-    log(f"selected min_positions={selected} by best in-sample {SELECTION_METRIC}")
-
-    log("=== TEST WINDOW (out-of-sample, blind to selection) ===")
-    test_summary = {}
-    for n in MIN_POSITIONS_CANDIDATES:
-        s = _summarize(test_quarters[n], TEST_START, TEST_END)
-        test_summary[n] = s
-        marker = "  <-- selected on in-sample data" if n == selected else ""
-        print(f"  min={n:>2}  sharpe={s['sharpe']:.3f}  sortino={('%.3f' % s['sortino']) if s['sortino'] is not None else 'n/a':>6}  "
-              f"avg_yr_alpha={s['avg_yearly_alpha']:+.2%}  fallback={s['fallback_quarters']}/{s['n_quarters']}  "
-              f"daily_maxDD={s['daily_max_drawdown']:.2%}{marker}")
-
-    test_rank = sorted(
-        (n for n in MIN_POSITIONS_CANDIDATES if test_summary[n][metric_key] is not None),
-        key=lambda n: test_summary[n][metric_key], reverse=True,
-    )
-    selected_oos_rank = test_rank.index(selected) + 1
-    log(f"min_positions={selected} ranked #{selected_oos_rank}/{len(test_rank)} on out-of-sample {SELECTION_METRIC} "
-        f"({'robust' if selected_oos_rank <= 3 else 'NOT robust -- in-sample pick did not hold up out-of-sample'})")
+    in_sample_metric = selection_summary[metric_key]
+    oos_metric = test_summary[metric_key]
+    if in_sample_metric is not None and oos_metric is not None:
+        held_up = oos_metric >= 0.5 * in_sample_metric if in_sample_metric > 0 else oos_metric >= in_sample_metric
+        log(f"out-of-sample {SELECTION_METRIC}={oos_metric:.3f} vs in-sample {in_sample_metric:.3f} "
+            f"({'held up' if held_up else 'degraded materially'})")
+    else:
+        log(f"out-of-sample/in-sample {SELECTION_METRIC} not comparable (missing data in one window)")
     return 0
 
 
