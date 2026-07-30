@@ -146,20 +146,34 @@ this code) and reuses an existing Stage 3-9 service unchanged.
     SEC EDGAR's XBRL company-facts API for filings (grouped by
     accession number so multiple concepts from one real filing are
     merged correctly), yfinance for daily prices (`split_dividend_adjusted`),
-    and the S&P 500 + Nasdaq 100 Wikipedia pages for universe/sector data.
-    Requires a real `SEC_EDGAR_USER_AGENT` per SEC's fair-access policy;
-    never hardcodes one. A per-symbol failure is caught and recorded as a
-    warning, never aborting the whole acquisition run.
+    and the S&P 500 + Nasdaq 100 Wikipedia pages for universe data.
+    Sector is *not* acquired here -- see the separate
+    `acquire-sic-history` subcommand below. Requires a real
+    `SEC_EDGAR_USER_AGENT` per SEC's fair-access policy; never hardcodes
+    one. A per-symbol failure is caught and recorded as a warning, never
+    aborting the whole acquisition run.
+13. **Point-in-time sector acquisition** (`acquisition/sic_history.py`;
+    `atlas-quant filing-momentum acquire-sic-history`) — a separate,
+    slower one-time-backfill-then-incremental subcommand: fetches each
+    already-acquired filing's own point-in-time SEC SIC code from that
+    filing's real SGML header, and maps it through a disclosed SIC→GICS
+    crosswalk (`sic_gics_crosswalk.py`) into `sic_history.json`, this
+    platform's sole sector source (see `data_provenance_manifest.md` and
+    `reproducibility_findings.md`'s disclosed-divergence entry). Replaces
+    an earlier present-day-Wikipedia-snapshot sector source that applied
+    one current classification retroactively across the whole backtest.
 
 ## What this stage explicitly does not include
 
 - **Real data acquisition exists as of Stage 11** (`strategies/filing_momentum_ml/acquisition/`):
   SEC EDGAR filings, yfinance daily prices, and Wikipedia-sourced S&P 500
-  + Nasdaq 100 universe/sector data, all converted into the CLI's
-  existing raw-data JSON schema (see `data_provenance_manifest.md`) via
-  `atlas-quant filing-momentum acquire-data`. This still does not, by
-  itself, complete a genuine backtest -- see `reproducibility_findings.md`
-  for the current, single remaining blocker.
+  + Nasdaq 100 universe data, all converted into the CLI's existing
+  raw-data JSON schema (see `data_provenance_manifest.md`) via
+  `atlas-quant filing-momentum acquire-data`, plus point-in-time
+  SIC-derived sector data via the separate `acquire-sic-history`
+  subcommand. This still does not, by itself, complete a genuine
+  backtest -- see `reproducibility_findings.md` for the current
+  remaining blocker.
 - **No live/paper trading.** No streaming, scheduling, alerting, broker
   authentication, order generation/placement, or execution.
 - **No second strategy and no multi-strategy allocation.** Only

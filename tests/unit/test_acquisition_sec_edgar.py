@@ -11,6 +11,7 @@ import pytest
 from atlas_quant.strategies.filing_momentum_ml.acquisition.sec_edgar import (
     SEC_EDGAR_USER_AGENT_ENV_VAR,
     fetch_company_facts,
+    fetch_filing_sic,
     fetch_filings_for_symbol,
     fetch_ticker_to_cik_map,
     parse_company_facts_to_filings,
@@ -153,3 +154,43 @@ def test_fetch_filings_for_symbol_end_to_end():
     )
     assert len(result) == 1
     assert result[0].symbol == "AAPL"
+
+
+_SGML_HEADER = """\
+<SEC-DOCUMENT>0001140361-09-022500.txt : 20091005
+<SEC-HEADER>0001140361-09-022500.hdr.sgml : 20091005
+
+<ACCEPTANCE-DATETIME>20091005131645
+
+ACCESSION NUMBER:\t\t0001140361-09-022500
+
+FILER:
+
+\tCOMPANY DATA:\t
+
+\t\tCOMPANY CONFORMED NAME:\t\t\tAGILENT TECHNOLOGIES INC
+
+\t\tCENTRAL INDEX KEY:\t\t\t0001090872
+
+\t\tSTANDARD INDUSTRIAL CLASSIFICATION:\tINSTRUMENTS FOR MEAS & TESTING OF ELECTRICITY & ELEC SIGNALS [3825]
+
+\t\tIRS NUMBER:\t\t\t\t770518772
+
+</SEC-HEADER>
+"""
+
+
+def test_fetch_filing_sic_parses_real_header_shape():
+    url = "https://www.sec.gov/Archives/edgar/data/1090872/000114036109022500/0001140361-09-022500.txt"
+    client = FakeHttpClient(text_responses={url: _SGML_HEADER})
+    sic = fetch_filing_sic(client, "0001090872", "0001140361-09-022500", user_agent="Test test@example.com")
+    assert sic == 3825
+    assert client.requested_headers[0]["User-Agent"] == "Test test@example.com"
+    assert "Range" in client.requested_headers[0]
+
+
+def test_fetch_filing_sic_returns_none_when_sic_line_missing():
+    url = "https://www.sec.gov/Archives/edgar/data/1090872/000114036109022500/0001140361-09-022500.txt"
+    client = FakeHttpClient(text_responses={url: "<SEC-HEADER>no sic here</SEC-HEADER>"})
+    sic = fetch_filing_sic(client, "0001090872", "0001140361-09-022500", user_agent="Test test@example.com")
+    assert sic is None

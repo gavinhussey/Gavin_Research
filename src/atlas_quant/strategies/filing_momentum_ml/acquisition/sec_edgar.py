@@ -30,6 +30,7 @@ validation/missing-feature handling, never silently interpolated).
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -38,6 +39,21 @@ from atlas_quant.strategies.filing_momentum_ml.production.normalization import R
 
 TICKER_TO_CIK_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL_TEMPLATE = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik10}.json"
+
+#: One real filing's own full submission text -- its SGML header (the
+#: first few KB) carries that filing's own point-in-time SIC code, unlike
+#: the company-facts/submissions endpoints above, which only ever expose
+#: the *current* SIC. Verified against real filings in development: the
+#: same company's SIC differs between an old and a recent filing.
+FILING_SUBMISSION_URL_TEMPLATE = "https://www.sec.gov/Archives/edgar/data/{cik_nozero}/{accession_nodash}/{accession}.txt"
+
+#: Generous enough to cover the full SGML header even for filings with
+#: several co-filers (each with their own SIC/company-data block) --
+#: verified sufficient against real filings; the header is a fixed-size
+#: prefix of the document, well before the first <DOCUMENT> body starts.
+_HEADER_RANGE_BYTES = "bytes=0-8000"
+
+_SIC_HEADER_PATTERN = re.compile(r"STANDARD INDUSTRIAL CLASSIFICATION:\s*.*\[(\d+)\]")
 
 #: Read once per real acquisition run -- SEC requires a real requester
 #: identity ("Company Name contact@example.com"), never a fake one.
@@ -108,6 +124,23 @@ def fetch_company_facts(client: HttpClient, cik10: str, *, user_agent: str) -> d
     """Fetch one company's full XBRL company-facts payload."""
     url = COMPANY_FACTS_URL_TEMPLATE.format(cik10=cik10)
     return client.get_json(url, headers={"User-Agent": user_agent})
+
+
+def fetch_filing_sic(client: HttpClient, cik10: str, accession_number: str, *, user_agent: str) -> int | None:
+    """Fetch one specific filing's own point-in-time SIC code from its
+    real SEC submission header -- the only place a filing's SIC as of its
+    own filing date is available (the company-facts/submissions endpoints
+    only expose today's SIC). Returns ``None`` if the header's SIC line
+    isn't found (never fabricated)."""
+    accession_nodash = accession_number.replace("-", "")
+    url = FILING_SUBMISSION_URL_TEMPLATE.format(
+        cik_nozero=int(cik10), accession_nodash=accession_nodash, accession=accession_number,
+    )
+    header_text = client.get_text(url, headers={"User-Agent": user_agent, "Range": _HEADER_RANGE_BYTES})
+    match = _SIC_HEADER_PATTERN.search(header_text)
+    if match is None:
+        return None
+    return int(match.group(1))
 
 
 @dataclass(frozen=True, slots=True)

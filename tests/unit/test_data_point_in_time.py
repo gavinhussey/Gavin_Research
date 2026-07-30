@@ -10,8 +10,9 @@ from atlas_quant.data.point_in_time import (
     WeekdayTradingCalendar,
     resolve_feature_timestamp,
     select_point_in_time_fundamentals,
+    select_point_in_time_sector,
 )
-from fixtures.filing_momentum_ml import instrument, make_filing, weekday_calendar
+from fixtures.filing_momentum_ml import instrument, make_filing, make_sector_record, weekday_calendar
 
 
 class TestWeekdayTradingCalendar:
@@ -252,3 +253,43 @@ class TestSelectPointInTimeFundamentals:
         )
         assert result.selected == ()
         assert result.rejected[0].reason == "instrument_id mismatch"
+
+
+class TestSelectPointInTimeSector:
+    def test_returns_none_with_no_history(self):
+        iid = instrument("ACME")
+        assert select_point_in_time_sector([], iid, cutoff=datetime(2026, 1, 1)) is None
+
+    def test_returns_latest_record_knowable_by_cutoff(self):
+        iid = instrument("ACME")
+        old = make_sector_record(iid, "Industrials", datetime(2010, 1, 1))
+        newer = make_sector_record(iid, "Health Care", datetime(2020, 1, 1))
+        history = [old, newer]
+        result = select_point_in_time_sector(history, iid, cutoff=datetime(2026, 1, 1))
+        assert result is newer
+
+    def test_ignores_records_after_cutoff(self):
+        iid = instrument("ACME")
+        old = make_sector_record(iid, "Industrials", datetime(2010, 1, 1))
+        future = make_sector_record(iid, "Health Care", datetime(2030, 1, 1))
+        result = select_point_in_time_sector([old, future], iid, cutoff=datetime(2020, 1, 1))
+        assert result is old
+
+    def test_none_when_nothing_knowable_yet(self):
+        iid = instrument("ACME")
+        future = make_sector_record(iid, "Health Care", datetime(2030, 1, 1))
+        result = select_point_in_time_sector([future], iid, cutoff=datetime(2020, 1, 1))
+        assert result is None
+
+    def test_exact_cutoff_is_knowable(self):
+        iid = instrument("ACME")
+        record = make_sector_record(iid, "Industrials", datetime(2020, 1, 1))
+        result = select_point_in_time_sector([record], iid, cutoff=datetime(2020, 1, 1))
+        assert result is record
+
+    def test_wrong_instrument_ignored(self):
+        iid = instrument("ACME")
+        other = instrument("OTHER")
+        foreign = make_sector_record(other, "Industrials", datetime(2010, 1, 1))
+        result = select_point_in_time_sector([foreign], iid, cutoff=datetime(2026, 1, 1))
+        assert result is None

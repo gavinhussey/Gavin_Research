@@ -50,6 +50,26 @@ backtest window.
   limits.
 - Label tie-breaking is deterministic by instrument symbol.
 - Sector encoding uses a fixed vocabulary.
+- **Sector source is a disclosed departure from report §3.2's documented
+  "GICS for S&P 500, yfinance for the rest" (`source_specification_required`)**.
+  No licensed, point-in-time GICS feed is available to this platform.
+  Sector is instead derived from each real SEC filing's own point-in-time
+  SIC code (`acquisition/sec_edgar.py`'s `fetch_filing_sic`, verified
+  against real data) via a SIC→GICS crosswalk this project built and
+  disclosed itself (`sic_gics_crosswalk.py`), classifying SEC's own
+  public ~450-code SIC list against GICS's 11 published sectors --
+  **not** sourced from a licensed GICS crosswalk, and low-confidence
+  codes map to `"Unknown"` rather than guessed. This replaces an earlier,
+  undisclosed lookahead: `sectors.json`/`RawSectorRecord` scraped a
+  single *present-day* Wikipedia GICS/ICB snapshot and applied it
+  retroactively across the whole backtest, even though sector
+  classification genuinely changes over time (verified against real
+  data: Agilent's own SIC/sector changed between an old and a recent
+  filing). Both the `sector_enc` feature and the Materials-sector
+  exclusion filter (report §5.2) now use the sector actually knowable as
+  of each decision's own point-in-time cutoff
+  (`atlas_quant.data.point_in_time.select_point_in_time_sector`), not
+  today's classification.
 
 ## Corrected implementation bugs
 

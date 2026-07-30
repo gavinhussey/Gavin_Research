@@ -64,8 +64,8 @@ def _build_inputs():
     }
     prices_by_instrument = {_AAA: _daily_prices(_AAA), _BBB: _daily_prices(_BBB)}
     sector_by_instrument = {
-        _AAA: make_sector_record(_AAA, "Technology", datetime(2023, 1, 1)),
-        _BBB: make_sector_record(_BBB, "Healthcare", datetime(2023, 1, 1)),
+        _AAA: (make_sector_record(_AAA, "Technology", datetime(2023, 1, 1)),),
+        _BBB: (make_sector_record(_BBB, "Healthcare", datetime(2023, 1, 1)),),
     }
     cohort_buy_timestamp = datetime.combine(_TARGET_QUARTER_END, datetime.min.time()) + timedelta(
         days=config.earnings_lag_days

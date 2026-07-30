@@ -179,7 +179,7 @@ class ProductionRunInputs:
     sector_encoder: SectorEncoder
     filings_by_instrument: Mapping[InstrumentId, Sequence[FilingFundamentals]]
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]]
-    sector_by_instrument: Mapping[InstrumentId, SectorRecord]
+    sector_by_instrument: Mapping[InstrumentId, Sequence[SectorRecord]]
     manifest: DataProvenanceManifest
     performance_config: PerformanceAnalysisConfig | None = None
     report_options: ReportOptions | None = None
@@ -359,7 +359,7 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         issues.extend(validate_filings(filings))
     for instrument_id in target_instrument_ids:
         issues.extend(validate_prices(inputs.prices_by_instrument.get(instrument_id, ())))
-    issues.extend(validate_sectors(list(inputs.sector_by_instrument.values())))
+    issues.extend(validate_sectors([r for records in inputs.sector_by_instrument.values() for r in records]))
     if inputs.periods:
         issues.extend(
             validate_calendar(

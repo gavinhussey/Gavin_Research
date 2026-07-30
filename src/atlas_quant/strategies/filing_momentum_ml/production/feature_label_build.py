@@ -69,7 +69,7 @@ def build_production_features(
     targets: Sequence[tuple[InstrumentId, date, datetime]],
     filings_by_instrument: Mapping[InstrumentId, Sequence[FilingFundamentals]],
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
-    sector_by_instrument: Mapping[InstrumentId, SectorRecord],
+    sector_by_instrument: Mapping[InstrumentId, Sequence[SectorRecord]],
     cache_identity: FeatureCacheIdentity,
     cache_root: Path | None = None,
     mode: FilingTimingMode = "training",
@@ -100,7 +100,7 @@ def build_production_features(
     # skipped.
     for instrument_id in target_instrument_ids:
         issues.extend(validate_prices(prices_by_instrument.get(instrument_id, ())))
-    issues.extend(validate_sectors(list(sector_by_instrument.values())))
+    issues.extend(validate_sectors([r for records in sector_by_instrument.values() for r in records]))
     summary = DataValidationSummary(issues=tuple(issues))
 
     if summary.has_fatal:

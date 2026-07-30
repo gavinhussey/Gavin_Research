@@ -196,9 +196,9 @@ class TestSharedCohortSnapshot:
             iid: _make_daily_prices(iid, _PRICE_START, _PRICE_END) for iid in filings_by_instrument
         }
         sector_by_instrument = {
-            _MMM: make_sector_record(_MMM, "Industrials", datetime(2023, 1, 1)),
-            _AAPL: make_sector_record(_AAPL, "Information Technology", datetime(2023, 1, 1)),
-            _WMT: make_sector_record(_WMT, "Consumer Staples", datetime(2023, 1, 1)),
+            _MMM: (make_sector_record(_MMM, "Industrials", datetime(2023, 1, 1)),),
+            _AAPL: (make_sector_record(_AAPL, "Information Technology", datetime(2023, 1, 1)),),
+            _WMT: (make_sector_record(_WMT, "Consumer Staples", datetime(2023, 1, 1)),),
         }
         cohort_end = _SHARED_COHORT_ENDS[-1]
         buy_ts = _cohort_buy_timestamp(cohort_end)
@@ -456,9 +456,9 @@ class TestFullCohortSnapshotIntegration:
         calendar = _calendar_from(_PRICE_START, _PRICE_END)
         prices_by_instrument = {iid: _make_daily_prices(iid, _PRICE_START, _PRICE_END) for iid in universe}
         sector_by_instrument = {
-            _MMM: make_sector_record(_MMM, "Industrials", datetime(2023, 1, 1)),
-            _AAPL: make_sector_record(_AAPL, "Information Technology", datetime(2023, 1, 1)),
-            _WMT: make_sector_record(_WMT, "Consumer Staples", datetime(2023, 1, 1)),
+            _MMM: (make_sector_record(_MMM, "Industrials", datetime(2023, 1, 1)),),
+            _AAPL: (make_sector_record(_AAPL, "Information Technology", datetime(2023, 1, 1)),),
+            _WMT: (make_sector_record(_WMT, "Consumer Staples", datetime(2023, 1, 1)),),
         }
         config = FilingMomentumMLConfig()
         periods = generate_quarterly_periods(

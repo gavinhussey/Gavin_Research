@@ -63,11 +63,12 @@ def _write_raw_data(root: Path, *, include_universe: bool = True) -> None:
         }]
     (root / "universe.json").write_text(json.dumps(universe))
 
-    sectors = [{
-        "symbol": "AAA", "asset_class": "equity", "raw_sector": "Technology",
-        "as_of": "2023-01-01T00:00:00", "source": "fixture", "retrieved_at": "2023-06-01T00:00:00",
+    sic_history = [{
+        "symbol": "AAA", "asset_class": "equity", "accession_number": "acc-0",
+        "filed_at": "2023-01-01T00:00:00", "sic_code": 7372, "gics_sector": "Information Technology",
+        "source": "fixture", "retrieved_at": "2023-06-01T00:00:00",
     }]
-    (root / "sectors.json").write_text(json.dumps(sectors))
+    (root / "sic_history.json").write_text(json.dumps(sic_history))
 
 
 def _write_manifest(path: Path) -> None:
@@ -279,7 +280,7 @@ def _fake_acquisition_result():
     return AcquisitionResult(
         filings=(), prices=(RawPriceRecord("AAA", "equity", date(2024, 1, 2), 100.0, "split_dividend_adjusted", "yfinance", now),),
         universe=(RawUniverseRecord("AAA", "equity", now, "wikipedia_sp500_nasdaq100", True, now),),
-        sectors=(), symbols_attempted=1, symbols_with_filings=0, symbols_with_prices=1,
+        symbols_attempted=1, symbols_with_filings=0, symbols_with_prices=1,
         warnings=("AAA: no SEC filings acquired (no CIK match or no quarterly facts found)",),
     )
 
@@ -323,6 +324,103 @@ def test_acquire_data_writes_raw_files_and_manifest(monkeypatch, tmp_path):
     assert manifest_path.exists()
     manifest_data = json.loads(manifest_path.read_text())
     assert manifest_data["provider_name"] == "sec_edgar+yfinance+wikipedia"
+
+
+def _fake_sic_history_result():
+    from atlas_quant.strategies.filing_momentum_ml.acquisition.sic_history import SicHistoryResult
+    from atlas_quant.strategies.filing_momentum_ml.production.normalization import RawSicHistoryRecord
+
+    now = datetime(2026, 7, 29)
+    return SicHistoryResult(
+        records=(
+            RawSicHistoryRecord(
+                symbol="AAA", asset_class="equity", accession_number="acc-0", filed_at=now,
+                sic_code=7372, gics_sector="Information Technology",
+                source="sec_edgar_sic_header", retrieved_at=now,
+            ),
+        ),
+        pairs_attempted=1, pairs_with_sic=1, warnings=(),
+    )
+
+
+def test_acquire_sic_history_requires_sec_user_agent(monkeypatch, tmp_path):
+    monkeypatch.delenv("SEC_EDGAR_USER_AGENT", raising=False)
+    code, out, err = _run([
+        "filing-momentum", "acquire-sic-history", "--raw-root", str(tmp_path / "raw"), "--dry-run",
+    ])
+    assert code == 1
+    assert "User-Agent" in err
+
+
+def test_acquire_sic_history_requires_existing_filings(tmp_path):
+    raw_root = tmp_path / "raw"
+    raw_root.mkdir(parents=True)
+    code, out, err = _run([
+        "filing-momentum", "acquire-sic-history", "--raw-root", str(raw_root),
+        "--sec-user-agent", "Test test@example.com", "--dry-run",
+    ])
+    assert code == 1
+    assert "filings.json" in err
+
+
+def _write_filings_only(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "filings.json").write_text(json.dumps([{
+        "symbol": "AAA", "asset_class": "equity", "fiscal_period": "Q1", "fiscal_year": 2023,
+        "quarter_end": "2023-03-31", "filed_at": "2023-04-30T00:00:00", "revenue": 100.0,
+        "gross_profit": None, "operating_income": None, "net_income": None, "diluted_eps": None,
+        "stockholders_equity": None, "operating_cash_flow": None, "capital_expenditure": None,
+        "accession_number": "acc-0", "source": "fixture", "retrieved_at": "2023-06-01T00:00:00",
+    }]))
+
+
+def test_acquire_sic_history_dry_run_writes_nothing(monkeypatch, tmp_path):
+    import atlas_quant.cli.filing_momentum as cli_module
+
+    monkeypatch.setattr(cli_module, "fetch_ticker_to_cik_map", lambda *a, **k: {"AAA": "0000000001"})
+    monkeypatch.setattr(cli_module, "fetch_sic_history", lambda *a, **k: _fake_sic_history_result())
+    raw_root = tmp_path / "raw"
+    _write_filings_only(raw_root)
+    code, out, err = _run([
+        "filing-momentum", "acquire-sic-history", "--raw-root", str(raw_root),
+        "--sec-user-agent", "Test test@example.com", "--dry-run",
+    ])
+    assert code == 0
+    assert "acquired SIC for 1/1" in out
+    assert not (raw_root / "sic_history.json").exists()
+
+
+def test_acquire_sic_history_writes_file(monkeypatch, tmp_path):
+    import atlas_quant.cli.filing_momentum as cli_module
+
+    monkeypatch.setattr(cli_module, "fetch_ticker_to_cik_map", lambda *a, **k: {"AAA": "0000000001"})
+    monkeypatch.setattr(cli_module, "fetch_sic_history", lambda *a, **k: _fake_sic_history_result())
+    raw_root = tmp_path / "raw"
+    _write_filings_only(raw_root)
+    code, out, err = _run([
+        "filing-momentum", "acquire-sic-history", "--raw-root", str(raw_root),
+        "--sec-user-agent", "Test test@example.com",
+    ])
+    assert code == 0
+    written = json.loads((raw_root / "sic_history.json").read_text())
+    assert len(written) == 1
+    assert written[0]["gics_sector"] == "Information Technology"
+
+
+def test_acquire_sic_history_refuses_overwrite_without_flag(monkeypatch, tmp_path):
+    import atlas_quant.cli.filing_momentum as cli_module
+
+    monkeypatch.setattr(cli_module, "fetch_ticker_to_cik_map", lambda *a, **k: {"AAA": "0000000001"})
+    monkeypatch.setattr(cli_module, "fetch_sic_history", lambda *a, **k: _fake_sic_history_result())
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    (raw_root / "sic_history.json").write_text("[]")
+    code, out, err = _run([
+        "filing-momentum", "acquire-sic-history", "--raw-root", str(raw_root),
+        "--sec-user-agent", "Test test@example.com",
+    ])
+    assert code == 1
+    assert "overwrite" in err
 
 
 def test_acquire_data_refuses_overwrite_without_flag(monkeypatch, tmp_path):

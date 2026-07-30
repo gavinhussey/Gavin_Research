@@ -11,11 +11,11 @@ from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, 
 from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
     RawFilingRecord,
     RawPriceRecord,
-    RawSectorRecord,
+    RawSicHistoryRecord,
     RawUniverseRecord,
     normalize_filings,
     normalize_prices,
-    normalize_sectors,
+    normalize_sic_history_batch,
     normalize_universe,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.validation import ValidationSeverity
@@ -96,20 +96,25 @@ def test_normalize_universe_member_produces_stage3_type_exactly():
     assert type(members[0]) is UniverseMembershipRecord
 
 
-def _raw_sector(**overrides) -> RawSectorRecord:
-    defaults = dict(symbol="AAPL", asset_class="equity", raw_sector="Technology", as_of=_NOW, source="gics", retrieved_at=_NOW)
+def _raw_sic_history(**overrides) -> RawSicHistoryRecord:
+    defaults = dict(
+        symbol="AAPL", asset_class="equity", accession_number="acc-1", filed_at=_NOW,
+        sic_code=7372, gics_sector="Information Technology", source="sec_edgar_sic_header", retrieved_at=_NOW,
+    )
     defaults.update(overrides)
-    return RawSectorRecord(**defaults)
+    return RawSicHistoryRecord(**defaults)
 
 
-def test_normalize_sector_produces_stage3_type_exactly():
-    sectors, issues = normalize_sectors([_raw_sector()])
+def test_normalize_sic_history_produces_stage3_type_exactly():
+    sectors, issues = normalize_sic_history_batch([_raw_sic_history()])
     assert issues == ()
     assert type(sectors[0]) is SectorRecord
+    assert sectors[0].raw_sector == "Information Technology"
+    assert sectors[0].as_of == _NOW
 
 
-def test_normalize_sector_allows_missing_raw_sector():
-    sectors, issues = normalize_sectors([_raw_sector(raw_sector=None)])
+def test_normalize_sic_history_allows_missing_gics_sector():
+    sectors, issues = normalize_sic_history_batch([_raw_sic_history(gics_sector=None, sic_code=None)])
     assert issues == ()
     assert sectors[0].raw_sector is None
 
@@ -138,8 +143,8 @@ def test_raw_universe_to_dict_has_iso_dates():
     assert data["survivorship_biased"] is True
 
 
-def test_raw_sector_to_dict_has_iso_dates():
-    raw = _raw_sector()
+def test_raw_sic_history_to_dict_has_iso_dates():
+    raw = _raw_sic_history()
     data = raw.to_dict()
-    assert data["raw_sector"] == "Technology"
-    assert data["as_of"] == "2024-05-01T00:00:00+00:00"
+    assert data["gics_sector"] == "Information Technology"
+    assert data["filed_at"] == "2024-05-01T00:00:00+00:00"

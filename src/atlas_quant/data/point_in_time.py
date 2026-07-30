@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Literal, Protocol, Sequence, runtime_checkable
 
-from atlas_quant.data.records import FilingFundamentals
+from atlas_quant.data.records import FilingFundamentals, SectorRecord
 from atlas_quant.domain.identifiers import InstrumentId
 
 FilingTimingMode = Literal["training", "inference"]
@@ -263,3 +263,28 @@ def select_point_in_time_fundamentals(
         )
 
     return PointInTimeSelectionResult(selected=tuple(ordered), rejected=tuple(rejected))
+
+
+def select_point_in_time_sector(
+    history: Sequence[SectorRecord], instrument_id: InstrumentId, cutoff: datetime,
+) -> SectorRecord | None:
+    """Select the single most-recently-knowable sector classification as
+    of ``cutoff`` -- the sector analogue of
+    :func:`select_point_in_time_fundamentals`, simpler because sector
+    history has no quarter/amendment structure to dedupe: it is just an
+    ordered sequence of point-in-time facts (e.g. one per filing's own
+    SIC code), and the correct answer is always "the latest one knowable
+    by ``cutoff``".
+
+    A record for a different ``instrument_id`` is ignored (defensive,
+    same rationale as the fundamentals selector: callers are expected to
+    pre-filter, but a caller bug should never silently mix instruments).
+    A record with ``as_of > cutoff`` is not yet knowable and is ignored.
+    Returns ``None`` if no record is knowable yet -- callers already
+    treat a missing sector record as "Unknown" (see
+    ``SectorEncoder.normalize``), never a hard failure.
+    """
+    knowable = [r for r in history if r.instrument_id == instrument_id and r.as_of <= cutoff]
+    if not knowable:
+        return None
+    return max(knowable, key=lambda r: r.as_of)

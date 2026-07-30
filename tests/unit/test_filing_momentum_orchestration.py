@@ -91,8 +91,8 @@ def _build_inputs() -> ProductionRunInputs:
         _SPY: _daily_prices(_SPY), _VOO: _daily_prices(_VOO), _VTI: _daily_prices(_VTI),
     }
     sector_by_instrument = {
-        _AAA: make_sector_record(_AAA, "Technology", datetime(2023, 1, 1)),
-        _BBB: make_sector_record(_BBB, "Healthcare", datetime(2023, 1, 1)),
+        _AAA: (make_sector_record(_AAA, "Technology", datetime(2023, 1, 1)),),
+        _BBB: (make_sector_record(_BBB, "Healthcare", datetime(2023, 1, 1)),),
     }
     periods = generate_quarterly_periods(_TARGET_QUARTER_END, _TARGET_QUARTER_END, earnings_lag_days=config.strategy_config.earnings_lag_days)
     return ProductionRunInputs(

@@ -18,13 +18,12 @@ from typing import Callable
 
 from atlas_quant.strategies.filing_momentum_ml.acquisition.http_client import HttpClient
 from atlas_quant.strategies.filing_momentum_ml.acquisition.sec_edgar import fetch_filings_for_symbol, fetch_ticker_to_cik_map
-from atlas_quant.strategies.filing_momentum_ml.acquisition.universe import build_universe_and_sector_records
+from atlas_quant.strategies.filing_momentum_ml.acquisition.universe import build_universe_records
 from atlas_quant.strategies.filing_momentum_ml.acquisition.yfinance_provider import PriceHistoryProvider, fetch_prices_for_symbol
 from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
 from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
     RawFilingRecord,
     RawPriceRecord,
-    RawSectorRecord,
     RawUniverseRecord,
 )
 
@@ -38,7 +37,6 @@ class AcquisitionResult:
     filings: tuple[RawFilingRecord, ...]
     prices: tuple[RawPriceRecord, ...]
     universe: tuple[RawUniverseRecord, ...]
-    sectors: tuple[RawSectorRecord, ...]
     symbols_attempted: int
     symbols_with_filings: int
     symbols_with_prices: int
@@ -54,17 +52,16 @@ def run_full_acquisition(
     symbol_limit: int | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> AcquisitionResult:
-    """Acquire the present-day S&P 500 + Nasdaq 100 universe, each
-    member's sector, real SEC EDGAR filing fundamentals, and real daily
-    prices. ``symbol_limit`` (if given) caps how many universe members
-    are actually fetched -- for a quick partial run, never for silently
-    dropping symbols from the reported universe without disclosure (the
-    returned ``universe``/``sectors`` are filtered to match exactly what
-    was attempted).
+    """Acquire the present-day S&P 500 + Nasdaq 100 universe, real SEC
+    EDGAR filing fundamentals, and real daily prices. Sector is *not*
+    acquired here -- see ``acquire-sic-history``/``acquisition/sic_history.py``
+    for the point-in-time SIC-derived sector source. ``symbol_limit`` (if
+    given) caps how many universe members are actually fetched -- for a
+    quick partial run, never for silently dropping symbols from the
+    reported universe without disclosure (the returned ``universe`` is
+    filtered to match exactly what was attempted).
     """
-    universe_records, sector_records = build_universe_and_sector_records(
-        http_client, as_of=retrieved_at, retrieved_at=retrieved_at,
-    )
+    universe_records = build_universe_records(http_client, as_of=retrieved_at, retrieved_at=retrieved_at)
     symbols = [r.symbol for r in universe_records]
     if symbol_limit is not None:
         symbols = symbols[:symbol_limit]
@@ -109,7 +106,6 @@ def run_full_acquisition(
     return AcquisitionResult(
         filings=tuple(all_filings), prices=tuple(all_prices),
         universe=tuple(r for r in universe_records if r.symbol in symbol_set),
-        sectors=tuple(r for r in sector_records if r.symbol in symbol_set),
         symbols_attempted=len(symbols), symbols_with_filings=symbols_with_filings,
         symbols_with_prices=symbols_with_prices, warnings=tuple(warnings),
     )
@@ -117,17 +113,19 @@ def run_full_acquisition(
 
 def write_raw_data_files(result: AcquisitionResult, raw_root: Path) -> dict[str, Path]:
     """Write ``result`` into ``raw_root`` as ``filings.json``/``prices.json``/
-    ``universe.json``/``sectors.json`` -- the exact shape the CLI's
-    ``--raw-root`` already reads. Overwrites unconditionally (acquisition
-    is expected to be re-run and refreshed); never call with a protected
-    production path from a test."""
+    ``universe.json`` -- the exact shape the CLI's ``--raw-root`` already
+    reads. Overwrites unconditionally (acquisition is expected to be
+    re-run and refreshed); never call with a protected production path
+    from a test. ``sic_history.json`` (the sector source) is written
+    separately by ``acquire-sic-history``, not here -- it depends on
+    ``filings.json`` already existing."""
     import json
 
     raw_root.mkdir(parents=True, exist_ok=True)
     written = {}
     for name, records in (
         ("filings.json", result.filings), ("prices.json", result.prices),
-        ("universe.json", result.universe), ("sectors.json", result.sectors),
+        ("universe.json", result.universe),
     ):
         path = raw_root / name
         path.write_text(json.dumps([r.to_dict() for r in records], indent=2))
@@ -157,12 +155,13 @@ def build_acquisition_manifest(
         survivorship_biased=True, filing_source="sec_edgar",
         filing_point_in_time_status="filed_at taken directly from SEC's own 'filed' field",
         price_source="yfinance", price_convention="split_dividend_adjusted",
-        sector_source="wikipedia_sp500_gics_nasdaq100_icb", sector_override_identity="none",
+        sector_source="sec_edgar_sic_header_crosswalk (acquire-sic-history, run separately)",
+        sector_override_identity="none",
         trading_calendar_source="derived from acquired price trading dates",
         coverage_start=coverage_start, coverage_end=coverage_end,
         row_counts={
             "filings": len(result.filings), "prices": len(result.prices),
-            "universe": len(result.universe), "sectors": len(result.sectors),
+            "universe": len(result.universe),
         },
         missing_data_summary={
             "symbols_without_filings": result.symbols_attempted - result.symbols_with_filings,

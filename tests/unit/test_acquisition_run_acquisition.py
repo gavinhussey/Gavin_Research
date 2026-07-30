@@ -92,7 +92,6 @@ def test_run_full_acquisition_happy_path():
     assert len(result.filings) == 1
     assert len(result.prices) == 3
     assert len(result.universe) == 2
-    assert len(result.sectors) == 2
     assert any("BBB" in w and "no SEC filings" in w for w in result.warnings)
 
 
@@ -107,13 +106,12 @@ def test_run_full_acquisition_isolates_per_symbol_price_failure():
     assert len(result.prices) == 1
 
 
-def test_symbol_limit_filters_universe_and_sectors_consistently():
+def test_symbol_limit_filters_universe_consistently():
     result = run_full_acquisition(
         _client(), _provider(), sec_user_agent="Test test@example.com", retrieved_at=_RETRIEVED_AT, symbol_limit=1,
     )
     assert result.symbols_attempted == 1
     assert {r.symbol for r in result.universe} == {"AAA"}
-    assert {r.symbol for r in result.sectors} == {"AAA"}
 
 
 def test_progress_callback_invoked_per_symbol():
@@ -132,7 +130,7 @@ def test_write_raw_data_files_round_trips_through_cli_loader(tmp_path):
         _client(), _provider(), sec_user_agent="Test test@example.com", retrieved_at=_RETRIEVED_AT,
     )
     written = write_raw_data_files(result, tmp_path)
-    assert set(written) == {"filings.json", "prices.json", "universe.json", "sectors.json"}
+    assert set(written) == {"filings.json", "prices.json", "universe.json"}
 
     bundle = load_normalized_bundle(tmp_path)
     assert bundle.issues == ()

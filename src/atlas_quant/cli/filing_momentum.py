@@ -38,7 +38,12 @@ from atlas_quant.strategies.filing_momentum_ml.acquisition.run_acquisition impor
     run_full_acquisition,
     write_raw_data_files,
 )
-from atlas_quant.strategies.filing_momentum_ml.acquisition.sec_edgar import resolve_user_agent
+from atlas_quant.strategies.filing_momentum_ml.acquisition.sec_edgar import fetch_ticker_to_cik_map, resolve_user_agent
+from atlas_quant.strategies.filing_momentum_ml.acquisition.sic_history import (
+    DEFAULT_REQUESTS_PER_SECOND,
+    fetch_sic_history,
+    write_sic_history_file,
+)
 from atlas_quant.strategies.filing_momentum_ml.acquisition.yfinance_provider import YFinancePriceProvider
 from atlas_quant.strategies.filing_momentum_ml.config import FEATURE_SCHEMA_VERSION, FeatureCacheIdentity, FilingMomentumMLConfig
 from atlas_quant.strategies.filing_momentum_ml.feature_cache import DEFAULT_CACHE_ROOT, FeatureCachePaths
@@ -51,11 +56,11 @@ from atlas_quant.strategies.filing_momentum_ml.production.feature_label_build im
 from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
     RawFilingRecord,
     RawPriceRecord,
-    RawSectorRecord,
+    RawSicHistoryRecord,
     RawUniverseRecord,
     normalize_filings,
     normalize_prices,
-    normalize_sectors,
+    normalize_sic_history_batch,
     normalize_universe,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.orchestration import (
@@ -153,15 +158,16 @@ def _parse_raw_universe(d: dict) -> RawUniverseRecord:
         raise CLIError(f"universe.json record missing required field: {exc}") from exc
 
 
-def _parse_raw_sector(d: dict) -> RawSectorRecord:
+def _parse_raw_sic_history(d: dict) -> RawSicHistoryRecord:
     try:
-        return RawSectorRecord(
-            symbol=d["symbol"], asset_class=d["asset_class"], raw_sector=d.get("raw_sector"),
-            as_of=datetime.fromisoformat(d["as_of"]), source=d["source"],
+        return RawSicHistoryRecord(
+            symbol=d["symbol"], asset_class=d["asset_class"], accession_number=d["accession_number"],
+            filed_at=datetime.fromisoformat(d["filed_at"]), sic_code=d.get("sic_code"),
+            gics_sector=d.get("gics_sector"), source=d["source"],
             retrieved_at=datetime.fromisoformat(d["retrieved_at"]),
         )
     except KeyError as exc:
-        raise CLIError(f"sectors.json record missing required field: {exc}") from exc
+        raise CLIError(f"sic_history.json record missing required field: {exc}") from exc
 
 
 class NormalizedBundle:
@@ -180,21 +186,26 @@ def load_normalized_bundle(raw_root: Path) -> NormalizedBundle:
     """Load, parse, and normalize this CLI's raw-data JSON files.
 
     Expects ``filings.json``/``prices.json``/``universe.json``/
-    ``sectors.json`` under ``raw_root``, each a JSON array whose objects
-    match :class:`~...normalization.RawFilingRecord` (etc.)'s own fields.
-    A missing file is treated as zero records for that category (reported
-    later as a validation issue, e.g. an empty universe is FATAL) -- this
-    function never makes a network call or reaches outside ``raw_root``.
+    ``sic_history.json`` under ``raw_root``, each a JSON array whose
+    objects match :class:`~...normalization.RawFilingRecord` (etc.)'s own
+    fields. A missing file is treated as zero records for that category
+    (reported later as a validation issue, e.g. an empty universe is
+    FATAL) -- this function never makes a network call or reaches outside
+    ``raw_root``. ``sic_history.json`` (from ``acquire-sic-history``) is
+    this platform's sole sector source -- each instrument maps to its
+    *full* point-in-time sector history, sorted oldest-to-newest, not a
+    single present-day snapshot; the feature pipeline selects the record
+    knowable as of each cohort's own cutoff.
     """
     raw_filings = [_parse_raw_filing(d) for d in _read_json_list(raw_root / "filings.json")]
     raw_prices = [_parse_raw_price(d) for d in _read_json_list(raw_root / "prices.json")]
     raw_universe = [_parse_raw_universe(d) for d in _read_json_list(raw_root / "universe.json")]
-    raw_sectors = [_parse_raw_sector(d) for d in _read_json_list(raw_root / "sectors.json")]
+    raw_sic_history = [_parse_raw_sic_history(d) for d in _read_json_list(raw_root / "sic_history.json")]
 
     filings, filing_issues = normalize_filings(raw_filings)
     prices, price_issues = normalize_prices(raw_prices)
     universe_members, universe_issues = normalize_universe(raw_universe)
-    sectors, sector_issues = normalize_sectors(raw_sectors)
+    sectors, sector_issues = normalize_sic_history_batch(raw_sic_history)
 
     filings_by_instrument: dict[InstrumentId, list] = {}
     for f in filings:
@@ -202,7 +213,12 @@ def load_normalized_bundle(raw_root: Path) -> NormalizedBundle:
     prices_by_instrument: dict[InstrumentId, list] = {}
     for p in prices:
         prices_by_instrument.setdefault(p.instrument_id, []).append(p)
-    sector_by_instrument = {s.instrument_id: s for s in sectors}
+    sector_by_instrument: dict[InstrumentId, list] = {}
+    for s in sectors:
+        sector_by_instrument.setdefault(s.instrument_id, []).append(s)
+    for records in sector_by_instrument.values():
+        records.sort(key=lambda r: r.as_of)
+    sector_by_instrument = {iid: tuple(records) for iid, records in sector_by_instrument.items()}
 
     issues = filing_issues + price_issues + universe_issues + sector_issues
     return NormalizedBundle(filings_by_instrument, prices_by_instrument, sector_by_instrument, universe_members, issues)
@@ -231,7 +247,7 @@ def _run_validation(
         issues.extend(validate_filings(filings))
     for instrument_id in bundle.universe:
         issues.extend(validate_prices(bundle.prices_by_instrument.get(instrument_id, ())))
-    issues.extend(validate_sectors(list(bundle.sector_by_instrument.values())))
+    issues.extend(validate_sectors([r for records in bundle.sector_by_instrument.values() for r in records]))
     issues.extend(validate_universe(bundle.universe_members))
     if periods:
         issues.extend(
@@ -370,7 +386,7 @@ def cmd_acquire_data(args: argparse.Namespace, stdout, stderr) -> int:
         raise CLIError(str(exc)) from exc
 
     if not args.dry_run and not args.overwrite:
-        for existing in ("filings.json", "prices.json", "universe.json", "sectors.json"):
+        for existing in ("filings.json", "prices.json", "universe.json"):
             if (args.raw_root / existing).exists():
                 stderr.write(f"{args.raw_root / existing} already exists -- pass --overwrite to replace it\n")
                 return 1
@@ -419,6 +435,65 @@ def cmd_acquire_data(args: argparse.Namespace, stdout, stderr) -> int:
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(args.manifest, manifest.to_dict(), overwrite=True)
     stdout.write(f"wrote manifest: {args.manifest}\n")
+    return 0
+
+
+def cmd_acquire_sic_history(args: argparse.Namespace, stdout, stderr) -> int:
+    """One-time backfill: real point-in-time SIC (and its SIC->GICS
+    crosswalk sector) for every already-acquired filing accession in
+    ``--raw-root``'s ``filings.json``, written to ``sic_history.json`` --
+    this platform's sole sector source (see ``load_normalized_bundle``).
+    Real network requests against SEC EDGAR -- see
+    ``acquisition/sic_history.py`` for why this is a separate, slower
+    subcommand from ``acquire-data``.
+    """
+    try:
+        user_agent = resolve_user_agent(args.sec_user_agent)
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+    sic_history_path = args.raw_root / "sic_history.json"
+    if not args.dry_run and not args.overwrite and sic_history_path.exists():
+        stderr.write(f"{sic_history_path} already exists -- pass --overwrite to replace it\n")
+        return 1
+
+    raw_filings = [_parse_raw_filing(d) for d in _read_json_list(args.raw_root / "filings.json")]
+    if not raw_filings:
+        stderr.write(f"no filings found at {args.raw_root / 'filings.json'} -- run acquire-data first\n")
+        return 1
+
+    client = RequestsHttpClient()
+    ticker_to_cik = fetch_ticker_to_cik_map(client, user_agent=user_agent)
+
+    def _progress(symbol: str, index: int, total: int) -> None:
+        stdout.write(f"[{index}/{total}] {symbol}\n")
+
+    retrieved_at = datetime.now()
+    result = fetch_sic_history(
+        client, raw_filings, ticker_to_cik, user_agent=user_agent, retrieved_at=retrieved_at,
+        requests_per_second=args.requests_per_second,
+        progress_callback=_progress if not args.as_json else None,
+    )
+
+    summary = {
+        "pairs_attempted": result.pairs_attempted, "pairs_with_sic": result.pairs_with_sic,
+        "warning_count": len(result.warnings),
+    }
+    if args.as_json:
+        stdout.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    else:
+        stdout.write(
+            f"acquired SIC for {summary['pairs_with_sic']}/{summary['pairs_attempted']} "
+            f"filing accession(s), {summary['warning_count']} warning(s)\n"
+        )
+        for w in result.warnings:
+            stdout.write(f"warning: {w}\n")
+
+    if args.dry_run:
+        return 0
+
+    path = write_sic_history_file(result, args.raw_root)
+    stdout.write(f"wrote sic_history.json: {path}\n")
     return 0
 
 
@@ -609,6 +684,7 @@ def cmd_run_all(args: argparse.Namespace, stdout, stderr) -> int:
 
 _HANDLERS = {
     "acquire-data": cmd_acquire_data,
+    "acquire-sic-history": cmd_acquire_sic_history,
     "validate-data": cmd_validate_data,
     "build-features": cmd_build_features,
     "build-labels": cmd_build_labels,
@@ -648,6 +724,17 @@ def build_parser() -> argparse.ArgumentParser:
     acquire_p.add_argument("--sec-user-agent", type=str, default=None, help="or set SEC_EDGAR_USER_AGENT")
     acquire_p.add_argument("--symbol-limit", type=int, default=None, help="cap on how many universe members to acquire")
     acquire_p.add_argument("--dataset-label", type=str, default="sec_edgar_yfinance_wikipedia_snapshot")
+
+    sic_history_p = sub.add_parser(
+        "acquire-sic-history",
+        help="one-time backfill: real point-in-time SIC history for already-acquired filings (real network requests)",
+    )
+    _add_common_arguments(sic_history_p)
+    sic_history_p.add_argument("--sec-user-agent", type=str, default=None, help="or set SEC_EDGAR_USER_AGENT")
+    sic_history_p.add_argument(
+        "--requests-per-second", type=float, default=DEFAULT_REQUESTS_PER_SECOND,
+        help="rate limit for the per-filing SIC fetch loop",
+    )
 
     validate_p = sub.add_parser("validate-data", help="validate normalized raw data")
     _add_common_arguments(validate_p)

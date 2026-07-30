@@ -324,7 +324,7 @@ class TestFeaturePipeline:
             targets=[(iid_a, QUARTERS[-1], buy_ts), (iid_b, QUARTERS[-1], buy_ts)],
             filings_by_instrument={iid_a: filings_a, iid_b: filings_b},
             prices_by_instrument={iid_a: prices_a, iid_b: prices_b},
-            sector_by_instrument={iid_a: sector_a, iid_b: sector_b},
+            sector_by_instrument={iid_a: (sector_a,), iid_b: (sector_b,)},
         )
         assert len(result.observations) == 2
         assert {o.instrument_id.symbol for o in result.observations} == {"AAA", "BBB"}
@@ -338,7 +338,7 @@ class TestFeaturePipeline:
             targets=[(iid, QUARTERS[-1], _cohort_buy_timestamp(QUARTERS[-1]))],
             filings_by_instrument={iid: filings},
             prices_by_instrument={iid: prices},
-            sector_by_instrument={iid: sector},
+            sector_by_instrument={iid: (sector,)},
         )
         r1 = run_feature_pipeline(**kwargs)
         r2 = run_feature_pipeline(**kwargs)
@@ -382,7 +382,7 @@ class TestFeaturePipeline:
             targets=[(iid, QUARTERS[-1], _cohort_buy_timestamp(QUARTERS[-1]))],
             filings_by_instrument={iid: filings},
             prices_by_instrument={iid: prices},
-            sector_by_instrument={iid: sector},
+            sector_by_instrument={iid: (sector,)},
         )
         assert len(result.to_dicts()) == 1
         assert len(result.to_model_matrix()) == 1

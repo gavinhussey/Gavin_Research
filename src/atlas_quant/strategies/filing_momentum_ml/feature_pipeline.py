@@ -19,13 +19,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from atlas_quant.data.point_in_time import (
     FilingTimingMode,
     TradingCalendar,
     resolve_feature_timestamp,
     select_point_in_time_fundamentals,
+    select_point_in_time_sector,
 )
 from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, SectorRecord
 from atlas_quant.domain.audit import AuditRecord, AuditTrail
@@ -418,7 +419,7 @@ def run_feature_pipeline(
     targets: Sequence[tuple[InstrumentId, date, datetime]],
     filings_by_instrument: dict[InstrumentId, Sequence[FilingFundamentals]],
     prices_by_instrument: dict[InstrumentId, Sequence[DailyPriceObservation]],
-    sector_by_instrument: dict[InstrumentId, SectorRecord],
+    sector_by_instrument: Mapping[InstrumentId, Sequence[SectorRecord]],
     mode: FilingTimingMode = "training",
     feature_cache_identity: str | None = None,
 ) -> FeaturePipelineResult:
@@ -432,6 +433,13 @@ def run_feature_pipeline(
     multi-cohort batch see filings only knowable as of a *later* cohort's
     own buy date, a real lookahead bug distinct from (but previously
     masked by) the fiscal/calendar-equality bug this module also fixes.
+    The same per-target cutoff selects each instrument's sector via
+    :func:`atlas_quant.data.point_in_time.select_point_in_time_sector` --
+    ``sector_by_instrument`` holds each instrument's *full* sector
+    history (multiple point-in-time facts, not one snapshot), so an
+    instrument whose real classification changed over the backtest window
+    sees the classification that was actually knowable as of each
+    cohort's own cutoff, not today's.
 
     Deterministic: iterates ``targets`` in the given order and never
     depends on dict iteration order for its own output ordering.
@@ -450,7 +458,9 @@ def run_feature_pipeline(
             cohort_buy_timestamp=cohort_buy_timestamp,
             filings=filings_by_instrument.get(instrument_id, ()),
             prices=prices_by_instrument.get(instrument_id, ()),
-            sector_record=sector_by_instrument.get(instrument_id),
+            sector_record=select_point_in_time_sector(
+                sector_by_instrument.get(instrument_id, ()), instrument_id, cutoff=cohort_buy_timestamp,
+            ),
             data_cutoff=cohort_buy_timestamp,
             mode=mode,
             feature_cache_identity=feature_cache_identity,
