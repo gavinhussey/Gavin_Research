@@ -29,7 +29,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
-from atlas_quant.backtest.clock import BacktestPeriod
+from atlas_quant.backtest.accounting import PositionLifecycleState
+from atlas_quant.backtest.clock import BacktestPeriod, current_and_next_periods
 from atlas_quant.backtest.filing_momentum_runner import (
     BacktestResult,
     FilingMomentumBacktestConfig,
@@ -46,6 +47,7 @@ from atlas_quant.dependency_status import (
 )
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
+from atlas_quant.domain.status import SignalKind
 from atlas_quant.reporting.domain import ReproducibilityStatus
 from atlas_quant.strategies.filing_momentum_ml.estimator import build_hgbc_estimator
 from atlas_quant.strategies.filing_momentum_ml.fallback_domain import FallbackAssetStatistics
@@ -69,6 +71,11 @@ from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import
 from atlas_quant.strategies.filing_momentum_ml.production.feature_label_build import (
     ProductionFeatureBuildResult,
     build_production_features,
+)
+from atlas_quant.strategies.filing_momentum_ml.production.live_pricing import (
+    LivePriceProvider,
+    YFinanceLivePriceProvider,
+    fetch_latest_quotes,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.validation import (
     DataValidationIssue,
@@ -586,6 +593,192 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         report=report,
         warnings=tuple(warnings),
         run_manifest=_finalize_manifest(inputs, run_manifest, final_state, now),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class LivePositionStatus:
+    """One instrument's live, mark-to-market status within the currently-held cohort.
+
+    ``entry_price``/``entry_date`` come from the exact same point-in-time
+    price-resolution logic every historical quarter uses -- a real,
+    already-realized historical fact, not a live lookup. ``current_price``/
+    ``current_date`` come from a fresh :mod:`.live_pricing` lookup and are
+    ``None`` if that lookup couldn't resolve a quote. ``unrealized_return``
+    is only ever computed from two genuinely resolved prices; it is never
+    a resolved (closed-quarter) return -- this cohort hasn't exited yet.
+    """
+
+    instrument_id: InstrumentId
+    role: SignalKind
+    target_weight: float
+    entry_date: date | None
+    entry_price: float | None
+    current_date: date | None
+    current_price: float | None
+    unrealized_return: float | None
+    contribution: float | None
+    lifecycle_state: PositionLifecycleState
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledPick:
+    """One instrument recommended for the next cohort, not yet entered.
+
+    No price fields -- ``entry_timestamp`` for this cohort is still in
+    the future, so there is nothing to resolve yet, live or historical.
+    """
+
+    instrument_id: InstrumentId
+    role: SignalKind
+    target_weight: float
+    scheduled_entry_date: date
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentStatusResult:
+    """The complete, structured outcome of one "where does this strategy
+    stand right now" check."""
+
+    state: ProductionRunState
+    as_of: datetime
+    held_quarter_end: date | None = None
+    held_entry_date: date | None = None
+    held_exit_date: date | None = None
+    held_positions: tuple[LivePositionStatus, ...] = field(default_factory=tuple)
+    held_cash_weight: float | None = None
+    portfolio_qtd_return: float | None = None
+    benchmark_qtd_return: float | None = None
+    qtd_alpha: float | None = None
+    next_quarter_end: date | None = None
+    next_entry_date: date | None = None
+    next_picks: tuple[ScheduledPick, ...] = field(default_factory=tuple)
+    blocked_reason: str | None = None
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+
+
+def run_filing_momentum_current_status(
+    inputs: ProductionRunInputs,
+    *,
+    as_of: datetime | None = None,
+    live_price_provider: LivePriceProvider | None = None,
+) -> CurrentStatusResult:
+    """Report where the strategy stands right now: the currently-held
+    cohort's live unrealized return/alpha, and the next cohort's
+    not-yet-entered picks.
+
+    Reuses :func:`run_filing_momentum_production_backtest` completely
+    unchanged over ``inputs.periods`` (which the caller must extend far
+    enough forward to cover both the currently-held and next-scheduled
+    cohorts -- see :func:`atlas_quant.backtest.clock.next_calendar_quarter_end`).
+    The currently-held cohort's entry price comes from that same,
+    already-tested point-in-time price-resolution logic every historical
+    quarter uses; its exit naturally resolves to
+    :attr:`~atlas_quant.backtest.accounting.PositionLifecycleState.UNRESOLVED`
+    because ``exit_timestamp`` is still in the future. This function fills
+    that gap with a live current price instead of a resolved exit price,
+    and computes an *unrealized* return -- it never treats a still-open
+    cohort as a closed quarter.
+
+    Known limitation (deliberately not addressed by this function): the
+    next cohort's picks are re-derived fresh on every call from whatever
+    data is currently acquired, not read back from a persisted record of
+    what was actually decided at the time. If the underlying acquired
+    data or code changes between two calls, "what we'd currently decide"
+    can change too -- this reports the strategy's live current view, not
+    an immutable decision log.
+    """
+    now = as_of or datetime.now()
+    held, next_scheduled = current_and_next_periods(inputs.periods, now)
+    if held is None:
+        return CurrentStatusResult(
+            state=ProductionRunState.BLOCKED_INVALID_DATASET, as_of=now,
+            blocked_reason=(
+                f"no period in inputs.periods covers as_of={now.isoformat()} -- "
+                "extend periods far enough forward (see next_calendar_quarter_end)"
+            ),
+        )
+
+    result = run_filing_momentum_production_backtest(inputs)
+    if (
+        result.state not in (ProductionRunState.COMPLETED, ProductionRunState.COMPLETED_WITH_WARNINGS)
+        or result.backtest_result is None
+    ):
+        return CurrentStatusResult(
+            state=result.state, as_of=now,
+            blocked_reason=result.blocked_reason or "underlying production backtest did not complete",
+            warnings=result.warnings,
+        )
+
+    quarters_by_end = {q.period.quarter_end: q for q in result.backtest_result.quarter_results}
+    held_quarter = quarters_by_end.get(held.quarter_end)
+    if held_quarter is None:
+        return CurrentStatusResult(
+            state=ProductionRunState.RUNNING_STEP_FAILED, as_of=now,
+            blocked_reason=f"backtest produced no result for the currently-held quarter {held.quarter_end}",
+        )
+
+    provider = live_price_provider or YFinanceLivePriceProvider()
+    live_symbols = sorted({p.instrument_id.symbol for p in held_quarter.positions} | {inputs.benchmark_instrument_id.symbol})
+    quotes = fetch_latest_quotes(
+        provider, live_symbols, asset_class=inputs.benchmark_instrument_id.asset_class, retrieved_at=now,
+    )
+
+    held_positions: list[LivePositionStatus] = []
+    for position in held_quarter.positions:
+        quote = quotes.get(position.instrument_id.symbol)
+        entry_price = position.entry_resolved.price if position.entry_resolved else None
+        entry_date = position.entry_resolved.resolved_timestamp if position.entry_resolved else None
+        current_price = quote.price if quote else None
+        current_date = quote.as_of if quote else None
+        unrealized = (current_price / entry_price - 1) if (entry_price and current_price) else None
+        contribution = position.target_weight * unrealized if unrealized is not None else None
+        warnings = position.warnings + (() if quote is not None else ("current price unavailable",))
+        held_positions.append(LivePositionStatus(
+            instrument_id=position.instrument_id, role=position.role, target_weight=position.target_weight,
+            entry_date=entry_date, entry_price=entry_price, current_date=current_date, current_price=current_price,
+            unrealized_return=unrealized, contribution=contribution, lifecycle_state=position.lifecycle_state,
+            warnings=warnings,
+        ))
+
+    portfolio_qtd = (
+        sum(p.contribution for p in held_positions if p.contribution is not None) + held_quarter.cash_weight * 0.0
+    )
+
+    benchmark_quote = quotes.get(inputs.benchmark_instrument_id.symbol)
+    benchmark_entry = (
+        held_quarter.benchmark.resolved_entry.price
+        if held_quarter.benchmark and held_quarter.benchmark.resolved_entry
+        else None
+    )
+    benchmark_qtd = (
+        (benchmark_quote.price / benchmark_entry - 1) if (benchmark_quote and benchmark_entry) else None
+    )
+    qtd_alpha = (portfolio_qtd - benchmark_qtd) if benchmark_qtd is not None else None
+
+    next_picks: tuple[ScheduledPick, ...] = ()
+    if next_scheduled is not None:
+        next_quarter = quarters_by_end.get(next_scheduled.quarter_end)
+        if next_quarter is not None:
+            next_picks = tuple(
+                ScheduledPick(
+                    instrument_id=p.instrument_id, role=p.role, target_weight=p.target_weight,
+                    scheduled_entry_date=next_scheduled.entry_timestamp.date(),
+                )
+                for p in next_quarter.positions
+            )
+
+    return CurrentStatusResult(
+        state=ProductionRunState.COMPLETED, as_of=now,
+        held_quarter_end=held.quarter_end, held_entry_date=held.entry_timestamp.date(),
+        held_exit_date=held.exit_timestamp.date(), held_positions=tuple(held_positions),
+        held_cash_weight=held_quarter.cash_weight,
+        portfolio_qtd_return=portfolio_qtd, benchmark_qtd_return=benchmark_qtd, qtd_alpha=qtd_alpha,
+        next_quarter_end=next_scheduled.quarter_end if next_scheduled else None,
+        next_entry_date=next_scheduled.entry_timestamp.date() if next_scheduled else None,
+        next_picks=next_picks,
+        warnings=result.warnings,
     )
 
 

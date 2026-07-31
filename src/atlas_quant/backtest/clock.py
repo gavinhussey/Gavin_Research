@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import Sequence
 
 from atlas_quant.config.identity import compute_config_identity
 
@@ -126,3 +127,55 @@ def _previous_quarter_end(quarter_end: date) -> date:
     else:
         day = 30
     return date(year, month, day)
+
+
+def next_calendar_quarter_end(d: date) -> date:
+    """The next real calendar quarter-end (Mar/Jun/Sep/Dec's last day) on
+    or after ``d`` -- ``d`` itself if it already is one.
+
+    Unlike :func:`_next_quarter_end`, ``d`` need not already be a
+    quarter-end date -- this is the entry point for "what quarter-end
+    horizon do I need to cover an arbitrary date like today" (see the
+    live current-status tooling), not for stepping an already-valid
+    sequence forward.
+    """
+    for month in (3, 6, 9, 12):
+        if month < d.month:
+            continue
+        if month in (3, 12):
+            day = 31
+        else:
+            day = 30
+        candidate = date(d.year, month, day)
+        if candidate >= d:
+            return candidate
+    return date(d.year + 1, 3, 31)
+
+
+def current_and_next_periods(
+    periods: Sequence[BacktestPeriod], as_of: datetime
+) -> tuple[BacktestPeriod | None, BacktestPeriod | None]:
+    """Split ``periods`` into the cohort currently held as of ``as_of`` and
+    the cohort not yet entered, report §5.5's timing.
+
+    Because one quarter's ``exit_timestamp`` always equals the next
+    quarter's ``entry_timestamp`` (simultaneous rebalance), exactly one
+    period in ``periods`` satisfies ``entry_timestamp <= as_of <
+    exit_timestamp`` at any instant -- that's ``current``. ``next_period``
+    is the chronologically following period in ``periods``, i.e. the
+    cohort decided but not yet entered. Either is ``None`` if ``periods``
+    doesn't extend far enough to cover ``as_of`` in that direction.
+    """
+    ordered = sorted(periods, key=lambda p: p.quarter_end)
+    current: BacktestPeriod | None = None
+    current_index: int | None = None
+    for i, period in enumerate(ordered):
+        if period.entry_timestamp <= as_of < period.exit_timestamp:
+            current, current_index = period, i
+            break
+    next_period = (
+        ordered[current_index + 1]
+        if current_index is not None and current_index + 1 < len(ordered)
+        else None
+    )
+    return current, next_period

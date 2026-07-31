@@ -243,6 +243,54 @@ def test_run_all_stops_at_first_blocked_step(tmp_path):
     assert not output_root.exists()
 
 
+class _FakeLivePriceProvider:
+    """Deterministic, injectable live-price provider -- no network."""
+
+    def __init__(self, prices: dict[str, float], *, as_of: date):
+        self._prices = prices
+        self._as_of = as_of
+
+    def fetch_recent_history(self, symbol: str):
+        import pandas as pd
+
+        if symbol not in self._prices:
+            return pd.DataFrame({"Close": []})
+        return pd.DataFrame({"Close": [self._prices[symbol]]}, index=[pd.Timestamp(self._as_of)])
+
+
+def test_current_status_runs_end_to_end_and_never_touches_network(tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
+    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", _fake_estimator_factory)
+    monkeypatch.setattr(
+        orchestration_module, "YFinanceLivePriceProvider",
+        lambda: _FakeLivePriceProvider({"AAA": 111.0, "SPY": 222.0}, as_of=date(2023, 6, 1)),
+    )
+
+    raw_root = tmp_path / "raw"
+    _write_raw_data(raw_root)
+    manifest_path = tmp_path / "manifest.json"
+    _write_manifest(manifest_path)
+
+    code, out, err = _run([
+        "filing-momentum", "current-status", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
+        "--start-quarter", "2022-03-31", "--as-of", "2023-06-01T00:00:00",
+    ])
+    assert code == 0
+    assert "state: completed" in out
+    assert "held cohort:" in out
+    assert "next scheduled cohort:" in out
+
+    code, out, err = _run([
+        "filing-momentum", "current-status", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
+        "--start-quarter", "2022-03-31", "--as-of", "2023-06-01T00:00:00", "--json",
+    ])
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["state"] == "completed"
+    assert payload["held_quarter_end"] == "2023-03-31"
+    assert payload["next_quarter_end"] == "2023-06-30"
+
+
 def test_cli_never_imports_network_or_legacy_access():
     """``acquire-data`` is this CLI's one deliberate, disclosed exception
     for real network access (SEC EDGAR/Wikipedia/yfinance, via the

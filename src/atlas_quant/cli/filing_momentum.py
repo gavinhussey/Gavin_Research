@@ -1,16 +1,22 @@
 """Filing Momentum ML's narrow, offline production-research CLI.
 
 Subcommands: ``acquire-data``, ``validate-data``, ``build-features``,
-``build-labels``, ``run-backtest``, ``build-report``, ``compare-report``,
-``run-all``.
+``build-labels``, ``run-backtest``, ``current-status``, ``build-report``,
+``compare-report``, ``run-all``.
 
-Every subcommand except ``acquire-data`` operates only on files the
-caller points it at (``--raw-root``, ``--manifest``, ``--report-json``,
-``--source-report-html``) and never fetches data over the network or
-reaches into the legacy ``Arnold_Quant`` repository. ``acquire-data`` is
-the one deliberate exception: it performs real network requests (SEC
-EDGAR, Wikipedia, yfinance) only when explicitly invoked -- never
-automatically from any other subcommand, and never from the test suite.
+Every subcommand except ``acquire-data`` and ``current-status`` operates
+only on files the caller points it at (``--raw-root``, ``--manifest``,
+``--report-json``, ``--source-report-html``) and never fetches data over
+the network or reaches into the legacy ``Arnold_Quant`` repository.
+``acquire-data`` and ``current-status`` are the two deliberate exceptions:
+``acquire-data`` performs real network requests (SEC EDGAR, Wikipedia,
+yfinance) for historical batch acquisition only when explicitly invoked;
+``current-status`` performs a small, separate real network request (via
+``production.live_pricing``, never ``acquisition/yfinance_provider.py``)
+for a handful of *current* quotes each time it runs. Neither runs
+automatically from any other subcommand, and neither runs from the test
+suite (``current-status``'s own tests always inject a fake
+``LivePriceProvider``).
 It requires a real ``SEC_EDGAR_USER_AGENT`` (env var or ``--sec-user-agent``)
 per SEC's fair-access policy, and never accepts or prints a credential.
 Every artifact write refuses to overwrite an existing file unless
@@ -23,13 +29,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Sequence
 
-from atlas_quant.backtest.clock import BacktestPeriod, generate_quarterly_periods
+from atlas_quant.backtest.clock import BacktestPeriod, generate_quarterly_periods, next_calendar_quarter_end
 from atlas_quant.backtest.filing_momentum_runner import FilingMomentumBacktestConfig
-from atlas_quant.data.point_in_time import ListTradingCalendar
+from atlas_quant.data.point_in_time import ListTradingCalendar, WeekdayTradingCalendar
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.reporting.serialization import ArtifactExistsError, write_json_atomic
 from atlas_quant.strategies.filing_momentum_ml.acquisition.http_client import RequestsHttpClient
@@ -64,9 +70,11 @@ from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
     normalize_universe,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.orchestration import (
+    CurrentStatusResult,
     ProductionRunInputs,
     ProductionRunResult,
     ProductionRunState,
+    run_filing_momentum_current_status,
     run_filing_momentum_production_backtest,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.validation import (
@@ -637,6 +645,116 @@ def cmd_run_backtest(args: argparse.Namespace, stdout, stderr) -> int:
     return 0 if result.state in _COMPLETED_STATES else _exit_code_for_state(result.state)
 
 
+def cmd_current_status(args: argparse.Namespace, stdout, stderr) -> int:
+    """Report where the strategy stands right now -- see
+    :func:`atlas_quant.strategies.filing_momentum_ml.production.orchestration
+    .run_filing_momentum_current_status`'s docstring for exactly what this
+    does and does not guarantee.
+
+    Uses :class:`WeekdayTradingCalendar` (no holiday awareness -- a
+    documented, pre-existing simplification in
+    ``atlas_quant.data.point_in_time``) instead of the real acquired-price
+    calendar, because periods here necessarily extend past the last
+    acquired price date into the current/next quarter -- the exact
+    calendar the historical backtest commands use only has trading days
+    up to whenever data was last acquired via ``acquire-data`` and cannot
+    answer "what's the next trading day" beyond that. This only affects
+    day-level filing-knowability sequencing, never any resolved price --
+    prices/entry values still only ever come from genuinely acquired
+    data or a live quote, never fabricated.
+    """
+    bundle = load_normalized_bundle(args.raw_root)
+    manifest = _load_manifest(args.manifest)
+    as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.now()
+    start_quarter = date.fromisoformat(args.start_quarter)
+
+    horizon = next_calendar_quarter_end(as_of.date())
+    end_quarter = next_calendar_quarter_end(horizon + timedelta(days=1))
+    lag = args.earnings_lag_days if args.earnings_lag_days is not None else FilingMomentumMLConfig().earnings_lag_days
+    periods = generate_quarterly_periods(start_quarter, end_quarter, earnings_lag_days=lag)
+
+    backtest_config = FilingMomentumBacktestConfig()
+    inputs = ProductionRunInputs(
+        backtest_config=backtest_config, periods=periods, universe=bundle.universe,
+        benchmark_instrument_id=InstrumentId(symbol=args.benchmark, asset_class=AssetClass.EQUITY),
+        trading_calendar=WeekdayTradingCalendar(), sector_encoder=SectorEncoder(),
+        filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
+        sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
+        checkpoint_root=None, run_mode="production",
+    )
+    result = run_filing_momentum_current_status(inputs, as_of=as_of)
+    _print_current_status(result, as_json=args.as_json, stream=stdout)
+    return 0 if result.state in _COMPLETED_STATES else _exit_code_for_state(result.state)
+
+
+def _print_current_status(result: CurrentStatusResult, *, as_json: bool, stream) -> None:
+    if as_json:
+        payload = {
+            "state": result.state.value,
+            "as_of": result.as_of.isoformat(),
+            "blocked_reason": result.blocked_reason,
+            "held_quarter_end": result.held_quarter_end.isoformat() if result.held_quarter_end else None,
+            "held_entry_date": result.held_entry_date.isoformat() if result.held_entry_date else None,
+            "held_exit_date": result.held_exit_date.isoformat() if result.held_exit_date else None,
+            "held_positions": [
+                {
+                    "instrument": p.instrument_id.symbol, "role": p.role.value, "target_weight": p.target_weight,
+                    "entry_date": p.entry_date.isoformat() if p.entry_date else None,
+                    "entry_price": p.entry_price,
+                    "current_date": p.current_date.isoformat() if p.current_date else None,
+                    "current_price": p.current_price, "unrealized_return": p.unrealized_return,
+                    "lifecycle_state": p.lifecycle_state.value, "warnings": list(p.warnings),
+                }
+                for p in result.held_positions
+            ],
+            "portfolio_qtd_return": result.portfolio_qtd_return,
+            "benchmark_qtd_return": result.benchmark_qtd_return,
+            "qtd_alpha": result.qtd_alpha,
+            "next_quarter_end": result.next_quarter_end.isoformat() if result.next_quarter_end else None,
+            "next_entry_date": result.next_entry_date.isoformat() if result.next_entry_date else None,
+            "next_picks": [
+                {"instrument": p.instrument_id.symbol, "role": p.role.value, "target_weight": p.target_weight}
+                for p in result.next_picks
+            ],
+            "warnings": list(result.warnings),
+        }
+        stream.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        return
+
+    stream.write(f"state: {result.state.value}\n")
+    stream.write(f"as of: {result.as_of.isoformat()}\n")
+    if result.blocked_reason:
+        stream.write(f"reason: {result.blocked_reason}\n")
+        return
+
+    stream.write(
+        f"\nheld cohort: quarter_end={result.held_quarter_end} "
+        f"entry={result.held_entry_date} scheduled_exit={result.held_exit_date}\n"
+    )
+    for p in result.held_positions:
+        current = f"{p.current_price:.2f} (as of {p.current_date})" if p.current_price is not None else "unavailable"
+        unrealized = f"{p.unrealized_return:+.2%}" if p.unrealized_return is not None else "n/a"
+        stream.write(
+            f"  {p.instrument_id.symbol:<8} {p.role.value:<8} weight={p.target_weight:.2%}  "
+            f"entry={p.entry_price:.2f} ({p.entry_date})  current={current}  unrealized={unrealized}\n"
+        )
+        for w in p.warnings:
+            stream.write(f"    warning: {w}\n")
+    if result.portfolio_qtd_return is not None:
+        stream.write(f"  portfolio QTD return: {result.portfolio_qtd_return:+.2%}\n")
+    if result.benchmark_qtd_return is not None:
+        stream.write(f"  benchmark QTD return: {result.benchmark_qtd_return:+.2%}\n")
+    if result.qtd_alpha is not None:
+        stream.write(f"  QTD alpha: {result.qtd_alpha:+.2%}\n")
+
+    stream.write(f"\nnext scheduled cohort: quarter_end={result.next_quarter_end} entry={result.next_entry_date}\n")
+    for p in result.next_picks:
+        stream.write(f"  {p.instrument_id.symbol:<8} {p.role.value:<8} weight={p.target_weight:.2%}  (not yet entered)\n")
+
+    for w in result.warnings:
+        stream.write(f"warning: {w}\n")
+
+
 def cmd_build_report(args: argparse.Namespace, stdout, stderr) -> int:
     bundle = load_normalized_bundle(args.raw_root)
     calendar = _build_trading_calendar(bundle)
@@ -689,6 +807,7 @@ _HANDLERS = {
     "build-features": cmd_build_features,
     "build-labels": cmd_build_labels,
     "run-backtest": cmd_run_backtest,
+    "current-status": cmd_current_status,
     "build-report": cmd_build_report,
     "compare-report": cmd_compare_report,
     "run-all": cmd_run_all,
@@ -750,6 +869,18 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_p = sub.add_parser("run-backtest", help="run the full production backtest (no report)")
     _add_common_arguments(backtest_p)
     backtest_p.add_argument("--checkpoint-root", type=Path, default=None)
+
+    current_status_p = sub.add_parser(
+        "current-status",
+        help="live status: currently-held cohort's unrealized return/alpha + next cohort's scheduled picks",
+    )
+    current_status_p.add_argument("--raw-root", type=Path, default=Path("data/raw/filing_momentum_ml"))
+    current_status_p.add_argument("--manifest", type=Path, default=Path("data/manifests/filing_momentum_ml/data_manifest.json"))
+    current_status_p.add_argument("--start-quarter", type=str, required=True, help="YYYY-MM-DD, a valid calendar quarter-end -- the training-history buffer's start")
+    current_status_p.add_argument("--as-of", type=str, default=None, help="ISO datetime; defaults to now")
+    current_status_p.add_argument("--benchmark", type=str, default="SPY")
+    current_status_p.add_argument("--earnings-lag-days", type=int, default=None)
+    current_status_p.add_argument("--json", action="store_true", dest="as_json", help="machine-readable JSON output")
 
     report_p = sub.add_parser("build-report", help="run the full production backtest and build a report")
     _add_common_arguments(report_p)
