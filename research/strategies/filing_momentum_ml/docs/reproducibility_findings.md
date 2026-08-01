@@ -97,6 +97,61 @@ comparison is no longer being pursued — see the policy note above.
   backtest run predates this fix and should be re-run before being cited
   against the external report.
 
+## Stage 14: paper-trading execution design decisions
+
+`atlas-quant filing-momentum paper-trade` (see
+`live_status_specification.md`'s "Paper trading" section for the full
+mechanism) adds real broker-integrated order execution on top of
+`current-status`. These are deliberate design decisions with real
+financial-logic consequences, recorded here per this project's
+provenance-transparency policy rather than left implicit in the code:
+
+- **Fully automated, no manual confirmation step.** A single
+  `paper-trade` invocation computes and submits orders with no human
+  review gate. This was an explicit user choice, made after considering a
+  manual propose/submit split; the fail-closed risk gates
+  (`atlas_quant.execution.risk_gates`) are the substitute safety net —
+  anything they can't validate blocks that specific order rather than
+  proceeding. Not a report-provenance divergence (paper trading has no
+  analogue in `report_current.html`); recorded here as a design decision.
+- **One shared Alpaca paper-trading account with an internal ledger**
+  (`atlas_quant.execution.sleeve_ledger`), not one broker account per
+  strategy. Chosen so the account model matches how a real, single pool
+  of live capital would eventually work. With only one strategy trading
+  the account today, `reconcile_with_broker` maps every broker position
+  1:1 onto this strategy's sleeve — a second strategy sharing the account
+  will need real per-strategy position attribution, which does not exist
+  yet.
+- **Market orders only**, sized against a fresh Alpaca quote (not the
+  yfinance-backed `live_pricing` provider used for reporting) so sizing
+  matches the venue that will actually fill the order. No limit-order or
+  smart-execution logic was built; acceptable for the strategy's
+  quarterly rebalance cadence on liquid large-cap names, revisit if a
+  future, higher-turnover strategy shares this execution layer.
+- **`max_single_instrument_weight` risk cap reuses
+  `atlas_quant.config.risk.RiskConfig`**, which existed since an earlier
+  stage as a declared-but-unenforced field ("Stage 7+ will consume
+  this"). `paper-trade` is that field's first real consumer (default 10%,
+  `--max-single-instrument-weight` to override) rather than a new,
+  parallel config surface.
+- **First live entry deliberately deferred to the strategy's next real
+  buy_dt (2026-08-11), not backfilled at setup time.** The paper account
+  was created empty, mid-quarter, on 2026-08-01. `paper-trade` always
+  trues the account up to whatever cohort is currently "held" per the
+  strategy's own calendar logic -- for an empty account started
+  mid-quarter, that's the *already in-progress* 2026-03-31 cohort
+  (entered 2026-05-12), not the next cohort about to enter. Buying that
+  older cohort now would use today's prices, not the actual 05-12 entry
+  prices already baked into the strategy's own reported unrealized
+  returns for that cohort -- a real, user-rejected decision (explicitly
+  discussed and declined: "wait until 2026-08-11"). The scheduled daily
+  `paper-trade` job (`live/filing_momentum_ml/run_paper_trade.py`) has a
+  one-time `NOT_BEFORE = "2026-08-11"` bootstrap guard for exactly this
+  reason -- it is not a permanent feature of the strategy or of
+  `paper-trade` itself, and should be deleted (not updated forward) once
+  the first entry has happened, since the same bootstrap mismatch can
+  never recur once the ledger holds real positions.
+
 ## Re-run command
 
 ```bash

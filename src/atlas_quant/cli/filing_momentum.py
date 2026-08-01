@@ -1,22 +1,27 @@
 """Filing Momentum ML's narrow, offline production-research CLI.
 
 Subcommands: ``acquire-data``, ``validate-data``, ``build-features``,
-``build-labels``, ``run-backtest``, ``current-status``, ``build-report``,
-``compare-report``, ``run-all``.
+``build-labels``, ``run-backtest``, ``current-status``, ``paper-trade``,
+``build-report``, ``compare-report``, ``run-all``.
 
-Every subcommand except ``acquire-data`` and ``current-status`` operates
-only on files the caller points it at (``--raw-root``, ``--manifest``,
-``--report-json``, ``--source-report-html``) and never fetches data over
-the network or reaches into the legacy ``Arnold_Quant`` repository.
-``acquire-data`` and ``current-status`` are the two deliberate exceptions:
+Every subcommand except ``acquire-data``, ``current-status``, and
+``paper-trade`` operates only on files the caller points it at
+(``--raw-root``, ``--manifest``, ``--report-json``,
+``--source-report-html``) and never fetches data over the network or
+reaches into the legacy ``Arnold_Quant`` repository. ``acquire-data``,
+``current-status``, and ``paper-trade`` are the deliberate exceptions:
 ``acquire-data`` performs real network requests (SEC EDGAR, Wikipedia,
 yfinance) for historical batch acquisition only when explicitly invoked;
 ``current-status`` performs a small, separate real network request (via
 ``production.live_pricing``, never ``acquisition/yfinance_provider.py``)
-for a handful of *current* quotes each time it runs. Neither runs
-automatically from any other subcommand, and neither runs from the test
-suite (``current-status``'s own tests always inject a fake
-``LivePriceProvider``).
+for a handful of *current* quotes each time it runs; ``paper-trade``
+additionally calls the Alpaca paper-trading API (account/position/quote
+lookups and, when the risk gates clear, real order submission against the
+paper account) and requires ``ALPACA_API_KEY``/``ALPACA_API_SECRET`` --
+see ``docs/live_status_specification.md`` for the account model, risk
+gates, and audit trail. None of the three run automatically from any
+other subcommand, and none run from the test suite (their tests always
+inject a fake provider/broker).
 It requires a real ``SEC_EDGAR_USER_AGENT`` (env var or ``--sec-user-agent``)
 per SEC's fair-access policy, and never accepts or prints a credential.
 Every artifact write refuses to overwrite an existing file unless
@@ -35,8 +40,14 @@ from typing import Sequence
 
 from atlas_quant.backtest.clock import BacktestPeriod, generate_quarterly_periods, next_calendar_quarter_end
 from atlas_quant.backtest.filing_momentum_runner import FilingMomentumBacktestConfig
+from atlas_quant.config.risk import RiskConfig
+from atlas_quant.config.secrets import load_secrets_from_env
 from atlas_quant.data.point_in_time import ListTradingCalendar, WeekdayTradingCalendar
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
+from atlas_quant.execution.alpaca_broker import AlpacaBroker, BrokerError
+from atlas_quant.execution.order_log import DEFAULT_ORDER_LOG_ROOT, BlockedOrder, OrderFill, OrderRunRecord, write_order_run
+from atlas_quant.execution.risk_gates import RiskGateBlocked, require_market_open
+from atlas_quant.execution.sleeve_ledger import DEFAULT_LEDGER_ROOT, reconcile_with_broker, write_ledger
 from atlas_quant.reporting.serialization import ArtifactExistsError, write_json_atomic
 from atlas_quant.strategies.filing_momentum_ml.acquisition.http_client import RequestsHttpClient
 from atlas_quant.strategies.filing_momentum_ml.acquisition.run_acquisition import (
@@ -77,6 +88,7 @@ from atlas_quant.strategies.filing_momentum_ml.production.orchestration import (
     run_filing_momentum_current_status,
     run_filing_momentum_production_backtest,
 )
+from atlas_quant.strategies.filing_momentum_ml.production.order_generation import generate_target_orders
 from atlas_quant.strategies.filing_momentum_ml.production.validation import (
     DataValidationIssue,
     DataValidationSummary,
@@ -763,6 +775,144 @@ def _print_current_status(result: CurrentStatusResult, *, as_json: bool, stream)
         stream.write(f"warning: {w}\n")
 
 
+def cmd_paper_trade_run(args: argparse.Namespace, stdout, stderr) -> int:
+    """Fully automated paper-trading run against the shared Alpaca account.
+
+    No manual confirmation step -- a single invocation computes today's
+    target portfolio (via :func:`run_filing_momentum_current_status`),
+    diffs it against the sleeve ledger's broker-reconciled positions,
+    submits whatever clears the fail-closed risk gates
+    (:mod:`atlas_quant.execution.risk_gates`), and records the full
+    propose/submit/fill audit trail via
+    :mod:`atlas_quant.execution.order_log`. See
+    ``docs/live_status_specification.md`` for the account/ledger model and
+    exactly what these risk gates do and don't cover.
+
+    Idempotent by construction: re-running proposes ~zero orders once the
+    account already matches today's target weights, which is what makes
+    it safe to invoke unattended on a schedule.
+
+    ``--dry-run`` still makes every real Alpaca API call needed to compute
+    and print what would be submitted (account, positions, clock, quotes)
+    -- so it's a genuine end-to-end connectivity check -- but returns
+    before ``submit_market_order`` or ``write_ledger`` are ever called.
+    """
+    bundle = load_normalized_bundle(args.raw_root)
+    manifest = _load_manifest(args.manifest)
+    as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.now()
+    start_quarter = date.fromisoformat(args.start_quarter)
+
+    config = FilingMomentumMLConfig()
+    horizon = next_calendar_quarter_end(as_of.date())
+    end_quarter = next_calendar_quarter_end(horizon + timedelta(days=1))
+    lag = args.earnings_lag_days if args.earnings_lag_days is not None else config.earnings_lag_days
+    periods = generate_quarterly_periods(start_quarter, end_quarter, earnings_lag_days=lag)
+
+    inputs = ProductionRunInputs(
+        backtest_config=FilingMomentumBacktestConfig(), periods=periods, universe=bundle.universe,
+        benchmark_instrument_id=InstrumentId(symbol=args.benchmark, asset_class=AssetClass.EQUITY),
+        trading_calendar=WeekdayTradingCalendar(), sector_encoder=SectorEncoder(),
+        filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
+        sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
+        checkpoint_root=None, run_mode="production",
+        model_cache_root=args.model_cache_root, decision_log_root=args.decision_log_root,
+    )
+    status = run_filing_momentum_current_status(inputs, as_of=as_of)
+    if status.state not in _COMPLETED_STATES:
+        stderr.write(f"current-status blocked: {status.blocked_reason}\n")
+        return _exit_code_for_state(status.state)
+
+    try:
+        broker = AlpacaBroker(load_secrets_from_env())
+        clock = broker.get_clock()
+        account = broker.get_account()
+        broker_positions = broker.get_positions()
+    except BrokerError as exc:
+        stderr.write(f"{exc}\n")
+        return 1
+
+    run_id = as_of.strftime("%Y%m%dT%H%M%S")
+    sleeve_equity = account.equity * config.strategy_budget_pct
+
+    try:
+        require_market_open(clock.is_open)
+    except RiskGateBlocked as exc:
+        stdout.write(f"{exc} (next open {clock.next_open.isoformat()}) -- no orders submitted\n")
+        write_order_run(args.order_log_root, OrderRunRecord(
+            run_id=run_id, strategy_id=config.strategy_id, proposed_at=as_of, status="reconciled",
+            reconciliation_warnings=(str(exc),),
+        ))
+        return 0
+
+    ledger = reconcile_with_broker(config.strategy_id, sleeve_equity, broker_positions, as_of)
+    risk_config = RiskConfig(max_single_instrument_weight=args.max_single_instrument_weight)
+    proposed, blocked = generate_target_orders(status, ledger, broker, risk_config)
+
+    stdout.write(f"run {run_id}: {len(proposed)} order(s) to submit, {len(blocked)} blocked\n")
+    for o in proposed:
+        stdout.write(f"  PROPOSED {o.side} {o.qty} {o.instrument_id.symbol} @~{o.reference_price:.2f} ({o.rationale})\n")
+    for b in blocked:
+        stdout.write(f"  BLOCKED {b.instrument_id.symbol}: {b.reason}\n")
+
+    if args.dry_run:
+        stdout.write("dry-run: no orders submitted, ledger not updated\n")
+        write_order_run(args.order_log_root, OrderRunRecord(
+            run_id=run_id, strategy_id=config.strategy_id, proposed_at=as_of, status="proposed",
+            proposed_orders=proposed, blocked=blocked,
+        ))
+        return 0
+
+    # Exits before entries: even though sizing is computed once up front
+    # against a single point-in-time sleeve_equity, submitting every sell
+    # before any buy means a non-margin account would never need buying
+    # power it doesn't have yet from a position this same run is about to
+    # close out. Purely a submission-order guarantee, not a settlement
+    # wait -- Alpaca does not guarantee a sell has cleared before the
+    # next order in the same run is submitted.
+    sells = [o for o in proposed if o.side == "sell"]
+    buys = [o for o in proposed if o.side == "buy"]
+
+    fills: list[OrderFill] = []
+    for order in sells + buys:
+        try:
+            result = broker.submit_market_order(order.instrument_id.symbol, order.qty, order.side)
+        except BrokerError as exc:
+            stdout.write(f"  FAILED {order.instrument_id.symbol} {order.side} {order.qty}: {exc}\n")
+            continue
+        fills.append(OrderFill(
+            instrument_id=order.instrument_id, side=order.side, filled_qty=result.filled_qty,
+            filled_price=result.filled_price, broker_order_id=result.broker_order_id, filled_at=result.filled_at,
+        ))
+        stdout.write(
+            f"  FILLED {order.instrument_id.symbol} {order.side} {result.filled_qty}@{result.filled_price:.2f}\n"
+        )
+
+    submitted_at = datetime.now()
+    try:
+        post_positions = broker.get_positions()
+    except BrokerError as exc:
+        stdout.write(f"WARNING: could not fetch post-trade positions to update the ledger: {exc}\n")
+        post_positions = broker_positions
+    write_ledger(args.ledger_root, reconcile_with_broker(config.strategy_id, sleeve_equity, post_positions, submitted_at))
+
+    expected_symbols = {o.instrument_id.symbol for o in proposed}
+    filled_symbols = {f.instrument_id.symbol for f in fills}
+    missing_symbols = expected_symbols - filled_symbols
+    reconciliation_warnings = (
+        (f"{len(missing_symbols)} proposed order(s) never produced a recorded fill: {sorted(missing_symbols)}",)
+        if missing_symbols else ()
+    )
+    for w in reconciliation_warnings:
+        stdout.write(f"WARNING: {w}\n")
+
+    write_order_run(args.order_log_root, OrderRunRecord(
+        run_id=run_id, strategy_id=config.strategy_id, proposed_at=as_of, status="reconciled",
+        proposed_orders=proposed, blocked=blocked, submitted_at=submitted_at, fills=tuple(fills),
+        reconciliation_warnings=reconciliation_warnings,
+    ))
+    return 0
+
+
 def cmd_build_report(args: argparse.Namespace, stdout, stderr) -> int:
     bundle = load_normalized_bundle(args.raw_root)
     calendar = _build_trading_calendar(bundle)
@@ -816,6 +966,7 @@ _HANDLERS = {
     "build-labels": cmd_build_labels,
     "run-backtest": cmd_run_backtest,
     "current-status": cmd_current_status,
+    "paper-trade": cmd_paper_trade_run,
     "build-report": cmd_build_report,
     "compare-report": cmd_compare_report,
     "run-all": cmd_run_all,
@@ -898,6 +1049,44 @@ def build_parser() -> argparse.ArgumentParser:
         "later calls instead of re-deriving it",
     )
     current_status_p.add_argument("--json", action="store_true", dest="as_json", help="machine-readable JSON output")
+
+    paper_trade_p = sub.add_parser(
+        "paper-trade",
+        help="fully automated paper-trading run: submit today's target portfolio to the shared Alpaca account",
+    )
+    paper_trade_p.add_argument("--raw-root", type=Path, default=Path("data/raw/filing_momentum_ml"))
+    paper_trade_p.add_argument("--manifest", type=Path, default=Path("data/manifests/filing_momentum_ml/data_manifest.json"))
+    paper_trade_p.add_argument("--start-quarter", type=str, required=True, help="YYYY-MM-DD, a valid calendar quarter-end -- the training-history buffer's start")
+    paper_trade_p.add_argument("--as-of", type=str, default=None, help="ISO datetime; defaults to now")
+    paper_trade_p.add_argument("--benchmark", type=str, default="SPY")
+    paper_trade_p.add_argument("--earnings-lag-days", type=int, default=None)
+    paper_trade_p.add_argument(
+        "--model-cache-root", type=Path, default=Path("data/models/filing_momentum_ml"),
+        help="reuse a persisted fit instead of refitting whenever an identical model was already trained",
+    )
+    paper_trade_p.add_argument(
+        "--decision-log-root", type=Path, default=Path("data/decisions/filing_momentum_ml"),
+        help="lock each quarter's picks the first time they're computed and read that record back on "
+        "later calls instead of re-deriving it",
+    )
+    paper_trade_p.add_argument(
+        "--ledger-root", type=Path, default=DEFAULT_LEDGER_ROOT,
+        help="where this strategy's broker-reconciled share ledger is persisted",
+    )
+    paper_trade_p.add_argument(
+        "--order-log-root", type=Path, default=DEFAULT_ORDER_LOG_ROOT,
+        help="where each run's propose/submit/fill audit record is persisted",
+    )
+    paper_trade_p.add_argument(
+        "--max-single-instrument-weight", type=float, default=0.10, dest="max_single_instrument_weight",
+        help="fail-closed cap: block (not resize) any single order whose notional would exceed this "
+        "fraction of sleeve equity",
+    )
+    paper_trade_p.add_argument(
+        "--dry-run", action="store_true",
+        help="make every real Alpaca API call needed to compute proposed orders (account, positions, "
+        "clock, quotes), but never call submit_market_order or write the ledger",
+    )
 
     report_p = sub.add_parser("build-report", help="run the full production backtest and build a report")
     _add_common_arguments(report_p)

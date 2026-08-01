@@ -27,3 +27,11 @@ research/strategies/filing_momentum_ml/outputs/
 # the write-once live decision log -- also never committed.
 data/models/filing_momentum_ml/
 data/decisions/filing_momentum_ml/
+
+# Paper-trading sleeve ledger and order-run audit log -- also never
+# committed; both hold live broker-account state.
+data/ledger/
+data/orders/filing_momentum_ml/
+
+# Scheduled-job output (nightly data-refresh check, daily paper-trade run).
+data/logs/filing_momentum_ml/
