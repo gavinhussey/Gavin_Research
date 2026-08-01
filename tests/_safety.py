@@ -54,10 +54,14 @@ import pytest
 # Stage 3 records, dataset/run manifests) and the research notebook output
 # directory. Stage 13 introduces the persisted-model store (fitted
 # estimators, keyed by ModelIdentity) and the write-once decision log (one
-# JSON record per quarter's locked live picks). The substrings below match
-# these paths (and their atomic-write temp files, which live alongside them
-# in the same directory) whether referenced as an absolute or a
-# repo-relative path.
+# JSON record per quarter's locked live picks). Stage 14 introduces the
+# paper-trading sleeve ledger (atlas_quant.execution.sleeve_ledger
+# .DEFAULT_LEDGER_ROOT = <repo>/data/ledger) and the order-run audit log
+# (atlas_quant.execution.order_log.DEFAULT_ORDER_LOG_ROOT =
+# <repo>/data/orders/filing_momentum_ml). The substrings below match these
+# paths (and their atomic-write temp files, which live alongside them in
+# the same directory) whether referenced as an absolute or a repo-relative
+# path.
 PROTECTED_PATH_NAMES: tuple[str, ...] = (
     "data/cache/filing_momentum_ml",
     "outputs/reports",
@@ -67,6 +71,8 @@ PROTECTED_PATH_NAMES: tuple[str, ...] = (
     "research/strategies/filing_momentum_ml/outputs",
     "data/models/filing_momentum_ml",
     "data/decisions/filing_momentum_ml",
+    "data/ledger",
+    "data/orders/filing_momentum_ml",
 )
 
 

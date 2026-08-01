@@ -20,6 +20,10 @@ dev = ["pytest>=8.0.0"]
 model = ["scikit-learn>=1.3.0,<2.0.0", "joblib>=1.3.0"]
 production-data = ["requests>=2.31.0", "pyarrow>=14.0.0", "yfinance>=0.2.40", "lxml>=5.0.0"]
 notebooks = ["jupyter>=1.0.0", "nbformat>=5.9.0"]
+# Stage 14: Alpaca paper-trading execution (atlas_quant.execution.alpaca_broker).
+# Not installed by default -- atlas_quant.execution must keep importing
+# without it; only `paper-trade` actually constructs an AlpacaBroker.
+trading = ["alpaca-py>=0.33.0"]
 research = ["atlas-quant[model,production-data,notebooks]"]
 
 [project.scripts]

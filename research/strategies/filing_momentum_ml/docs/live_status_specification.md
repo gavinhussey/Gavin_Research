@@ -9,14 +9,19 @@ simulates placing a trade.
 
 ## What it is not
 
-This is not a live/paper trading system. It has no broker integration, no
-order generation or placement, no scheduler, and no runtime risk limits.
-See `production_backtest_specification.md`'s own "No live/paper trading"
-disclosure -- that remains true; this command doesn't change it. It is a
-reporting layer on top of the existing offline research pipeline, nothing
-more. It does now have a persisted model cache and a write-once decision
-log for the next cohort's picks (see below) -- those are audit/consistency
-mechanisms, not order execution.
+`current-status` itself remains read-only reporting -- it never places,
+models, or simulates placing a trade, and has no broker integration of
+its own. It does now have a persisted model cache and a write-once
+decision log for the next cohort's picks (see below) -- those are
+audit/consistency mechanisms, not order execution.
+
+As of Stage 14, this is no longer true of the strategy as a whole:
+`atlas-quant filing-momentum paper-trade` (see "Paper trading" below) is a
+real, fully automated broker-integrated execution path built on top of
+`current-status`'s output. `production_backtest_specification.md`'s "No
+live/paper trading" disclosure describes the backtest/reporting pipeline
+and still holds for that pipeline; it no longer describes the strategy's
+full operational surface once `paper-trade` is in use.
 
 ## How it works
 
@@ -86,6 +91,129 @@ filing_momentum_ml/`-per-purpose convention) so a normal `current-status`
 run gets both by default; passing `--model-cache-root`/
 `--decision-log-root` pointing elsewhere (or a test's own `tmp_path`)
 isolates a run's cache/log from the shared one.
+
+## Paper trading
+
+`atlas-quant filing-momentum paper-trade` (`cmd_paper_trade_run`,
+`cli/filing_momentum.py`) is a fully automated paper-trading run: one
+invocation computes today's target portfolio via
+`run_filing_momentum_current_status`, diffs it against actual broker
+state, submits whatever clears the risk gates, and records everything.
+There is no manual confirmation step -- the risk gates below are the
+safety net in place of a human review, a deliberate design decision (see
+`reproducibility_findings.md`). Requires `ALPACA_API_KEY`/
+`ALPACA_API_SECRET` (`atlas_quant.config.secrets.SecretsConfig`) and the
+optional `trading` extra (`alpaca-py`).
+
+**Account model.** One shared Alpaca paper-trading account, not one
+account per strategy. `atlas_quant.execution.sleeve_ledger` tracks which
+shares belong to this strategy; `reconcile_with_broker` rebuilds that
+ledger directly from the broker's reported positions at the start of
+every run (broker state is always the source of truth) and persists the
+post-trade result at the end. With only one strategy trading the account
+today, every broker position maps 1:1 onto this strategy's sleeve --
+`reconcile_with_broker`'s docstring flags exactly this assumption as the
+place a second strategy sharing the account will need real per-strategy
+position attribution, not just this reconciliation pass.
+
+**Order generation**
+(`strategies/filing_momentum_ml/production/order_generation.py`,
+`generate_target_orders`). Target weights come from
+`status.held_positions` -- what should be held *right now* per the
+strategy's own period logic -- never `next_picks` (not yet entered, no
+price to size against). Each instrument's target share count is
+`target_weight * sleeve_equity / price`, using a fresh quote from
+Alpaca's own API (not the yfinance-backed `live_pricing` provider used
+for reporting), so sizing matches the venue that will actually fill the
+order. Orders are always market orders. `generate_target_orders` itself
+produces exits and entries together, sorted alphabetically by symbol; the
+CLI (`cmd_paper_trade_run`) resplits them and **submits every exit before
+any entry**, so a run never needs buying power it doesn't have yet from a
+position that same run is about to close out. This is a submission-order
+guarantee only, not a settlement wait -- Alpaca does not guarantee an
+exit has cleared before the next order in the same run is submitted.
+
+**Risk gates** (`atlas_quant.execution.risk_gates`), all fail-closed --
+each blocks only the one order/run it applies to rather than guessing or
+partially proceeding:
+
+- `require_market_open`: the whole run aborts (no orders even generated)
+  if Alpaca's own clock (`get_clock()`) reports the market closed. This
+  is used instead of building a holiday-aware trading calendar --
+  `WeekdayTradingCalendar` (below) has no holiday awareness and Alpaca's
+  clock is authoritative for the one question that actually matters here
+  ("can an order fill right now").
+- `require_price`: a missing or non-positive quote blocks that one
+  instrument's order; it is recorded as a `BlockedOrder`, not silently
+  skipped or sized from a stale/guessed price.
+- `check_order_size`: enforces
+  `atlas_quant.config.risk.RiskConfig.max_single_instrument_weight`
+  (declared in that module as "not yet enforced" pending a consumer --
+  `paper-trade` is that consumer's first use, default 10%, overridable
+  via `--max-single-instrument-weight`). An order whose notional would
+  exceed the cap is blocked, not resized down to fit.
+
+**Audit trail** (`atlas_quant.execution.order_log`). Every run writes one
+`OrderRunRecord` (default `data/orders/filing_momentum_ml/`) covering
+every proposed order, every blocked order and why, every fill (broker
+order id, fill price/qty/time), and any reconciliation warning (e.g. a
+submitted order that never produced a recorded fill). Nothing about a run
+is only inferrable from what's absent.
+
+**Idempotency.** Re-running `paper-trade` when the account already
+matches today's target weights proposes ~zero orders (deltas below
+`MIN_ORDER_SHARES` are skipped as noise) -- this is what makes it safe to
+put on an unattended schedule (a cron/launchd entry calling `paper-trade`
+regularly; no scheduling framework is built into the platform itself).
+
+**Not yet built**: reconciliation only checks "did every submitted order
+produce a fill" within the same run, not a deeper broker-vs-ledger audit
+across runs; there is no notification/alerting on failures or fills
+beyond the run's own stdout and the audit log; and, as noted above, a
+second strategy sharing this account needs real position attribution that
+`reconcile_with_broker` does not yet provide.
+
+## Scheduling
+
+`paper-trade` and the acquired dataset it reads from are not
+self-scheduling -- both need something external triggering them on a
+cadence. `live/filing_momentum_ml/` has two wrapper scripts meant to be
+invoked by macOS `launchd` (templates in `live/filing_momentum_ml/launchd/`):
+
+- **`run_paper_trade.sh` / `run_paper_trade.py`** (daily, default 09:45
+  local): the real, order-submitting path (no `--dry-run`). Safe to run
+  more often than strictly needed because `paper-trade` is idempotent and
+  its own `require_market_open` risk gate safely no-ops outside market
+  hours -- a wrong-timezone schedule just means a skipped day, not a bad
+  trade.
+- **`acquire_data_if_entry_eve.py` / `run_acquire_data_check.sh`**
+  (nightly, default 20:00 local): re-acquires real data (`acquire-data
+  --overwrite`) only on the one night that matters -- the eve of the
+  strategy's next `buy_dt`, computed via the same
+  `atlas_quant.backtest.clock` period logic `paper-trade`/
+  `current-status` already use (`current_and_next_periods` as of
+  tomorrow), not new timing logic. `--overwrite` is required and
+  deliberate: it replaces `data/raw/filing_momentum_ml/`'s existing
+  snapshot in place every time it fires, matching how `acquire-data` is
+  used everywhere else in this platform (one canonical `raw_root`, not
+  dated snapshots).
+
+**Secrets never appear in a plist.** A launchd job's environment is
+otherwise empty (no shell profile sourced), so each `.sh` wrapper
+`source`s one untracked, `chmod 600` file (`~/.atlas-quant/secrets.env`,
+created once by hand, never committed) containing
+`SEC_EDGAR_USER_AGENT`/`ALPACA_API_KEY`/`ALPACA_API_SECRET` before
+invoking the Python script -- the committed `.plist.template` files and
+`.sh` wrappers never contain a credential value.
+
+**Known, disclosed limitation**: no catch-up/retry mechanism. If the
+machine is asleep or off at either job's scheduled time, that occurrence
+simply doesn't run -- there is nothing that detects a missed nightly
+data-refresh and retries it before the entry date, or that flags a missed
+paper-trade run. This is acceptable for now given the strategy's
+quarterly cadence and `paper-trade`'s own idempotency (a missed day is
+caught by the next successful run), but is a real gap for anything with
+a tighter timing tolerance.
 
 ## Known, disclosed limitations
 

@@ -33,6 +33,9 @@ class SecretsConfig:
     schwab_callback_url: str | None = None
     bloomberg_host: str | None = None
     bloomberg_port: int | None = None
+    alpaca_api_key: str | None = None
+    alpaca_api_secret: str | None = None
+    alpaca_base_url: str = "https://paper-api.alpaca.markets"
 
     def __repr__(self) -> str:
         return (
@@ -41,7 +44,10 @@ class SecretsConfig:
             f"schwab_app_secret={_redacted(self.schwab_app_secret)}, "
             f"schwab_callback_url={_redacted(self.schwab_callback_url)}, "
             f"bloomberg_host={_redacted(self.bloomberg_host)}, "
-            f"bloomberg_port={'<set>' if self.bloomberg_port else '<unset>'})"
+            f"bloomberg_port={'<set>' if self.bloomberg_port else '<unset>'}, "
+            f"alpaca_api_key={_redacted(self.alpaca_api_key)}, "
+            f"alpaca_api_secret={_redacted(self.alpaca_api_secret)}, "
+            f"alpaca_base_url={self.alpaca_base_url!r})"
         )
 
 
@@ -61,4 +67,7 @@ def load_secrets_from_env(env: Mapping[str, str] | None = None) -> SecretsConfig
         schwab_callback_url=source.get("SCHWAB_CALLBACK_URL") or None,
         bloomberg_host=source.get("BLOOMBERG_HOST") or None,
         bloomberg_port=int(port_raw) if port_raw else None,
+        alpaca_api_key=source.get("ALPACA_API_KEY") or None,
+        alpaca_api_secret=source.get("ALPACA_API_SECRET") or None,
+        alpaca_base_url=source.get("ALPACA_BASE_URL") or "https://paper-api.alpaca.markets",
     )
