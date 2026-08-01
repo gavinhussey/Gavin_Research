@@ -165,6 +165,38 @@ def _with_checkpoint_root(inputs: ProductionRunInputs, checkpoint_root) -> Produ
     return dataclasses.replace(inputs, checkpoint_root=checkpoint_root)
 
 
+def test_model_cache_root_persists_and_reuses_the_fit(monkeypatch, tmp_path):
+    """With model_cache_root set, a second run over the identical inputs
+    must load the persisted fit rather than refit -- proven here by making
+    the second run's estimator explode on ``.fit`` and still succeed."""
+    import dataclasses
+
+    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
+    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
+        FakeEstimator(), _fake_build_info(),
+    ))
+
+    relaxed_config = FilingMomentumBacktestConfig(
+        strategy_config=dataclasses.replace(FilingMomentumMLConfig(), min_train_quarters=1, min_positions=1, n_winners=1),
+    )
+    multi_quarter_periods = generate_quarterly_periods(
+        date(2022, 3, 31), _TARGET_QUARTER_END, earnings_lag_days=relaxed_config.strategy_config.earnings_lag_days,
+    )
+    inputs = dataclasses.replace(
+        _build_inputs(), backtest_config=relaxed_config, periods=multi_quarter_periods, model_cache_root=tmp_path,
+    )
+    first = run_filing_momentum_production_backtest(inputs)
+    assert first.state in (ProductionRunState.COMPLETED, ProductionRunState.COMPLETED_WITH_WARNINGS)
+    assert any(tmp_path.glob("*.joblib")), "expected the fitted model to be persisted to model_cache_root"
+
+    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
+        FakeEstimator(fit_error="a genuine refit must never happen on a cache hit"), _fake_build_info(),
+    ))
+    second = run_filing_momentum_production_backtest(inputs)
+    assert second.state in (ProductionRunState.COMPLETED, ProductionRunState.COMPLETED_WITH_WARNINGS)
+    assert second.backtest_result.completed_quarter_count == first.backtest_result.completed_quarter_count
+
+
 def test_checkpoint_manifest_persisted_and_complete_after_run(monkeypatch, tmp_path):
     monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
     monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (

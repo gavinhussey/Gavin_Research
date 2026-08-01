@@ -271,9 +271,13 @@ def test_current_status_runs_end_to_end_and_never_touches_network(tmp_path, monk
     manifest_path = tmp_path / "manifest.json"
     _write_manifest(manifest_path)
 
+    model_cache_root = tmp_path / "models"
+    decision_log_root = tmp_path / "decisions"
+
     code, out, err = _run([
         "filing-momentum", "current-status", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
         "--start-quarter", "2022-03-31", "--as-of", "2023-06-01T00:00:00",
+        "--model-cache-root", str(model_cache_root), "--decision-log-root", str(decision_log_root),
     ])
     assert code == 0
     assert "state: completed" in out
@@ -283,6 +287,7 @@ def test_current_status_runs_end_to_end_and_never_touches_network(tmp_path, monk
     code, out, err = _run([
         "filing-momentum", "current-status", "--raw-root", str(raw_root), "--manifest", str(manifest_path),
         "--start-quarter", "2022-03-31", "--as-of", "2023-06-01T00:00:00", "--json",
+        "--model-cache-root", str(model_cache_root), "--decision-log-root", str(decision_log_root),
     ])
     assert code == 0
     payload = json.loads(out)

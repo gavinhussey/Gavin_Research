@@ -68,6 +68,12 @@ from atlas_quant.strategies.filing_momentum_ml.production.checkpoint import (
     write_run_manifest,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
+from atlas_quant.strategies.filing_momentum_ml.production.decision_log import (
+    DecisionLogEntry,
+    DecisionPosition,
+    read_decision,
+    write_decision_if_absent,
+)
 from atlas_quant.strategies.filing_momentum_ml.production.feature_label_build import (
     ProductionFeatureBuildResult,
     build_production_features,
@@ -194,6 +200,14 @@ class ProductionRunInputs:
     reproducibility_status: ReproducibilityStatus = ReproducibilityStatus.NOT_RUN
     checkpoint_root: Path | None = None
     run_mode: str = "production"
+    #: When set, threaded straight into FilingMomentumBacktestDependencies
+    #: -- a fit is reused instead of refit whenever an identical
+    #: ModelIdentity was already persisted there.
+    model_cache_root: Path | None = None
+    #: When set, run_filing_momentum_current_status locks each quarter's
+    #: picks the first time they're computed and reads that locked record
+    #: back on every later call, instead of re-deriving it fresh.
+    decision_log_root: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -466,6 +480,7 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         trading_calendar=inputs.trading_calendar,
         universe=inputs.universe,
         benchmark_instrument_id=inputs.benchmark_instrument_id,
+        model_cache_root=inputs.model_cache_root,
     )
 
     # Stage 7's runner computes labels and trains a fresh model internally,
@@ -654,6 +669,12 @@ class CurrentStatusResult:
     next_quarter_end: date | None = None
     next_entry_date: date | None = None
     next_picks: tuple[ScheduledPick, ...] = field(default_factory=tuple)
+    #: When ``decision_log_root`` was set, the time next_picks was first
+    #: locked in (not this call's own timestamp) and the ModelIdentity
+    #: hash of the model that produced them. Both ``None`` if no decision
+    #: log was configured, or nothing has been decided for this quarter yet.
+    next_decided_at: datetime | None = None
+    next_model_identity_hash: str | None = None
     blocked_reason: str | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
@@ -681,13 +702,17 @@ def run_filing_momentum_current_status(
     and computes an *unrealized* return -- it never treats a still-open
     cohort as a closed quarter.
 
-    Known limitation (deliberately not addressed by this function): the
-    next cohort's picks are re-derived fresh on every call from whatever
-    data is currently acquired, not read back from a persisted record of
-    what was actually decided at the time. If the underlying acquired
-    data or code changes between two calls, "what we'd currently decide"
-    can change too -- this reports the strategy's live current view, not
-    an immutable decision log.
+    When ``inputs.decision_log_root`` is set, the next cohort's picks are
+    locked the first time they're computed for a given quarter (see
+    :mod:`.decision_log`): every later call for that same quarter reads
+    the locked record back instead of re-deriving it, so re-acquiring data
+    or changing code between two calls can never retroactively change
+    "what we already decided." Leaving ``decision_log_root`` unset (the
+    default) preserves the original behavior exactly -- picks are always
+    re-derived fresh, with no persisted record of what was decided when.
+    The currently-held cohort's positions are unaffected either way: its
+    entry price/date already come from immutable, already-passed
+    historical dates resolved the same way every call.
     """
     now = as_of or datetime.now()
     held, next_scheduled = current_and_next_periods(inputs.periods, now)
@@ -758,16 +783,52 @@ def run_filing_momentum_current_status(
     qtd_alpha = (portfolio_qtd - benchmark_qtd) if benchmark_qtd is not None else None
 
     next_picks: tuple[ScheduledPick, ...] = ()
+    next_decided_at: datetime | None = None
+    next_model_identity_hash: str | None = None
     if next_scheduled is not None:
         next_quarter = quarters_by_end.get(next_scheduled.quarter_end)
         if next_quarter is not None:
-            next_picks = tuple(
-                ScheduledPick(
-                    instrument_id=p.instrument_id, role=p.role, target_weight=p.target_weight,
-                    scheduled_entry_date=next_scheduled.entry_timestamp.date(),
-                )
-                for p in next_quarter.positions
+            locked = (
+                read_decision(inputs.decision_log_root, next_scheduled.quarter_end)
+                if inputs.decision_log_root is not None
+                else None
             )
+            if locked is not None:
+                next_picks = tuple(
+                    ScheduledPick(
+                        instrument_id=p.instrument_id, role=p.role, target_weight=p.target_weight,
+                        scheduled_entry_date=next_scheduled.entry_timestamp.date(),
+                    )
+                    for p in locked.positions
+                )
+                next_decided_at = locked.decided_at
+                next_model_identity_hash = locked.model_identity_hash
+            else:
+                next_picks = tuple(
+                    ScheduledPick(
+                        instrument_id=p.instrument_id, role=p.role, target_weight=p.target_weight,
+                        scheduled_entry_date=next_scheduled.entry_timestamp.date(),
+                    )
+                    for p in next_quarter.positions
+                )
+                if inputs.decision_log_root is not None:
+                    entry = DecisionLogEntry(
+                        quarter_end=next_scheduled.quarter_end,
+                        entry_timestamp=next_scheduled.entry_timestamp,
+                        exit_timestamp=next_scheduled.exit_timestamp,
+                        decided_at=now,
+                        outcome_type=next_quarter.outcome_type.value,
+                        model_identity_hash=(
+                            next_quarter.model_identity.identity() if next_quarter.model_identity else None
+                        ),
+                        positions=tuple(
+                            DecisionPosition(instrument_id=p.instrument_id, role=p.role, target_weight=p.target_weight)
+                            for p in next_quarter.positions
+                        ),
+                    )
+                    written = write_decision_if_absent(inputs.decision_log_root, entry)
+                    next_decided_at = written.decided_at
+                    next_model_identity_hash = written.model_identity_hash
 
     return CurrentStatusResult(
         state=ProductionRunState.COMPLETED, as_of=now,
@@ -777,7 +838,7 @@ def run_filing_momentum_current_status(
         portfolio_qtd_return=portfolio_qtd, benchmark_qtd_return=benchmark_qtd, qtd_alpha=qtd_alpha,
         next_quarter_end=next_scheduled.quarter_end if next_scheduled else None,
         next_entry_date=next_scheduled.entry_timestamp.date() if next_scheduled else None,
-        next_picks=next_picks,
+        next_picks=next_picks, next_decided_at=next_decided_at, next_model_identity_hash=next_model_identity_hash,
         warnings=result.warnings,
     )
 

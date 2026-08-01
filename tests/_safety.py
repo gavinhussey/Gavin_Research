@@ -52,9 +52,12 @@ import pytest
 # .DEFAULT_REPORT_OUTPUT_ROOT = <repo>/outputs/reports). Stage 10 introduces
 # the production research dataset roots (raw provider payloads, normalized
 # Stage 3 records, dataset/run manifests) and the research notebook output
-# directory. The substrings below match these paths (and their atomic-write
-# temp files, which live alongside them in the same directory) whether
-# referenced as an absolute or a repo-relative path.
+# directory. Stage 13 introduces the persisted-model store (fitted
+# estimators, keyed by ModelIdentity) and the write-once decision log (one
+# JSON record per quarter's locked live picks). The substrings below match
+# these paths (and their atomic-write temp files, which live alongside them
+# in the same directory) whether referenced as an absolute or a
+# repo-relative path.
 PROTECTED_PATH_NAMES: tuple[str, ...] = (
     "data/cache/filing_momentum_ml",
     "outputs/reports",
@@ -62,6 +65,8 @@ PROTECTED_PATH_NAMES: tuple[str, ...] = (
     "data/normalized/filing_momentum_ml",
     "data/manifests/filing_momentum_ml",
     "research/strategies/filing_momentum_ml/outputs",
+    "data/models/filing_momentum_ml",
+    "data/decisions/filing_momentum_ml",
 )
 
 

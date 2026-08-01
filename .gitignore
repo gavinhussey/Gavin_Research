@@ -22,3 +22,8 @@ data/cache/filing_momentum_ml/
 data/manifests/filing_momentum_ml/
 outputs/reports/
 research/strategies/filing_momentum_ml/outputs/
+
+# Persisted model store (fitted estimators, keyed by ModelIdentity) and
+# the write-once live decision log -- also never committed.
+data/models/filing_momentum_ml/
+data/decisions/filing_momentum_ml/

@@ -9,13 +9,14 @@ simulates placing a trade.
 
 ## What it is not
 
-This is not a live/paper trading system. It has no broker integration,
-no order generation or placement, no scheduler, no runtime risk limits,
-and no persisted decision/trade log. See
-`production_backtest_specification.md`'s own "No live/paper trading"
+This is not a live/paper trading system. It has no broker integration, no
+order generation or placement, no scheduler, and no runtime risk limits.
+See `production_backtest_specification.md`'s own "No live/paper trading"
 disclosure -- that remains true; this command doesn't change it. It is a
 reporting layer on top of the existing offline research pipeline, nothing
-more.
+more. It does now have a persisted model cache and a write-once decision
+log for the next cohort's picks (see below) -- those are audit/consistency
+mechanisms, not order execution.
 
 ## How it works
 
@@ -48,17 +49,54 @@ position-resolution logic is reimplemented:
   `strategy.evaluate()` call every quarter already makes; it has no price
   fields at all, since nothing has happened yet.
 
+## Model cache and decision log
+
+Every `current-status` call re-runs the full production backtest over
+every period back to `--start-quarter`, which by default retrains one
+model per period from scratch on every single invocation. Two optional,
+independently-configurable mechanisms address this:
+
+- **Model cache** (`--model-cache-root`, `production/model_store.py`,
+  default `data/models/filing_momentum_ml/`). Before fitting a period's
+  model, the exact `ModelIdentity` that fit would produce (dataset,
+  config, estimator parameters, schema/window identities, random state --
+  everything already tracked for audit) is computed first and checked
+  against the store. An identical fit that was already persisted is
+  loaded instead of refit; only a genuinely new identity triggers a real
+  `.fit()` call, which is then persisted for next time. This changes
+  nothing about *what* gets fit -- only whether an identical fit is
+  reused instead of redone.
+- **Decision log** (`--decision-log-root`, `production/decision_log.py`,
+  default `data/decisions/filing_momentum_ml/`). The first time a given
+  quarter's next-scheduled picks are computed, they are locked into an
+  immutable, one-file-per-quarter JSON record (positions, model identity
+  hash, the time it was decided). Every later `current-status` call for
+  that same quarter reads the locked record back instead of re-deriving
+  it -- so re-acquiring data or changing code between two calls can never
+  retroactively change "what we already decided" for a quarter already
+  locked. To force a re-decision before a quarter actually enters, delete
+  its specific record file by hand; there is no automatic override. The
+  currently-held cohort is unaffected by this mechanism either way: its
+  entry price/date already come from immutable, already-passed historical
+  dates resolved identically on every call, so there was nothing to lock
+  there in the first place.
+
+Both default to real paths (matching the `data/{cache,raw,manifests}/
+filing_momentum_ml/`-per-purpose convention) so a normal `current-status`
+run gets both by default; passing `--model-cache-root`/
+`--decision-log-root` pointing elsewhere (or a test's own `tmp_path`)
+isolates a run's cache/log from the shared one.
+
 ## Known, disclosed limitations
 
-- **Not a persisted decision log.** Both cohorts' recommendations are
-  re-derived fresh on every run from whatever data is currently acquired
-  -- not read back from an immutable record of what was actually decided
-  at the time. If the underlying acquired data or code changes between
-  two calls, "what we'd currently decide" can change too. This reports
-  the strategy's live current view, not an audit trail. Persisting a
-  decision record at entry time (so a later check reports the *original*
-  decision, re-priced, rather than a re-derived one) was scoped as a
-  possible follow-up and deliberately not built for this first version.
+- **The decision log only covers the next-scheduled cohort, going
+  forward.** A quarter that is already the *held* cohort the first time
+  this feature is used (i.e. it was never observed as "next-scheduled"
+  under a decision-log-enabled run) never gets a decision-log entry --
+  there is no backdated record for a decision genuinely made before this
+  mechanism existed, and fabricating one would misrepresent when it was
+  actually decided. `current-status` falls back to today's fresh
+  derivation for that one quarter, same as before this feature.
 - **`WeekdayTradingCalendar`, not the real acquired-price calendar.**
   Periods here necessarily extend past the last acquired price date into
   the current/next quarter; the real trading calendar (built from

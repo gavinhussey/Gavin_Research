@@ -180,6 +180,57 @@ def test_missing_live_quote_leaves_position_unresolved_not_zero(monkeypatch):
         assert "current price unavailable" in position.warnings
 
 
+def test_decision_log_disabled_by_default(monkeypatch):
+    """Without decision_log_root, next_decided_at/next_model_identity_hash
+    stay unset -- unlocking the log doesn't change behavior for a caller
+    that doesn't opt in."""
+    _patch_dependencies(monkeypatch)
+    inputs = _build_inputs()
+    live_provider = _FakeLivePriceProvider({"AAA": 150.0, "BBB": 160.0, "SPY": 120.0}, as_of=date(2023, 6, 1))
+
+    result = run_filing_momentum_current_status(inputs, as_of=_AS_OF, live_price_provider=live_provider)
+
+    assert result.next_decided_at is None
+    assert result.next_model_identity_hash is None
+
+
+def test_next_picks_locked_across_calls(monkeypatch, tmp_path):
+    _patch_dependencies(monkeypatch)
+    inputs = dataclasses.replace(_build_inputs(), decision_log_root=tmp_path)
+    live_provider = _FakeLivePriceProvider({"AAA": 150.0, "BBB": 160.0, "SPY": 120.0}, as_of=date(2023, 6, 1))
+
+    result_1 = run_filing_momentum_current_status(inputs, as_of=_AS_OF, live_price_provider=live_provider)
+    result_2 = run_filing_momentum_current_status(inputs, as_of=_AS_OF, live_price_provider=live_provider)
+
+    assert result_1.next_decided_at is not None
+    assert result_2.next_decided_at == result_1.next_decided_at  # second call reads the locked record back
+    assert result_2.next_model_identity_hash == result_1.next_model_identity_hash
+    assert [p.instrument_id for p in result_2.next_picks] == [p.instrument_id for p in result_1.next_picks]
+
+
+def test_locked_next_picks_survive_a_changed_model(monkeypatch, tmp_path):
+    """The whole point of the write-once decision log: once a quarter's
+    picks are locked, a later change to the underlying model/data must not
+    silently change what's reported as already decided."""
+    _patch_dependencies(monkeypatch)
+    inputs = dataclasses.replace(_build_inputs(), decision_log_root=tmp_path)
+    live_provider = _FakeLivePriceProvider({"AAA": 150.0, "BBB": 160.0, "SPY": 120.0}, as_of=date(2023, 6, 1))
+
+    first = run_filing_momentum_current_status(inputs, as_of=_AS_OF, live_price_provider=live_provider)
+
+    # A different model would produce different scores/picks on a fresh
+    # derivation -- but the quarter is already locked, so it must not.
+    monkeypatch.setattr(
+        orchestration_module, "build_hgbc_estimator",
+        lambda model_config: (FakeEstimator(default_score=0.1), _fake_build_info()),
+    )
+    second = run_filing_momentum_current_status(inputs, as_of=_AS_OF, live_price_provider=live_provider)
+
+    assert second.next_decided_at == first.next_decided_at
+    assert [p.instrument_id for p in second.next_picks] == [p.instrument_id for p in first.next_picks]
+    assert [p.target_weight for p in second.next_picks] == [p.target_weight for p in first.next_picks]
+
+
 def test_as_of_outside_period_coverage_is_blocked(monkeypatch):
     _patch_dependencies(monkeypatch)
     inputs = _build_inputs()

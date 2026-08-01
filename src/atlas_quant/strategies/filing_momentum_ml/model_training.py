@@ -78,6 +78,35 @@ def _training_window_identity(dataset: TrainingDatasetResult) -> str:
     )
 
 
+def compute_model_identity(
+    dataset: TrainingDatasetResult,
+    model_config: FilingMomentumModelConfig,
+    build_info: EstimatorBuildInfo,
+    *,
+    strategy_id: str,
+    strategy_version: str,
+) -> ModelIdentity:
+    """Derive the identity a fit on ``dataset``/``model_config`` would produce.
+
+    Depends only on pre-fit inputs (dataset, config, estimator build info),
+    so a caller can compute this before deciding whether to fit at all —
+    e.g. to check a model cache keyed by :meth:`ModelIdentity.identity`.
+    """
+    return ModelIdentity(
+        strategy_id=strategy_id,
+        strategy_version=strategy_version,
+        model_schema_identity=dataset.model_schema_identity,
+        model_config_identity=compute_config_identity(resolve_estimator_parameters(model_config)),
+        training_window_identity=_training_window_identity(dataset),
+        training_cutoff=dataset.training_cutoff,
+        included_quarters=dataset.included_quarters,
+        estimator_type=build_info.estimator_type,
+        library=build_info.library,
+        library_version=build_info.library_version,
+        random_state=model_config.random_state,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class TrainingResult:
     """The structured outcome of one training attempt — never a bare fitted object."""
@@ -156,18 +185,8 @@ def train_model(
             warnings=(), audit_trail=audit,
         )
 
-    model_identity = ModelIdentity(
-        strategy_id=strategy_id,
-        strategy_version=strategy_version,
-        model_schema_identity=dataset.model_schema_identity,
-        model_config_identity=compute_config_identity(resolve_estimator_parameters(model_config)),
-        training_window_identity=_training_window_identity(dataset),
-        training_cutoff=dataset.training_cutoff,
-        included_quarters=dataset.included_quarters,
-        estimator_type=build_info.estimator_type,
-        library=build_info.library,
-        library_version=build_info.library_version,
-        random_state=model_config.random_state,
+    model_identity = compute_model_identity(
+        dataset, model_config, build_info, strategy_id=strategy_id, strategy_version=strategy_version,
     )
     audit = audit.append(
         AuditRecord(

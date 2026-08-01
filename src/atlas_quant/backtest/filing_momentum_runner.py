@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
+from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from atlas_quant.backtest.accounting import (
@@ -47,6 +48,7 @@ from atlas_quant.strategies.filing_momentum_ml.model_training import (
     TrainingState,
     train_model,
 )
+from atlas_quant.strategies.filing_momentum_ml.production.model_store import train_model_cached
 from atlas_quant.strategies.filing_momentum_ml.scoring import ScoringResult, score_observations
 from atlas_quant.strategies.filing_momentum_ml.strategy import (
     FilingMomentumEvaluationInputs,
@@ -120,6 +122,11 @@ class FilingMomentumBacktestDependencies:
     trading_calendar: TradingCalendar
     universe: tuple[InstrumentId, ...]
     benchmark_instrument_id: InstrumentId
+    #: When set, a fit is loaded from this model-store root instead of
+    #: refitting whenever an identical ModelIdentity was already persisted
+    #: there. ``None`` (the default) preserves today's behavior exactly —
+    #: every period is always refit from scratch, with no disk I/O.
+    model_cache_root: Path | None = None
 
 
 class QuarterOutcomeType(str, Enum):
@@ -360,10 +367,17 @@ def run_filing_momentum_backtest(
             dataset, min_train_quarters=strategy_config.min_train_quarters,
             n_winners=strategy_config.n_winners,
         )
-        training_result = train_model(
-            dataset, eligibility, strategy_config.model, dependencies.estimator_factory,
-            strategy_id=STRATEGY_ID, strategy_version=STRATEGY_VERSION,
-        )
+        if dependencies.model_cache_root is not None:
+            training_result = train_model_cached(
+                dataset, eligibility, strategy_config.model, dependencies.estimator_factory,
+                strategy_id=STRATEGY_ID, strategy_version=STRATEGY_VERSION,
+                cache_root=dependencies.model_cache_root,
+            )
+        else:
+            training_result = train_model(
+                dataset, eligibility, strategy_config.model, dependencies.estimator_factory,
+                strategy_id=STRATEGY_ID, strategy_version=STRATEGY_VERSION,
+            )
 
         if training_result.state != TrainingState.TRAINED:
             quarter_results.append(

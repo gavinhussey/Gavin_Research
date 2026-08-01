@@ -681,6 +681,7 @@ def cmd_current_status(args: argparse.Namespace, stdout, stderr) -> int:
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
         sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
         checkpoint_root=None, run_mode="production",
+        model_cache_root=args.model_cache_root, decision_log_root=args.decision_log_root,
     )
     result = run_filing_momentum_current_status(inputs, as_of=as_of)
     _print_current_status(result, as_json=args.as_json, stream=stdout)
@@ -716,6 +717,8 @@ def _print_current_status(result: CurrentStatusResult, *, as_json: bool, stream)
                 {"instrument": p.instrument_id.symbol, "role": p.role.value, "target_weight": p.target_weight}
                 for p in result.next_picks
             ],
+            "next_decided_at": result.next_decided_at.isoformat() if result.next_decided_at else None,
+            "next_model_identity_hash": result.next_model_identity_hash,
             "warnings": list(result.warnings),
         }
         stream.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -748,6 +751,11 @@ def _print_current_status(result: CurrentStatusResult, *, as_json: bool, stream)
         stream.write(f"  QTD alpha: {result.qtd_alpha:+.2%}\n")
 
     stream.write(f"\nnext scheduled cohort: quarter_end={result.next_quarter_end} entry={result.next_entry_date}\n")
+    if result.next_decided_at is not None:
+        stream.write(
+            f"  decided at: {result.next_decided_at.isoformat()} "
+            f"(model {result.next_model_identity_hash}) -- locked, not re-derived\n"
+        )
     for p in result.next_picks:
         stream.write(f"  {p.instrument_id.symbol:<8} {p.role.value:<8} weight={p.target_weight:.2%}  (not yet entered)\n")
 
@@ -880,6 +888,15 @@ def build_parser() -> argparse.ArgumentParser:
     current_status_p.add_argument("--as-of", type=str, default=None, help="ISO datetime; defaults to now")
     current_status_p.add_argument("--benchmark", type=str, default="SPY")
     current_status_p.add_argument("--earnings-lag-days", type=int, default=None)
+    current_status_p.add_argument(
+        "--model-cache-root", type=Path, default=Path("data/models/filing_momentum_ml"),
+        help="reuse a persisted fit instead of refitting whenever an identical model was already trained",
+    )
+    current_status_p.add_argument(
+        "--decision-log-root", type=Path, default=Path("data/decisions/filing_momentum_ml"),
+        help="lock each quarter's picks the first time they're computed and read that record back on "
+        "later calls instead of re-deriving it",
+    )
     current_status_p.add_argument("--json", action="store_true", dest="as_json", help="machine-readable JSON output")
 
     report_p = sub.add_parser("build-report", help="run the full production backtest and build a report")
