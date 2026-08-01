@@ -2,23 +2,22 @@
 
 Each function here implements exactly one step of the report's decision
 sequence (§5) and returns ``(kept, rejected)`` so a caller can chain steps
-without losing why anything was dropped. No I/O, no scoring, no regime
-computation — those are injected inputs (see ``scoring_domain.py``,
-``regime_evaluator.py``) this module only consumes.
+without losing why anything was dropped. No I/O and no scoring — scores
+are an injected input (see ``scoring_domain.py``) this module only
+consumes.
 """
 
 from __future__ import annotations
 
 import math
 from datetime import datetime
-from typing import Mapping, Sequence
+from typing import Sequence
 
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.strategies.filing_momentum_ml.decision_domain import (
     CandidateRejectionCategory,
     RejectedCandidate,
 )
-from atlas_quant.strategies.filing_momentum_ml.regime_domain import RegimeResult
 from atlas_quant.strategies.filing_momentum_ml.scoring_domain import ScoredCandidate
 
 
@@ -181,54 +180,6 @@ def apply_threshold(
                     candidate.score,
                 )
             )
-    return kept, rejected
-
-
-def apply_per_instrument_regime(
-    candidates: Sequence[ScoredCandidate],
-    per_instrument_regime: Mapping[InstrumentId, RegimeResult],
-    missing_regime_policy: str,
-) -> tuple[list[ScoredCandidate], list[RejectedCandidate]]:
-    """Report §5.1/main.py: per-stock Bear filter uses the Markov component
-    only ("observable Markov only (no HMM — matches backtest spec)",
-    main.py's own comment) — never the combined gate result, which would
-    incorrectly also weigh HMM for a per-instrument decision the report
-    explicitly says is Markov-only.
-
-    A missing/unavailable per-instrument regime result follows
-    ``missing_regime_policy``: ``"reject"`` (default, conservative) drops
-    the candidate with an explicit reason; ``"allow"`` keeps it,
-    explicitly not applying the per-stock Bear filter to it. Neither
-    policy ever treats missing data as Bull.
-    """
-    kept: list[ScoredCandidate] = []
-    rejected: list[RejectedCandidate] = []
-    for candidate in candidates:
-        result = per_instrument_regime.get(candidate.instrument_id)
-        if result is None or result.markov.availability.value != "ok":
-            if missing_regime_policy == "reject":
-                rejected.append(
-                    RejectedCandidate(
-                        candidate.instrument_id,
-                        CandidateRejectionCategory.MISSING_REGIME_RESULT,
-                        "no available per-instrument Markov regime result",
-                        candidate.score,
-                    )
-                )
-                continue
-            kept.append(candidate)
-            continue
-        if result.markov.is_bear:
-            rejected.append(
-                RejectedCandidate(
-                    candidate.instrument_id,
-                    CandidateRejectionCategory.PER_INSTRUMENT_BEAR,
-                    "per-instrument Markov component confirmed Bear",
-                    candidate.score,
-                )
-            )
-            continue
-        kept.append(candidate)
     return kept, rejected
 
 

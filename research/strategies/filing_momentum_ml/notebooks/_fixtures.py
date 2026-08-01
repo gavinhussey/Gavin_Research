@@ -23,21 +23,21 @@ from atlas_quant.data.point_in_time import ListTradingCalendar
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.strategies.filing_momentum_ml.config import FilingMomentumMLConfig
 from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
-from atlas_quant.strategies.filing_momentum_ml.regime_config import RegimeConfig
 from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
     RawFilingRecord,
     RawPriceRecord,
-    RawSectorRecord,
+    RawSicHistoryRecord,
     RawUniverseRecord,
     normalize_filings,
     normalize_prices,
-    normalize_sectors,
+    normalize_sic_history_batch,
     normalize_universe,
 )
 
 SYNTHETIC_SYMBOLS = ("AAA", "BBB")
 BENCHMARK_SYMBOL = "SPY"
-FALLBACK_SYMBOLS = ("SPY", "VGT")
+#: The ETF-sleeve tickers FilingMomentumMLConfig now defaults to.
+FALLBACK_SYMBOLS = ("VOO", "VTI")
 QUARTER_ENDS = [date(2022, 3, 31), date(2022, 6, 30), date(2022, 9, 30), date(2022, 12, 31), date(2023, 3, 31)]
 TARGET_QUARTER_END = date(2023, 3, 31)
 
@@ -96,11 +96,17 @@ def build_raw_universe() -> list[RawUniverseRecord]:
     ]
 
 
-def build_raw_sectors() -> list[RawSectorRecord]:
-    sectors = {"AAA": "Technology", "BBB": "Healthcare"}
+def build_raw_sic_history() -> list[RawSicHistoryRecord]:
+    """One synthetic point-in-time sector fact per symbol -- the real
+    pipeline has a full history per instrument (one row per filing), not
+    a single snapshot; this notebook fixture keeps one row for
+    simplicity since it never demonstrates the point-in-time-selection
+    behavior itself (see `select_point_in_time_sector`)."""
+    sectors = {"AAA": ("7372", "Information Technology"), "BBB": ("8000", "Health Care")}
     return [
-        RawSectorRecord(
-            symbol=symbol, asset_class="equity", raw_sector=sectors.get(symbol), as_of=datetime(2023, 1, 1),
+        RawSicHistoryRecord(
+            symbol=symbol, asset_class="equity", accession_number=f"synthetic-{symbol}-0",
+            filed_at=datetime(2023, 1, 1), sic_code=int(sectors[symbol][0]), gics_sector=sectors[symbol][1],
             source="synthetic_fixture", retrieved_at=datetime(2023, 6, 1),
         )
         for symbol in SYNTHETIC_SYMBOLS
@@ -114,7 +120,7 @@ class SyntheticBundle:
         filings, self.filing_issues = normalize_filings(build_raw_filings())
         prices, self.price_issues = normalize_prices(build_raw_prices())
         universe_members, self.universe_issues = normalize_universe(build_raw_universe())
-        sectors, self.sector_issues = normalize_sectors(build_raw_sectors())
+        sectors, self.sector_issues = normalize_sic_history_batch(build_raw_sic_history())
 
         self.filings_by_instrument: dict[InstrumentId, list] = {}
         for f in filings:
@@ -122,7 +128,10 @@ class SyntheticBundle:
         self.prices_by_instrument: dict[InstrumentId, list] = {}
         for p in prices:
             self.prices_by_instrument.setdefault(p.instrument_id, []).append(p)
-        self.sector_by_instrument = {s.instrument_id: s for s in sectors}
+        self.sector_by_instrument: dict[InstrumentId, tuple] = {}
+        for s in sectors:
+            self.sector_by_instrument.setdefault(s.instrument_id, []).append(s)
+        self.sector_by_instrument = {k: tuple(v) for k, v in self.sector_by_instrument.items()}
         self.universe = tuple(InstrumentId(symbol=s, asset_class=AssetClass.EQUITY) for s in SYNTHETIC_SYMBOLS)
         self.benchmark_instrument_id = InstrumentId(symbol=BENCHMARK_SYMBOL, asset_class=AssetClass.EQUITY)
 
@@ -166,7 +175,6 @@ def build_synthetic_manifest() -> DataProvenanceManifest:
         corporate_action_treatment="none (synthetic)", delisting_treatment="none (synthetic)",
         data_corrections=(), source_file_hashes={},
         strategy_config_identity=FilingMomentumMLConfig().identity(),
-        regime_config_identity=RegimeConfig().identity(),
         git_commit=None,
         notes=("SYNTHETIC FIXTURE DATA -- not a genuine historical dataset.",),
     )

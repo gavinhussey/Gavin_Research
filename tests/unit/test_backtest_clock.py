@@ -1,10 +1,15 @@
 """Unit tests for atlas_quant.backtest.clock."""
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
-from atlas_quant.backtest.clock import build_period, generate_quarterly_periods
+from atlas_quant.backtest.clock import (
+    build_period,
+    current_and_next_periods,
+    generate_quarterly_periods,
+    next_calendar_quarter_end,
+)
 
 
 class TestGenerateQuarterlyPeriods:
@@ -60,3 +65,46 @@ class TestGenerateQuarterlyPeriods:
         # builder.
         p = build_period(date(2025, 12, 31))
         assert p.exit_timestamp > p.training_cutoff
+
+
+class TestNextCalendarQuarterEnd:
+    def test_mid_quarter_date_rounds_up(self):
+        assert next_calendar_quarter_end(date(2026, 7, 30)) == date(2026, 9, 30)
+
+    def test_already_a_quarter_end_returns_itself(self):
+        assert next_calendar_quarter_end(date(2026, 6, 30)) == date(2026, 6, 30)
+        assert next_calendar_quarter_end(date(2026, 12, 31)) == date(2026, 12, 31)
+
+    def test_early_january_rounds_to_march(self):
+        assert next_calendar_quarter_end(date(2026, 1, 1)) == date(2026, 3, 31)
+
+    def test_leap_year_february_still_rounds_to_march(self):
+        assert next_calendar_quarter_end(date(2024, 2, 29)) == date(2024, 3, 31)
+
+
+class TestCurrentAndNextPeriods:
+    def test_finds_held_and_next_scheduled(self):
+        periods = generate_quarterly_periods(date(2025, 3, 31), date(2026, 9, 30), earnings_lag_days=42)
+        held, next_period = current_and_next_periods(periods, datetime(2026, 7, 30))
+        assert held.quarter_end == date(2026, 3, 31)
+        assert next_period.quarter_end == date(2026, 6, 30)
+
+    def test_exact_boundary_instant_belongs_to_the_new_cohort(self):
+        # entry_timestamp of quarter N+1 == exit_timestamp of quarter N --
+        # at that exact instant the new cohort is already held, not the old one.
+        periods = generate_quarterly_periods(date(2025, 3, 31), date(2026, 9, 30), earnings_lag_days=42)
+        boundary = next(p for p in periods if p.quarter_end == date(2026, 3, 31)).exit_timestamp
+        held, _ = current_and_next_periods(periods, boundary)
+        assert held.quarter_end == date(2026, 6, 30)
+
+    def test_as_of_before_all_periods_returns_none_for_both(self):
+        periods = generate_quarterly_periods(date(2025, 3, 31), date(2025, 12, 31), earnings_lag_days=42)
+        held, next_period = current_and_next_periods(periods, datetime(2020, 1, 1))
+        assert held is None
+        assert next_period is None
+
+    def test_last_period_has_no_next_scheduled(self):
+        periods = generate_quarterly_periods(date(2025, 3, 31), date(2025, 3, 31), earnings_lag_days=42)
+        held, next_period = current_and_next_periods(periods, periods[0].entry_timestamp)
+        assert held.quarter_end == date(2025, 3, 31)
+        assert next_period is None

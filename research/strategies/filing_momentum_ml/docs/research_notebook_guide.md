@@ -37,17 +37,17 @@ own `.ipynb` metadata (`metadata.atlasquant.data_mode`):
 - `synthetic_with_explicitly_labeled_fakes` — notebook 09 only (see
   below).
 
-## Notebook 09's fake estimator/HMM fitter
+## Notebook 09's fake estimator
 
 This project's own constraints state fake fitters may only be used "in
 tests or explicitly labeled research demonstrations" — never in a
 genuine production run. Notebook 09 is exactly that explicitly-labeled
 case: it monkeypatches `production.orchestration`'s
 `build_hgbc_estimator`/`HmmlearnFitter` with the same
-`FakeEstimator`/`FakeHMMFitter` this repository's own test suite uses
+`FakeEstimator` this repository's own test suite uses
 (imported from `tests/fixtures/filing_momentum_ml.py`), purely to
 demonstrate the full Stage 7 -> 8 -> 9 pipeline wiring without requiring
-scikit-learn/hmmlearn to be installed. The notebook:
+scikit-learn to be installed. The notebook:
 
 - States this prominently in its first markdown cell, before any code
   runs.
@@ -70,7 +70,6 @@ enforces that this disclosure is present.
 | 04 | Feature Build | `build_production_features` calling Stage 3's real feature pipeline unchanged. |
 | 05 | Label Build | `build_production_labels`, mirroring the Stage 7 runner's own internal labeling call pattern. |
 | 06 | Model-Training Boundary | `train_production_model`'s dependency gate; reports `blocked=True` rather than faking a fit. |
-| 07 | Regime-Evaluation Boundary | `evaluate_production_regime`'s dependency gate, same pattern for hmmlearn. |
 | 08 | Backtest Orchestration | Full `run_filing_momentum_production_backtest`; reports `BLOCKED_MISSING_DEPENDENCY` in this environment. |
 | 09 | Performance Analysis and Report | Full Stage 7-9 pipeline with explicitly labeled test fakes; `reproducibility_status=NOT_RUN`. |
 | 10 | Reproducibility Summary | The actual blocking checklist, install commands, CLI resume commands, and final classification. |

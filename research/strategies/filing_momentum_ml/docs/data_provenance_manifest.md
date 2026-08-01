@@ -31,7 +31,7 @@ and implementation provenance (this repo's Git history) — see
 | `corporate_action_treatment` / `delisting_treatment` | `str` | How splits/dividends/delistings were handled. |
 | `data_corrections` | `tuple[str, ...]` | Any manual corrections applied, disclosed. |
 | `source_file_hashes` | `Mapping[str, str]` | Hash per raw source file, for audit. |
-| `strategy_config_identity` / `regime_config_identity` | `str` | The exact config identities this dataset was validated/built against. |
+| `strategy_config_identity` | `str` | The exact strategy-config identity this dataset was validated/built against. |
 | `git_commit` | `str \| None` | Implementation provenance pointer. |
 | `notes` | `tuple[str, ...]` | Free-text disclosures (e.g. `"SYNTHETIC FIXTURE DATA"` for a notebook manifest). |
 
@@ -92,18 +92,35 @@ every price-derived feature assumes one canonical convention throughout.
 }
 ```
 
-### `sectors.json` -> `RawSectorRecord`
+### `sic_history.json` -> `RawSicHistoryRecord`
+
+The platform's sole sector source (produced by `acquire-sic-history`, not
+`acquire-data`) -- one row per real SEC filing accession, carrying that
+filing's own point-in-time SIC code and its SIC->GICS crosswalk sector
+(`sic_gics_crosswalk.py`; a disclosed, self-built mapping, not a licensed
+GICS feed -- see `reproducibility_findings.md`). Replaces an earlier
+`sectors.json`/`RawSectorRecord` design (deleted) that scraped a single
+present-day Wikipedia GICS snapshot and applied it retroactively across
+the whole backtest -- an undisclosed lookahead, since sector
+classification genuinely changes over time.
 
 ```json
 {
-  "symbol": "AAPL", "asset_class": "equity", "raw_sector": "Technology",
-  "as_of": "2024-01-01T00:00:00", "source": "gics", "retrieved_at": "2024-01-02T00:00:00"
+  "symbol": "AAPL", "asset_class": "equity", "accession_number": "0000320193-24-000010",
+  "filed_at": "2024-01-01T00:00:00", "sic_code": 3674, "gics_sector": "Information Technology",
+  "source": "sec_edgar_sic_header", "retrieved_at": "2024-01-02T00:00:00"
 }
 ```
 
-`raw_sector` may be `null` (normalizes to `"Unknown"` downstream via
-`SectorEncoder`, reported as an `INFO`-severity validation note, never an
-error).
+`gics_sector` (and `sic_code`) may be `null` (a real per-filing SIC-fetch
+failure, never fabricated). Normalized into `SectorRecord` with
+`as_of=filed_at` (`normalize_sic_history`) -- an instrument maps to its
+*full* sector history now, not one snapshot; `raw_sector=null` normalizes
+to `"Unknown"` downstream via `SectorEncoder`, reported as an
+`INFO`-severity validation note, never an error. The feature pipeline
+selects the record actually knowable as of each decision's own cutoff
+(`select_point_in_time_sector`), matching the point-in-time pattern
+already used for filing fundamentals.
 
 ## What this schema does not solve
 

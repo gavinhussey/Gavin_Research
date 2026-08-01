@@ -66,7 +66,8 @@ def analyze_backtest_result(
     """Analyze ``backtest_result`` under every standard scope, plus recent-period
     and statistical-uncertainty summaries computed over the invested scope
     (report §6's own headline Sharpe/Sortino/IR are computed "over quarters
-    not held in cash," i.e. the invested scope: primary + fallback)."""
+    not held in cash," i.e. the invested scope: full-quota primary
+    quarters plus blended partial-fill quarters)."""
     config = config or PerformanceAnalysisConfig()
     audit = AuditTrail()
 

@@ -3,7 +3,7 @@
 This layer only *analyzes* an existing, typed
 :class:`~atlas_quant.backtest.filing_momentum_runner.BacktestResult` — it
 never recomputes positions, period returns, benchmark returns, alpha,
-prices, strategy decisions, training outcomes, or regime classifications.
+prices, strategy decisions, or training outcomes.
 """
 
 from __future__ import annotations
@@ -30,8 +30,17 @@ class QuarterClassification(str, Enum):
 
     PRIMARY = "primary"
     FALLBACK = "fallback"
+    """A blended partial-fill quarter: fewer than ``min_positions`` stocks
+    qualified, so the quarter held those stocks plus an ETF sleeve over
+    the deployable capital they left unused. Kept separate from
+    ``PRIMARY`` so ETF exposure never silently enters a stock-selection
+    statistic."""
+
     CASH = "cash"
-    REGIME_BLOCKED = "regime_blocked"
+    """An edge-case quarter with no exposure at all (missing required data
+    or a disabled strategy). No longer produced by any routine decision
+    path; a partial fill deploys rather than sitting out."""
+
     SKIPPED = "skipped"
     INVALID = "invalid"
 
@@ -47,7 +56,7 @@ class PerformanceScope(str, Enum):
 _STANDARD_SCOPE_MEMBERSHIP: dict[PerformanceScope, frozenset[QuarterClassification]] = {
     PerformanceScope.ALL_EVALUATED: frozenset(
         {QuarterClassification.PRIMARY, QuarterClassification.FALLBACK,
-         QuarterClassification.CASH, QuarterClassification.REGIME_BLOCKED}
+         QuarterClassification.CASH}
     ),
     PerformanceScope.INVESTED: frozenset({QuarterClassification.PRIMARY, QuarterClassification.FALLBACK}),
     PerformanceScope.PRIMARY_ONLY: frozenset({QuarterClassification.PRIMARY}),
@@ -95,9 +104,9 @@ class ScopeDefinition:
             raise ValueError("use ScopeDefinition.custom(...) to build a CUSTOM scope")
         labels = {
             PerformanceScope.ALL_EVALUATED: "All evaluated quarters",
-            PerformanceScope.INVESTED: "Invested quarters (primary + fallback)",
+            PerformanceScope.INVESTED: "Invested quarters (primary + blended partial fill)",
             PerformanceScope.PRIMARY_ONLY: "Primary stock-selection quarters",
-            PerformanceScope.FALLBACK_ONLY: "SPY/VGT fallback quarters",
+            PerformanceScope.FALLBACK_ONLY: "Blended partial-fill quarters (stocks + ETF sleeve)",
         }
         return cls(scope=scope, included_classifications=_STANDARD_SCOPE_MEMBERSHIP[scope], label=labels[scope])
 

@@ -148,17 +148,17 @@ KNOWN_INTENTIONAL_DIFFERENCES: tuple[str, ...] = (
     "prototype's incidental DataFrame.nlargest(keep='first') row-order tie-break.",
     "Bounded stale-price resolution (default max 5 calendar days / 3 trading sessions) "
     "replaces the legacy/Stage 6 unlimited backward price search.",
-    "One canonical Markov+HMM regime implementation (Stage 4) replaces the legacy "
-    "backtest engine's separate, simplified two-window per-stock proxy (report §5b.3).",
     "Deterministic, fixed-vocabulary sector encoding replaces sklearn.LabelEncoder's "
     "run-order-dependent category assignment.",
-    "An explicit, configurable missing-regime-result policy (default: reject the "
-    "candidate) replaces silently treating unavailable regime data as Bull.",
+    "A quarter with fewer than min_positions qualifying stocks keeps those stocks "
+    "(sized off the most recent full-quota quarter's score-to-weight ratio) and puts "
+    "only the unused deployable capital into the VOO/VTI ETF sleeve, replacing the "
+    "report's all-or-nothing SPY/VGT fallback.",
     "Sharpe/Sortino/Information Ratio explicitly report an unavailable state (never "
     "infinity or a silently-computed value) for zero variance or insufficient "
     "observations -- including a documented divergence from the report's own "
     "single-negative-quarter Sortino example (report §7), which this platform's "
     "compute_sortino treats as insufficient history rather than reproducing.",
-    "Point-in-time feature/price/regime evaluation is enforced structurally (typed "
+    "Point-in-time feature/price evaluation is enforced structurally (typed "
     "cutoffs, no-lookahead validation) rather than by convention.",
 )

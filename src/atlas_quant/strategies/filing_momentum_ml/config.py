@@ -23,7 +23,13 @@ DISPLAY_NAME = "Filing Momentum ML"
 
 # Bumped whenever this module's formulas, defaults, or schema change in a
 # way that could alter results. Not the same as the platform version.
-STRATEGY_VERSION = "0.1.0"
+#
+# 0.2.0: the old "below min_positions => abandon the stock picks and put
+# 100% of deployable capital into a SPY/VGT blend" fallback was replaced
+# by the partial-fill ETF sleeve described in FilingMomentumMLConfig's
+# docstring. A real decision/sizing behavior change, so results under
+# 0.1.0 and 0.2.0 are not comparable.
+STRATEGY_VERSION = "0.2.0"
 
 # sha256 of ~/Downloads/report_current.html at the time this config was
 # written, so any future drift between this module and the report it was
@@ -32,22 +38,29 @@ SOURCE_REPORT_SHA256 = (
     "c985c6ed2f85d4cfa7e4ea13449b5e05d571b2b004935eb997c42a975f787295"
 )
 
-# Bumped whenever the 17-feature schema (§3 of the report) changes shape —
-# independent of STRATEGY_VERSION, since a cache built under one feature
-# schema is never valid input for a model expecting a different one.
-FEATURE_SCHEMA_VERSION = "1"
+# Bumped whenever the 17-feature schema (§3 of the report) changes shape,
+# or FeatureObservation's own row shape/identity changes -- independent of
+# STRATEGY_VERSION, since a cache built under one feature schema is never
+# valid input for a model expecting a different one.
+#
+# v2 (this bump): FeatureObservation gained strategy_cohort_end/
+# cohort_buy_timestamp, and build_feature_observation's inclusion rule
+# changed from "the selected filing's quarter_end must equal the target
+# cohort's calendar date" (an implementation bug -- synthetic fixtures are
+# always calendar-aligned, so this was invisible until real data, where
+# most issuers use 52/53-week or otherwise offset fiscal years) to the
+# recovered report/legacy behavior: every ticker gets one row per shared
+# cohort from its most-recently-knowable fiscal history, with exact
+# calendar alignment used only to refine entry-timing precision, never as
+# an inclusion requirement. A v1 cache reflects the old, buggy inclusion
+# rule and must never be read as if it were a v2 cache -- this bump
+# ensures FeatureCacheIdentity's own identity changes so v1 caches are
+# rejected, not silently reused.
+FEATURE_SCHEMA_VERSION = "2"
 
 FcfMode = Literal["ratio", "raw"]
-RegimeGateMode = Literal["both", "either", "markov", "hmm", "none"]
 
 _VALID_FCF_MODES: tuple[FcfMode, ...] = ("ratio", "raw")
-_VALID_REGIME_GATE_MODES: tuple[RegimeGateMode, ...] = (
-    "both",
-    "either",
-    "markov",
-    "hmm",
-    "none",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,20 +108,41 @@ class FilingMomentumMLConfig:
     - ``ml_train_years`` = 3 — report §4.4 (``ML_TRAIN_YEARS``)
     - ``min_train_quarters`` = 8 — report §4.4 (``MIN_TRAIN_Q``)
     - ``n_winners`` = 10 — report §4.2 (``N_WINNERS``)
-    - ``max_positions`` = 10, ``min_positions`` = 3 — report §5.4
+    - ``max_positions`` = 10 — report §5.4. ``min_positions`` is report
+      §5.4's 3, **deliberately overridden to 6** -- see
+      ``docs/reproducibility_findings.md`` for the disclosed divergence and
+      the walk-forward evidence behind it.
     - ``deployable_pct`` = 0.95 — report §5.3 (``ML_DEPLOYABLE_PCT``)
     - ``return_cap`` = 0.50 — report §5.5 (``RETURN_CAP``)
     - ``earnings_lag_days`` = 42 — report §5.5
     - ``fcf_mode`` = "ratio" — report §3.1, the stated production default
     - ``exclude_sectors`` = ("Materials",) — report §5.2
-    - ``fallback_tickers`` = ("SPY", "VGT"), ``fallback_dynamic_weight`` =
-      True, ``fallback_lookback_quarters`` = 12 — report §5.4
-    - ``regime_gate_mode`` = "both" — report §5.1/§5b.1 (the documented
-      live default; "either"/"markov"/"hmm"/"none" are also valid,
-      real, exercised modes — exposed here as a genuine config value
-      rather than hardcoded, per the Stage 1 conflict analysis)
-    - ``markov_years`` = 3 — legacy prototype's settings.py ``MARKOV_YEARS``
-      (not contradicted by the report; used by the regime gate, Stage 4)
+    - ``fallback_dynamic_weight`` = True, ``fallback_lookback_quarters``
+      = 12 — report §5.4 (the weighting rule itself is unchanged)
+
+    ``fallback_tickers`` = ("VOO", "VTI") is **not** report-sourced. The
+    report specified ("SPY", "VGT"); this platform deliberately chose a
+    different pairing, and a different mechanism for using it, as a
+    design decision. The mechanism (implemented in ``strategy.py``, see
+    also ``docs/strategy_decision_specification.md``):
+
+    - A **full-quota** quarter (at least ``min_positions`` qualifying
+      stocks survive) is weighted exactly as before — score-proportional
+      across the picks, summing to ``deployable_pct``. It also records
+      that quarter's implied score-to-weight ratio
+      ``k = deployable_pct / sum(scores)``.
+    - A **partial-fill** quarter (fewer than ``min_positions`` survive)
+      never discards its picks and never goes to cash. Each surviving
+      pick is sized at ``score * k`` using the *most recent prior
+      full-quota quarter's* ``k``, so a thin quarter's few picks keep the
+      same per-unit-of-score conviction a full quarter would have given
+      them instead of being inflated by renormalizing across a small
+      peer set. Whatever deployable capital those picks leave unused is
+      placed in ``fallback_tickers`` (weighted by
+      ``dynamic_fallback_weights``/``static_fallback_weights``).
+
+    So ``fallback_tickers`` is now a *capital sleeve for unused deployable
+    budget*, not a substitute for the strategy's stock picks.
 
     ``strategy_budget_pct`` is new relative to the report: the report
     assumed 100% of portfolio capital and had no concept of a "strategy
@@ -139,30 +173,16 @@ class FilingMomentumMLConfig:
     n_winners: int = 10
 
     max_positions: int = 10
-    min_positions: int = 3
+    min_positions: int = 6  # disclosed divergence from report §5.4's 3 -- see docs/reproducibility_findings.md
     deployable_pct: float = 0.95
     return_cap: float = 0.50
     earnings_lag_days: int = 42
 
     exclude_sectors: tuple[str, ...] = ("Materials",)
 
-    fallback_tickers: tuple[str, ...] = ("SPY", "VGT")
+    fallback_tickers: tuple[str, ...] = ("VOO", "VTI")
     fallback_dynamic_weight: bool = True
     fallback_lookback_quarters: int = 12
-
-    regime_gate_mode: RegimeGateMode = "both"
-    markov_years: int = 3
-
-    # Stage 5: the report is silent on what to do when a per-instrument
-    # regime classification is missing or unavailable (insufficient
-    # history, a numerical fit failure, etc.) at entry-check time. This
-    # platform's explicit, conservative default is to reject such a
-    # candidate rather than silently treat unavailable data as Bull --
-    # "allow" is exposed as a genuine, real config value (not hardcoded)
-    # for a deployment that would rather qualify a candidate than lose it
-    # to a data gap, at the cost of not applying the per-stock Bear filter
-    # to it.
-    missing_regime_policy: Literal["reject", "allow"] = "reject"
 
     strategy_budget_pct: float = 1.0
 
@@ -212,23 +232,11 @@ class FilingMomentumMLConfig:
             raise ValueError(
                 f"fcf_mode must be one of {_VALID_FCF_MODES}, got {self.fcf_mode!r}"
             )
-        if self.regime_gate_mode not in _VALID_REGIME_GATE_MODES:
-            raise ValueError(
-                f"regime_gate_mode must be one of {_VALID_REGIME_GATE_MODES}, "
-                f"got {self.regime_gate_mode!r}"
-            )
         if self.fallback_lookback_quarters <= 0:
             raise ValueError(
                 "fallback_lookback_quarters must be > 0, got "
                 f"{self.fallback_lookback_quarters!r}"
             )
-        if self.missing_regime_policy not in ("reject", "allow"):
-            raise ValueError(
-                "missing_regime_policy must be 'reject' or 'allow', got "
-                f"{self.missing_regime_policy!r}"
-            )
-        if self.markov_years <= 0:
-            raise ValueError(f"markov_years must be > 0, got {self.markov_years!r}")
         if not (0.0 <= self.strategy_budget_pct <= 1.0):
             raise ValueError(
                 "strategy_budget_pct must be within [0.0, 1.0], got "

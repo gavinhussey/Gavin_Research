@@ -7,7 +7,6 @@ import pytest
 
 from atlas_quant.strategies.filing_momentum_ml.decision_domain import CandidateRejectionCategory
 from atlas_quant.strategies.filing_momentum_ml.decision_pipeline import (
-    apply_per_instrument_regime,
     apply_sector_exclusion,
     apply_threshold,
     rank_candidates,
@@ -15,8 +14,6 @@ from atlas_quant.strategies.filing_momentum_ml.decision_pipeline import (
     validate_candidates,
 )
 from fixtures.filing_momentum_ml import (
-    instrument,
-    make_regime_result,
     make_scored_candidate,
 )
 
@@ -27,7 +24,7 @@ class TestValidateCandidates:
     def test_valid_candidate_passes(self):
         c = make_scored_candidate("AAA", 0.5)
         valid, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert valid == [c]
         assert rejected == []
@@ -35,7 +32,7 @@ class TestValidateCandidates:
     def test_score_below_zero_rejected(self):
         c = make_scored_candidate("AAA", -0.1)
         valid, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert valid == []
         assert rejected[0].category == CandidateRejectionCategory.INVALID_SCORE
@@ -43,35 +40,35 @@ class TestValidateCandidates:
     def test_score_above_one_rejected(self):
         c = make_scored_candidate("AAA", 1.1)
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.INVALID_SCORE
 
     def test_nan_score_rejected(self):
         c = make_scored_candidate("AAA", float("nan"))
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.INVALID_SCORE
 
     def test_infinite_score_rejected(self):
         c = make_scored_candidate("AAA", float("inf"))
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.INVALID_SCORE
 
     def test_future_feature_timestamp_rejected(self):
         c = make_scored_candidate("AAA", 0.5, feature_timestamp=date(2027, 1, 1))
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.FUTURE_FEATURE_TIMESTAMP
 
     def test_future_data_cutoff_rejected(self):
         c = make_scored_candidate("AAA", 0.5, data_cutoff=datetime(2027, 1, 1))
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.FUTURE_DATA_CUTOFF
 
@@ -79,7 +76,7 @@ class TestValidateCandidates:
         a = make_scored_candidate("AAA", 0.5)
         b = make_scored_candidate("AAA", 0.6)
         valid, rejected = validate_candidates(
-            [a, b], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [a, b], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert valid == []
         assert len(rejected) == 2
@@ -88,28 +85,28 @@ class TestValidateCandidates:
     def test_strategy_mismatch_rejected(self):
         c = make_scored_candidate("AAA", 0.5, strategy_id="other_strategy")
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.STRATEGY_MISMATCH
 
     def test_schema_mismatch_rejected(self):
-        c = make_scored_candidate("AAA", 0.5, feature_schema_version="2")
+        c = make_scored_candidate("AAA", 0.5, feature_schema_version="1")
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.SCHEMA_MISMATCH
 
     def test_missing_sector_rejected(self):
         c = make_scored_candidate("AAA", 0.5, sector="")
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.MISSING_SECTOR
 
     def test_missing_model_identity_rejected(self):
         c = make_scored_candidate("AAA", 0.5, model_identifier="")
         _, rejected = validate_candidates(
-            [c], strategy_id="filing_momentum_ml", feature_schema_version="1", evaluation_timestamp=EVAL_TS
+            [c], strategy_id="filing_momentum_ml", feature_schema_version="2", evaluation_timestamp=EVAL_TS
         )
         assert rejected[0].category == CandidateRejectionCategory.MISSING_MODEL_IDENTITY
 
@@ -164,53 +161,6 @@ class TestSectorExclusion:
         kept, rejected = apply_sector_exclusion([a, b, c], ("Materials", "Energy"))
         assert kept == [c]
         assert len(rejected) == 2
-
-
-class TestPerInstrumentRegime:
-    def test_bear_candidate_rejected(self):
-        c = make_scored_candidate("AAA", 0.5)
-        regime = {c.instrument_id: make_regime_result(c.instrument_id, markov_bear=True)}
-        kept, rejected = apply_per_instrument_regime([c], regime, "reject")
-        assert kept == []
-        assert rejected[0].category == CandidateRejectionCategory.PER_INSTRUMENT_BEAR
-
-    def test_bull_candidate_retained(self):
-        c = make_scored_candidate("AAA", 0.5)
-        regime = {c.instrument_id: make_regime_result(c.instrument_id, markov_bear=False)}
-        kept, _ = apply_per_instrument_regime([c], regime, "reject")
-        assert kept == [c]
-
-    def test_hmm_bear_alone_does_not_reject_markov_only_gate(self):
-        # report/main.py: per-stock gate is Markov-only, HMM must be ignored.
-        c = make_scored_candidate("AAA", 0.5)
-        regime = {c.instrument_id: make_regime_result(c.instrument_id, markov_bear=False, hmm_bear=True)}
-        kept, _ = apply_per_instrument_regime([c], regime, "reject")
-        assert kept == [c]
-
-    def test_missing_result_reject_policy(self):
-        c = make_scored_candidate("AAA", 0.5)
-        kept, rejected = apply_per_instrument_regime([c], {}, "reject")
-        assert kept == []
-        assert rejected[0].category == CandidateRejectionCategory.MISSING_REGIME_RESULT
-
-    def test_missing_result_allow_policy(self):
-        c = make_scored_candidate("AAA", 0.5)
-        kept, rejected = apply_per_instrument_regime([c], {}, "allow")
-        assert kept == [c]
-        assert rejected == []
-
-    def test_unavailable_component_follows_missing_policy_not_bull(self):
-        c = make_scored_candidate("AAA", 0.5)
-        from atlas_quant.strategies.filing_momentum_ml.regime_domain import ComponentAvailability
-
-        regime = {
-            c.instrument_id: make_regime_result(
-                c.instrument_id, markov_availability=ComponentAvailability.INSUFFICIENT_HISTORY
-            )
-        }
-        kept, rejected = apply_per_instrument_regime([c], regime, "reject")
-        assert kept == []
-        assert rejected[0].category == CandidateRejectionCategory.MISSING_REGIME_RESULT
 
 
 class TestRanking:

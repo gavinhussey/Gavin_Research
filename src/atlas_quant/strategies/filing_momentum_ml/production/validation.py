@@ -182,15 +182,28 @@ def validate_universe(members: Sequence[UniverseMembershipRecord]) -> tuple[Data
 
 
 def validate_sectors(records: Sequence[SectorRecord]) -> tuple[DataValidationIssue, ...]:
+    """An instrument legitimately has many ``SectorRecord``s over time now
+    (one point-in-time fact per filing) -- distinct ``raw_sector`` values
+    across different ``as_of`` dates is the normal, expected shape (a real
+    reclassification), not a data-quality problem. The only genuine
+    conflict is two records claiming the *same* ``(instrument_id, as_of)``
+    with different ``raw_sector`` values -- that would mean two different
+    facts were recorded for the exact same point in time.
+    """
     issues: list[DataValidationIssue] = []
-    seen: dict[InstrumentId, set] = {}
+    seen: dict[tuple[InstrumentId, object], set] = {}
     for r in records:
-        seen.setdefault(r.instrument_id, set()).add(r.raw_sector)
+        seen.setdefault((r.instrument_id, r.as_of), set()).add(r.raw_sector)
         if r.raw_sector is None:
             issues.append(DataValidationIssue(ValidationSeverity.INFO, "sector", r.instrument_id.symbol, "missing raw_sector (will normalize to Unknown)"))
-    for instrument_id, sectors in seen.items():
+    for (instrument_id, as_of), sectors in seen.items():
         if len(sectors) > 1:
-            issues.append(DataValidationIssue(ValidationSeverity.WARNING, "sector", instrument_id.symbol, f"conflicting raw sectors recorded: {sorted(str(s) for s in sectors)}"))
+            issues.append(
+                DataValidationIssue(
+                    ValidationSeverity.WARNING, "sector", instrument_id.symbol,
+                    f"conflicting raw sectors recorded for the same as_of={as_of!r}: {sorted(str(s) for s in sectors)}",
+                )
+            )
     return tuple(issues)
 
 

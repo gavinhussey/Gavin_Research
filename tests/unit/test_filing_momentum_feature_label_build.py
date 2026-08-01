@@ -64,12 +64,14 @@ def _build_inputs():
     }
     prices_by_instrument = {_AAA: _daily_prices(_AAA), _BBB: _daily_prices(_BBB)}
     sector_by_instrument = {
-        _AAA: make_sector_record(_AAA, "Technology", datetime(2023, 1, 1)),
-        _BBB: make_sector_record(_BBB, "Healthcare", datetime(2023, 1, 1)),
+        _AAA: (make_sector_record(_AAA, "Technology", datetime(2023, 1, 1)),),
+        _BBB: (make_sector_record(_BBB, "Healthcare", datetime(2023, 1, 1)),),
     }
-    targets = [(_AAA, _TARGET_QUARTER_END), (_BBB, _TARGET_QUARTER_END)]
-    data_cutoff = datetime(2023, 6, 1)
-    return config, calendar, sector_encoder, filings_by_instrument, prices_by_instrument, sector_by_instrument, targets, data_cutoff
+    cohort_buy_timestamp = datetime.combine(_TARGET_QUARTER_END, datetime.min.time()) + timedelta(
+        days=config.earnings_lag_days
+    )
+    targets = [(_AAA, _TARGET_QUARTER_END, cohort_buy_timestamp), (_BBB, _TARGET_QUARTER_END, cohort_buy_timestamp)]
+    return config, calendar, sector_encoder, filings_by_instrument, prices_by_instrument, sector_by_instrument, targets
 
 
 def _cache_identity(config: FilingMomentumMLConfig):
@@ -90,11 +92,11 @@ def _cache_identity(config: FilingMomentumMLConfig):
 
 
 def test_build_production_features_succeeds_on_valid_data():
-    config, calendar, sector_encoder, filings, prices, sectors, targets, data_cutoff = _build_inputs()
+    config, calendar, sector_encoder, filings, prices, sectors, targets = _build_inputs()
     result = build_production_features(
         config=config, calendar=calendar, sector_encoder=sector_encoder, targets=targets,
         filings_by_instrument=filings, prices_by_instrument=prices, sector_by_instrument=sectors,
-        data_cutoff=data_cutoff, cache_identity=_cache_identity(config),
+        cache_identity=_cache_identity(config),
     )
     assert result.blocked is False
     assert len(result.feature_pipeline_result.observations) == 2
@@ -103,12 +105,12 @@ def test_build_production_features_succeeds_on_valid_data():
 
 
 def test_build_production_features_writes_cache_when_root_supplied(tmp_path):
-    config, calendar, sector_encoder, filings, prices, sectors, targets, data_cutoff = _build_inputs()
+    config, calendar, sector_encoder, filings, prices, sectors, targets = _build_inputs()
     identity = _cache_identity(config)
     result = build_production_features(
         config=config, calendar=calendar, sector_encoder=sector_encoder, targets=targets,
         filings_by_instrument=filings, prices_by_instrument=prices, sector_by_instrument=sectors,
-        data_cutoff=data_cutoff, cache_identity=identity, cache_root=tmp_path,
+        cache_identity=identity, cache_root=tmp_path,
     )
     assert result.cache_path is not None
     assert result.cache_path.exists()
@@ -117,11 +119,11 @@ def test_build_production_features_writes_cache_when_root_supplied(tmp_path):
 
 
 def test_fatal_validation_blocks_feature_build():
-    config, calendar, sector_encoder, filings, prices, sectors, targets, data_cutoff = _build_inputs()
+    config, calendar, sector_encoder, filings, prices, sectors, targets = _build_inputs()
     result = build_production_features(
         config=config, calendar=calendar, sector_encoder=sector_encoder, targets=targets,
         filings_by_instrument=filings, prices_by_instrument={}, sector_by_instrument=sectors,
-        data_cutoff=data_cutoff, cache_identity=_cache_identity(config),
+        cache_identity=_cache_identity(config),
     )
     assert result.blocked is True
     assert result.blocked_reason is not None
@@ -130,11 +132,11 @@ def test_fatal_validation_blocks_feature_build():
 
 
 def test_build_production_labels_matches_backtest_runner_call_pattern():
-    config, calendar, sector_encoder, filings, prices, sectors, targets, data_cutoff = _build_inputs()
+    config, calendar, sector_encoder, filings, prices, sectors, targets = _build_inputs()
     feature_result = build_production_features(
         config=config, calendar=calendar, sector_encoder=sector_encoder, targets=targets,
         filings_by_instrument=filings, prices_by_instrument=prices, sector_by_instrument=sectors,
-        data_cutoff=data_cutoff, cache_identity=_cache_identity(config),
+        cache_identity=_cache_identity(config),
     )
     observations = feature_result.feature_pipeline_result.observations
     periods = generate_quarterly_periods(_TARGET_QUARTER_END, _TARGET_QUARTER_END, earnings_lag_days=config.earnings_lag_days)

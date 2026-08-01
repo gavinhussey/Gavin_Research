@@ -43,15 +43,15 @@ class TestAuditRecordSerialization:
 
     def test_record_with_nested_detail_data_is_json_compatible(self):
         record = AuditRecord(
-            stage="regime",
-            message="both gates passed",
+            stage="validation",
+            message="all checks passed",
             timestamp=datetime(2026, 1, 1),
-            data={"gates": ["markov", "hmm"], "passed": True},
+            data={"checks": ["schema", "cutoff"], "passed": True},
         )
         # json.dumps must not raise -- proves the representation is
         # actually JSON-compatible, not merely dict-shaped.
         serialized = json.dumps(record.to_dict())
-        assert json.loads(serialized)["data"]["gates"] == ["markov", "hmm"]
+        assert json.loads(serialized)["data"]["checks"] == ["schema", "cutoff"]
 
 
 class TestAuditTrailSerialization:
@@ -143,11 +143,11 @@ class TestStrategyResultSerialization:
 
     def test_status_enum_round_trips(self):
         result = StrategyResult(
-            **{**self._base_kwargs(), "status": StrategyStatus.REGIME_BLOCKED}
+            **{**self._base_kwargs(), "status": StrategyStatus.FALLBACK}
         )
         as_dict = result.to_dict()
-        assert as_dict["status"] == "regime_blocked"
-        assert StrategyResult.from_dict(as_dict).status is StrategyStatus.REGIME_BLOCKED
+        assert as_dict["status"] == "fallback"
+        assert StrategyResult.from_dict(as_dict).status is StrategyStatus.FALLBACK
 
     def test_timestamps_round_trip_as_iso_8601(self):
         result = StrategyResult(**self._base_kwargs())

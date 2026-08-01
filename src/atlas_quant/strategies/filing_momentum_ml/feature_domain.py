@@ -57,12 +57,36 @@ def _is_nan(value: object) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class FeatureObservation:
-    """One instrument/quarter's complete, point-in-time-safe feature row.
+    """One instrument/shared-cohort's complete, point-in-time-safe feature row.
 
     ``features`` holds all 17 values keyed by :data:`FEATURE_NAMES`; a
     legitimately unavailable feature is ``float("nan")`` in this mapping
     (never imputed — report §4.1: HistGradientBoostingClassifier handles
     NaN natively) and its name appears in ``missing_features``.
+
+    Two distinct "quarter" concepts, recovered from the report
+    implementation (``ml_scorer.py``/``data_sec.py``) and never conflated:
+
+    - ``quarter_end``/``fiscal_period``/``filing_timestamp`` describe the
+      *issuer's own* most-recently-knowable fiscal filing (whatever its
+      real fiscal quarter-end date happens to be — 52/53-week, offset
+      fiscal years, etc.). These order the fundamental history, resolve
+      amendments, and compute QoQ/trend features; they are never required
+      to equal any calendar date.
+    - ``strategy_cohort_end``/``cohort_buy_timestamp`` describe the
+      *shared strategy cohort* this observation belongs to (the platform's
+      one calendar-quarter grid used for global labeling, rolling
+      training windows, portfolio entry/exit, and benchmark comparison).
+
+    A row's own ``quarter_end`` frequently does **not** equal its
+    ``strategy_cohort_end`` — this is expected, not an error: every ticker
+    produces one candidate row per shared cohort, built from whichever
+    fiscal history was most recently available as of that cohort's own
+    ``cohort_buy_timestamp``, exactly as the report's own
+    ``RollingMLScorer``/``get_available_as_of`` do. An exact match between
+    the two is used only to refine ``feature_timestamp``'s entry-timing
+    precision (see ``feature_pipeline.build_feature_observation``), never
+    as a requirement for this row to exist at all.
     """
 
     strategy_id: str
@@ -80,6 +104,8 @@ class FeatureObservation:
     provenance: tuple[DataProvenance, ...]
     config_identity: str
     feature_cache_identity: str | None
+    strategy_cohort_end: date
+    cohort_buy_timestamp: datetime
     audit_trail: AuditTrail = field(default_factory=AuditTrail)
 
     def __post_init__(self) -> None:
@@ -121,6 +147,8 @@ class FeatureObservation:
             "provenance": [to_jsonable(p) for p in self.provenance],
             "config_identity": self.config_identity,
             "feature_cache_identity": self.feature_cache_identity,
+            "strategy_cohort_end": self.strategy_cohort_end.isoformat(),
+            "cohort_buy_timestamp": self.cohort_buy_timestamp.isoformat(),
             "audit_trail": self.audit_trail.to_dict(),
         }
 
@@ -163,6 +191,8 @@ class FeatureObservation:
             ),
             config_identity=data["config_identity"],
             feature_cache_identity=data.get("feature_cache_identity"),
+            strategy_cohort_end=date.fromisoformat(data["strategy_cohort_end"]),
+            cohort_buy_timestamp=datetime.fromisoformat(data["cohort_buy_timestamp"]),
             audit_trail=(
                 AuditTrail.from_dict(data["audit_trail"])
                 if data.get("audit_trail")

@@ -5,14 +5,10 @@ and "FilingEdgeML" — see docs/naming_migration.md. Specification source of
 truth: ~/Downloads/report_current.html (sha256 recorded in
 ``config.SOURCE_REPORT_SHA256``).
 
-Through Stage 5: configuration schema, pure report formulas, the
-point-in-time feature pipeline, the canonical regime subsystem, and the
-strategy decision evaluator (qualification/ranking/weighting/fallback)
-all exist. Model training, label generation, backtesting, portfolio
-allocation, and reporting remain staged for Stage 6 onward — see the
-Stage 5 deliverable report for the exact next-stage scope. Scores are an
-injected input to the evaluator in this stage; this package does not yet
-train or run a model.
+Configuration schema, pure report formulas, the point-in-time feature
+pipeline, model training/scoring, the strategy decision evaluator
+(qualification / ranking / weighting / partial-fill ETF sleeve),
+backtesting, performance analysis, and reporting all live here.
 """
 
 from atlas_quant.domain.identifiers import AssetClass
@@ -34,7 +30,6 @@ REQUIRED_CAPABILITIES = (
     "daily_equity_prices",
     "universe_membership",
     "sector_data",
-    "regime_price_history",
 )
 
 

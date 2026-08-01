@@ -4,7 +4,7 @@ A read-only, multi-strategy quantitative research and backtesting platform.
 
 First strategy: **Filing Momentum ML** — a quarterly, point-in-time equity
 selection strategy driven by SEC filing timing, fundamental momentum, price
-momentum, and a two-layer market/stock regime gate. Full specification:
+momentum, and ML scoring. Full specification:
 `~/Downloads/report_current.html` (not committed to this repository — it is
 the external source-of-truth document this platform is built from).
 
@@ -14,29 +14,31 @@ developed in.
 
 ## Status
 
-Through Stage 10 of a staged build. Filing Momentum ML's full pipeline
+Through Stage 11 of a staged build. Filing Momentum ML's full pipeline
 exists as production code and tests: configuration schema and pure report
-formulas, the point-in-time feature pipeline, the canonical Markov + HMM
-regime evaluator, the strategy decision evaluator, model training/scoring,
+formulas, the point-in-time feature pipeline, the strategy decision
+evaluator, model training/scoring,
 a standalone historical backtest runner, performance analysis, and
-report/reproducibility-comparison generation. Stage 10 adds the
+report/reproducibility-comparison generation. Stage 10 added the
 **offline production research workflow** around all of that: dependency-
 availability gating, a typed data-provenance manifest, a read-only legacy-
 cache audit, severity-graded raw-data validation, normalization of
 provider-shaped input into the existing domain models, model-training and
-regime-evaluation dependency boundaries, top-level orchestration with
+backtest dependency boundaries, top-level orchestration with
 checkpointed resume, a narrow `atlas-quant filing-momentum` CLI, and 11
 numbered research notebooks demonstrating the whole pipeline on synthetic
-data.
+data. Stage 11 added **real-data acquisition** (SEC EDGAR filings,
+yfinance daily prices, Wikipedia-sourced S&P 500 + Nasdaq 100 universe
+and sector data) via `atlas-quant filing-momentum acquire-data`.
 
-**No genuine historical backtest has been run.** This environment does
-not have scikit-learn, hmmlearn, or requests installed, and no real
-filing/price/universe/sector data has been acquired (no provider adapter
-exists yet). See
+**A real, present-day acquisition has been run**: 518 universe members,
+96,852 filing rows, and 4,436,726 price rows, validated with 0 fatal
+issues, and **a genuine historical backtest has since run end-to-end on
+it**. See
 `research/strategies/filing_momentum_ml/docs/reproducibility_findings.md`
-for the exact blocking checklist, install commands, and the stated
-classification (`NOT_REPRODUCIBLE_MISSING_DATA`) — nothing in this
-repository should be read as a strategy performance claim.
+for the full detail and the current classification (`NOT_RUN`) — nothing
+in this repository should be read as a strategy performance claim until
+that document says otherwise.
 
 `~/Downloads/report_current.html` is the strategy specification's sole
 source of truth; this is independent of this repository's Git history.
@@ -91,8 +93,7 @@ automatically by any code in this repository:
 
 ```
 pip install -e '.[model]'           # scikit-learn>=1.3.0,<2.0.0 — real model training
-pip install -e '.[regime]'          # hmmlearn>=0.3.0,<0.4.0 — real HMM regime evaluation
-pip install -e '.[production-data]' # requests, pyarrow — real data acquisition (once a provider adapter exists)
+pip install -e '.[production-data]' # requests, pyarrow, yfinance, lxml — real data acquisition
 pip install -e '.[notebooks]'       # jupyter, nbformat — to open the research notebooks interactively
 pip install -e '.[research]'        # all of the above
 ```
@@ -106,6 +107,8 @@ step that needs them — see
 ## Filing Momentum ML production research CLI
 
 ```
+export SEC_EDGAR_USER_AGENT="Your Name your@email.example"  # required by SEC's fair-access policy
+atlas-quant filing-momentum acquire-data   --raw-root data/raw/filing_momentum_ml --manifest data/manifests/filing_momentum_ml/data_manifest.json
 atlas-quant filing-momentum validate-data --raw-root data/raw/filing_momentum_ml
 atlas-quant filing-momentum build-features --raw-root data/raw/filing_momentum_ml --start-quarter 2015-03-31 --end-quarter 2024-12-31
 atlas-quant filing-momentum build-labels   --raw-root data/raw/filing_momentum_ml --start-quarter 2015-03-31 --end-quarter 2024-12-31

@@ -1,6 +1,6 @@
 """Normalizes raw provider records into the *existing* Stage 3 domain models.
 
-Provider payloads never enter the platform's feature/label/model/regime
+Provider payloads never enter the platform's feature/label/model
 pipelines directly — every field is converted into
 ``FilingFundamentals``/``DailyPriceObservation``/``UniverseMembershipRecord``/
 ``SectorRecord`` here, and nowhere else. This module defines no second set
@@ -63,6 +63,18 @@ class RawFilingRecord:
     source: str
     retrieved_at: datetime
 
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol, "asset_class": self.asset_class, "fiscal_period": self.fiscal_period,
+            "fiscal_year": self.fiscal_year, "quarter_end": self.quarter_end.isoformat(),
+            "filed_at": self.filed_at.isoformat(), "revenue": self.revenue, "gross_profit": self.gross_profit,
+            "operating_income": self.operating_income, "net_income": self.net_income,
+            "diluted_eps": self.diluted_eps, "stockholders_equity": self.stockholders_equity,
+            "operating_cash_flow": self.operating_cash_flow, "capital_expenditure": self.capital_expenditure,
+            "accession_number": self.accession_number, "source": self.source,
+            "retrieved_at": self.retrieved_at.isoformat(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class RawPriceRecord:
@@ -76,6 +88,13 @@ class RawPriceRecord:
     source: str
     retrieved_at: datetime
 
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol, "asset_class": self.asset_class, "trading_date": self.trading_date.isoformat(),
+            "close": self.close, "price_convention": self.price_convention, "source": self.source,
+            "retrieved_at": self.retrieved_at.isoformat(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class RawUniverseRecord:
@@ -88,17 +107,46 @@ class RawUniverseRecord:
     survivorship_biased: bool
     retrieved_at: datetime
 
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol, "asset_class": self.asset_class, "as_of": self.as_of.isoformat(),
+            "source": self.source, "survivorship_biased": self.survivorship_biased,
+            "retrieved_at": self.retrieved_at.isoformat(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
-class RawSectorRecord:
-    """A provider's raw sector-classification payload, before normalization."""
+class RawSicHistoryRecord:
+    """One real filing's own point-in-time SIC code and its SIC→GICS
+    crosswalk sector, keyed to the exact accession that reported it.
+
+    The platform's sole sector-data source -- replaces the earlier
+    present-day-Wikipedia-snapshot ``RawSectorRecord``/``sectors.json``
+    (deleted: it applied one current GICS classification retroactively
+    across the whole backtest, an undisclosed lookahead). Normalized via
+    :func:`normalize_sic_history` into the same :class:`SectorRecord`
+    every downstream consumer already expects -- multiple records per
+    instrument over time is the normal, expected shape now, selected
+    point-in-time via
+    :func:`atlas_quant.data.point_in_time.select_point_in_time_sector`.
+    """
 
     symbol: str
     asset_class: str
-    raw_sector: str | None
-    as_of: datetime
+    accession_number: str
+    filed_at: datetime
+    sic_code: int | None
+    gics_sector: str | None
     source: str
     retrieved_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol, "asset_class": self.asset_class,
+            "accession_number": self.accession_number, "filed_at": self.filed_at.isoformat(),
+            "sic_code": self.sic_code, "gics_sector": self.gics_sector,
+            "source": self.source, "retrieved_at": self.retrieved_at.isoformat(),
+        }
 
 
 def normalize_filing(raw: RawFilingRecord) -> FilingFundamentals:
@@ -150,10 +198,21 @@ def normalize_universe_member(raw: RawUniverseRecord) -> UniverseMembershipRecor
     )
 
 
-def normalize_sector(raw: RawSectorRecord) -> SectorRecord:
+def normalize_sic_history(raw: RawSicHistoryRecord) -> SectorRecord:
+    """One filing's point-in-time SIC-derived sector fact.
+
+    ``raw_sector=raw.gics_sector`` may be ``None`` (a real SIC-fetch
+    failure -- never fabricated; ``SectorEncoder.normalize`` already
+    treats a missing/unrecognized raw sector as ``"Unknown"``, so this
+    needs no special-casing here). ``as_of=raw.filed_at`` is what makes
+    this point-in-time: it's the filing's own timestamp, not an
+    acquisition-run timestamp.
+    """
     instrument_id = InstrumentId(symbol=raw.symbol, asset_class=_asset_class(raw.asset_class))
-    provenance = DataProvenance(source=raw.source, as_of=raw.as_of, retrieved_at=raw.retrieved_at)
-    return SectorRecord(instrument_id=instrument_id, raw_sector=raw.raw_sector, as_of=raw.as_of, provenance=provenance)
+    provenance = DataProvenance(source=raw.source, as_of=raw.filed_at, retrieved_at=raw.retrieved_at)
+    return SectorRecord(
+        instrument_id=instrument_id, raw_sector=raw.gics_sector, as_of=raw.filed_at, provenance=provenance
+    )
 
 
 def _normalize_batch(raws, normalize_one, category: str):
@@ -182,5 +241,5 @@ def normalize_universe(raws) -> tuple[tuple[UniverseMembershipRecord, ...], tupl
     return _normalize_batch(raws, normalize_universe_member, "universe")
 
 
-def normalize_sectors(raws) -> tuple[tuple[SectorRecord, ...], tuple[DataValidationIssue, ...]]:
-    return _normalize_batch(raws, normalize_sector, "sector")
+def normalize_sic_history_batch(raws) -> tuple[tuple[SectorRecord, ...], tuple[DataValidationIssue, ...]]:
+    return _normalize_batch(raws, normalize_sic_history, "sector")

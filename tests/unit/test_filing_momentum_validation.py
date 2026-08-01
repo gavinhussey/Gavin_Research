@@ -112,9 +112,20 @@ def test_missing_raw_sector_is_info():
     assert any(i.severity == ValidationSeverity.INFO for i in issues)
 
 
-def test_conflicting_sectors_for_same_instrument_is_warning():
+def test_conflicting_sectors_for_same_as_of_is_warning():
+    # Both default to as_of=_NOW -- two different facts for the exact
+    # same point in time is a genuine data-quality conflict.
     issues = validate_sectors([_sector("Technology"), _sector("Healthcare")])
     assert any(i.severity == ValidationSeverity.WARNING and "conflicting raw sectors" in i.message for i in issues)
+
+
+def test_different_sectors_at_different_as_of_is_not_a_conflict():
+    # A real reclassification over time is expected/normal now, not a
+    # data-quality problem -- only same-as_of disagreement should warn.
+    earlier = _sector("Industrials", as_of=datetime(2010, 1, 1))
+    later = _sector("Health Care", as_of=datetime(2020, 1, 1))
+    issues = validate_sectors([earlier, later])
+    assert not any(i.severity == ValidationSeverity.WARNING for i in issues)
 
 
 def test_summary_counts_by_severity():

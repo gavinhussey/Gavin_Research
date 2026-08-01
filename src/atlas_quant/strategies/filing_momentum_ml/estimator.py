@@ -2,7 +2,7 @@
 
 ``scikit-learn`` is confirmed **not installed** in this repository's venv
 (``pyproject.toml`` declares only ``numpy``/``pandas``) — the same
-situation as ``hmmlearn`` in Stage 4. Per this stage's explicit
+situation as any other optional heavy dependency. Per this stage's explicit
 instruction, it was not installed to make this stage "work"; instead this
 module defines an injectable :class:`Estimator` protocol, a real
 ``HistGradientBoostingClassifier``-backed factory that imports

@@ -21,7 +21,7 @@ This resolves several risks flagged in the original naming-migration inventory (
 
 The legacy repo's environment-variable prefixes (`SCHWAB_*`, `BLOOMBERG_*`) are provider-scoped, not project-scoped — there was no `ARNOLD_*` or `ARNOLDQUANT_*` prefix to rename. If a platform-level environment variable is ever needed (distinct from a specific data provider's own variables), reserve the `ATLASQUANT_` prefix for it; none exist yet.
 
-The legacy repo's cache files (`ml_feature_cache.pkl`, `backtest_results_cache.pkl`, `edgar_cache/`, `markov_backtest_cache/`, `data_cache.json`, `universe_cache.json`, `price_cache.parquet`) all remain in `~/Downloads/Arnold_Quant` and were never touched. This repository has no cache files yet — Stage 3+ will introduce them, at which point they should be named/keyed using `atlas_quant`/`filing_momentum_ml` identifiers from the start (see `FeatureCacheIdentity` in `strategies/filing_momentum_ml/config.py`), not migrated from old names.
+The legacy repo's cache files (`ml_feature_cache.pkl`, `backtest_results_cache.pkl`, `edgar_cache/`, `data_cache.json`, `universe_cache.json`, `price_cache.parquet`) all remain in `~/Downloads/Arnold_Quant` and were never touched. This repository has no cache files yet — Stage 3+ will introduce them, at which point they should be named/keyed using `atlas_quant`/`filing_momentum_ml` identifiers from the start (see `FeatureCacheIdentity` in `strategies/filing_momentum_ml/config.py`), not migrated from old names.
 
 ## Completed: this repository's own folder rename
 

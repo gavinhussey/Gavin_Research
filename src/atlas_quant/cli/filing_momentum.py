@@ -1,17 +1,27 @@
 """Filing Momentum ML's narrow, offline production-research CLI.
 
-Subcommands: ``validate-data``, ``build-features``, ``build-labels``,
-``run-backtest``, ``build-report``, ``compare-report``, ``run-all``.
+Subcommands: ``acquire-data``, ``validate-data``, ``build-features``,
+``build-labels``, ``run-backtest``, ``current-status``, ``build-report``,
+``compare-report``, ``run-all``.
 
-Every subcommand operates only on files the caller points it at
-(``--raw-root``, ``--manifest``, ``--report-json``,
-``--source-report-html``) -- this CLI never reaches into the legacy
-``Arnold_Quant`` repository, never fetches data over the network itself
-(acquisition is a separate, not-yet-built provider step), and never
-accepts or prints a credential. Every artifact write refuses to
-overwrite an existing file unless ``--overwrite`` is passed explicitly,
-and ``--dry-run`` runs every step's computation without writing anything
-to disk.
+Every subcommand except ``acquire-data`` and ``current-status`` operates
+only on files the caller points it at (``--raw-root``, ``--manifest``,
+``--report-json``, ``--source-report-html``) and never fetches data over
+the network or reaches into the legacy ``Arnold_Quant`` repository.
+``acquire-data`` and ``current-status`` are the two deliberate exceptions:
+``acquire-data`` performs real network requests (SEC EDGAR, Wikipedia,
+yfinance) for historical batch acquisition only when explicitly invoked;
+``current-status`` performs a small, separate real network request (via
+``production.live_pricing``, never ``acquisition/yfinance_provider.py``)
+for a handful of *current* quotes each time it runs. Neither runs
+automatically from any other subcommand, and neither runs from the test
+suite (``current-status``'s own tests always inject a fake
+``LivePriceProvider``).
+It requires a real ``SEC_EDGAR_USER_AGENT`` (env var or ``--sec-user-agent``)
+per SEC's fair-access policy, and never accepts or prints a credential.
+Every artifact write refuses to overwrite an existing file unless
+``--overwrite`` is passed explicitly, and ``--dry-run`` runs every step's
+computation without writing anything to disk.
 """
 
 from __future__ import annotations
@@ -19,16 +29,29 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Sequence
 
-from atlas_quant.backtest.clock import BacktestPeriod, generate_quarterly_periods
+from atlas_quant.backtest.clock import BacktestPeriod, generate_quarterly_periods, next_calendar_quarter_end
 from atlas_quant.backtest.filing_momentum_runner import FilingMomentumBacktestConfig
-from atlas_quant.data.point_in_time import ListTradingCalendar
+from atlas_quant.data.point_in_time import ListTradingCalendar, WeekdayTradingCalendar
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.reporting.serialization import ArtifactExistsError, write_json_atomic
-from atlas_quant.strategies.filing_momentum_ml.config import FeatureCacheIdentity, FilingMomentumMLConfig
+from atlas_quant.strategies.filing_momentum_ml.acquisition.http_client import RequestsHttpClient
+from atlas_quant.strategies.filing_momentum_ml.acquisition.run_acquisition import (
+    build_acquisition_manifest,
+    run_full_acquisition,
+    write_raw_data_files,
+)
+from atlas_quant.strategies.filing_momentum_ml.acquisition.sec_edgar import fetch_ticker_to_cik_map, resolve_user_agent
+from atlas_quant.strategies.filing_momentum_ml.acquisition.sic_history import (
+    DEFAULT_REQUESTS_PER_SECOND,
+    fetch_sic_history,
+    write_sic_history_file,
+)
+from atlas_quant.strategies.filing_momentum_ml.acquisition.yfinance_provider import YFinancePriceProvider
+from atlas_quant.strategies.filing_momentum_ml.config import FEATURE_SCHEMA_VERSION, FeatureCacheIdentity, FilingMomentumMLConfig
 from atlas_quant.strategies.filing_momentum_ml.feature_cache import DEFAULT_CACHE_ROOT, FeatureCachePaths
 from atlas_quant.strategies.filing_momentum_ml.production.checkpoint import DEFAULT_CHECKPOINT_ROOT
 from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
@@ -39,17 +62,19 @@ from atlas_quant.strategies.filing_momentum_ml.production.feature_label_build im
 from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
     RawFilingRecord,
     RawPriceRecord,
-    RawSectorRecord,
+    RawSicHistoryRecord,
     RawUniverseRecord,
     normalize_filings,
     normalize_prices,
-    normalize_sectors,
+    normalize_sic_history_batch,
     normalize_universe,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.orchestration import (
+    CurrentStatusResult,
     ProductionRunInputs,
     ProductionRunResult,
     ProductionRunState,
+    run_filing_momentum_current_status,
     run_filing_momentum_production_backtest,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.validation import (
@@ -141,15 +166,16 @@ def _parse_raw_universe(d: dict) -> RawUniverseRecord:
         raise CLIError(f"universe.json record missing required field: {exc}") from exc
 
 
-def _parse_raw_sector(d: dict) -> RawSectorRecord:
+def _parse_raw_sic_history(d: dict) -> RawSicHistoryRecord:
     try:
-        return RawSectorRecord(
-            symbol=d["symbol"], asset_class=d["asset_class"], raw_sector=d.get("raw_sector"),
-            as_of=datetime.fromisoformat(d["as_of"]), source=d["source"],
+        return RawSicHistoryRecord(
+            symbol=d["symbol"], asset_class=d["asset_class"], accession_number=d["accession_number"],
+            filed_at=datetime.fromisoformat(d["filed_at"]), sic_code=d.get("sic_code"),
+            gics_sector=d.get("gics_sector"), source=d["source"],
             retrieved_at=datetime.fromisoformat(d["retrieved_at"]),
         )
     except KeyError as exc:
-        raise CLIError(f"sectors.json record missing required field: {exc}") from exc
+        raise CLIError(f"sic_history.json record missing required field: {exc}") from exc
 
 
 class NormalizedBundle:
@@ -168,21 +194,26 @@ def load_normalized_bundle(raw_root: Path) -> NormalizedBundle:
     """Load, parse, and normalize this CLI's raw-data JSON files.
 
     Expects ``filings.json``/``prices.json``/``universe.json``/
-    ``sectors.json`` under ``raw_root``, each a JSON array whose objects
-    match :class:`~...normalization.RawFilingRecord` (etc.)'s own fields.
-    A missing file is treated as zero records for that category (reported
-    later as a validation issue, e.g. an empty universe is FATAL) -- this
-    function never makes a network call or reaches outside ``raw_root``.
+    ``sic_history.json`` under ``raw_root``, each a JSON array whose
+    objects match :class:`~...normalization.RawFilingRecord` (etc.)'s own
+    fields. A missing file is treated as zero records for that category
+    (reported later as a validation issue, e.g. an empty universe is
+    FATAL) -- this function never makes a network call or reaches outside
+    ``raw_root``. ``sic_history.json`` (from ``acquire-sic-history``) is
+    this platform's sole sector source -- each instrument maps to its
+    *full* point-in-time sector history, sorted oldest-to-newest, not a
+    single present-day snapshot; the feature pipeline selects the record
+    knowable as of each cohort's own cutoff.
     """
     raw_filings = [_parse_raw_filing(d) for d in _read_json_list(raw_root / "filings.json")]
     raw_prices = [_parse_raw_price(d) for d in _read_json_list(raw_root / "prices.json")]
     raw_universe = [_parse_raw_universe(d) for d in _read_json_list(raw_root / "universe.json")]
-    raw_sectors = [_parse_raw_sector(d) for d in _read_json_list(raw_root / "sectors.json")]
+    raw_sic_history = [_parse_raw_sic_history(d) for d in _read_json_list(raw_root / "sic_history.json")]
 
     filings, filing_issues = normalize_filings(raw_filings)
     prices, price_issues = normalize_prices(raw_prices)
     universe_members, universe_issues = normalize_universe(raw_universe)
-    sectors, sector_issues = normalize_sectors(raw_sectors)
+    sectors, sector_issues = normalize_sic_history_batch(raw_sic_history)
 
     filings_by_instrument: dict[InstrumentId, list] = {}
     for f in filings:
@@ -190,7 +221,12 @@ def load_normalized_bundle(raw_root: Path) -> NormalizedBundle:
     prices_by_instrument: dict[InstrumentId, list] = {}
     for p in prices:
         prices_by_instrument.setdefault(p.instrument_id, []).append(p)
-    sector_by_instrument = {s.instrument_id: s for s in sectors}
+    sector_by_instrument: dict[InstrumentId, list] = {}
+    for s in sectors:
+        sector_by_instrument.setdefault(s.instrument_id, []).append(s)
+    for records in sector_by_instrument.values():
+        records.sort(key=lambda r: r.as_of)
+    sector_by_instrument = {iid: tuple(records) for iid, records in sector_by_instrument.items()}
 
     issues = filing_issues + price_issues + universe_issues + sector_issues
     return NormalizedBundle(filings_by_instrument, prices_by_instrument, sector_by_instrument, universe_members, issues)
@@ -219,7 +255,7 @@ def _run_validation(
         issues.extend(validate_filings(filings))
     for instrument_id in bundle.universe:
         issues.extend(validate_prices(bundle.prices_by_instrument.get(instrument_id, ())))
-    issues.extend(validate_sectors(list(bundle.sector_by_instrument.values())))
+    issues.extend(validate_sectors([r for records in bundle.sector_by_instrument.values() for r in records]))
     issues.extend(validate_universe(bundle.universe_members))
     if periods:
         issues.extend(
@@ -255,7 +291,7 @@ def _periods_from_args(args: argparse.Namespace, *, required: bool) -> tuple[Bac
 
 def _feature_cache_identity(config: FilingMomentumMLConfig, periods: Sequence[BacktestPeriod]) -> FeatureCacheIdentity:
     return FeatureCacheIdentity(
-        strategy_id=config.strategy_id, strategy_version="cli", feature_schema_version="1",
+        strategy_id=config.strategy_id, strategy_version="cli", feature_schema_version=FEATURE_SCHEMA_VERSION,
         fcf_mode=config.fcf_mode, train_years=config.ml_train_years, min_train_quarters=config.min_train_quarters,
         model_config_identity=config.identity(), universe_id="cli-universe",
         data_cutoff=max(p.quarter_end for p in periods) if periods else date.today(),
@@ -347,6 +383,128 @@ def _print_comparison_dicts(comparisons: list[dict], *, as_json: bool, stream) -
 # --------------------------------------------------------------------------
 
 
+def cmd_acquire_data(args: argparse.Namespace, stdout, stderr) -> int:
+    """Acquire real universe/sector/filing/price data (SEC EDGAR, Wikipedia,
+    yfinance) and write it into ``--raw-root`` plus a real
+    ``DataProvenanceManifest`` at ``--manifest``. The only subcommand in
+    this CLI that performs real network requests."""
+    try:
+        user_agent = resolve_user_agent(args.sec_user_agent)
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+    if not args.dry_run and not args.overwrite:
+        for existing in ("filings.json", "prices.json", "universe.json"):
+            if (args.raw_root / existing).exists():
+                stderr.write(f"{args.raw_root / existing} already exists -- pass --overwrite to replace it\n")
+                return 1
+        if args.manifest.exists():
+            stderr.write(f"{args.manifest} already exists -- pass --overwrite to replace it\n")
+            return 1
+
+    def _progress(symbol: str, index: int, total: int) -> None:
+        stdout.write(f"[{index}/{total}] {symbol}\n")
+
+    retrieved_at = datetime.now()
+    result = run_full_acquisition(
+        RequestsHttpClient(), YFinancePriceProvider(), sec_user_agent=user_agent, retrieved_at=retrieved_at,
+        symbol_limit=args.symbol_limit, progress_callback=_progress if not args.as_json else None,
+    )
+
+    summary = {
+        "symbols_attempted": result.symbols_attempted,
+        "symbols_with_filings": result.symbols_with_filings,
+        "symbols_with_prices": result.symbols_with_prices,
+        "filing_count": len(result.filings), "price_count": len(result.prices),
+        "universe_count": len(result.universe), "warning_count": len(result.warnings),
+    }
+    if args.as_json:
+        stdout.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    else:
+        stdout.write(
+            f"acquired {summary['filing_count']} filing row(s), {summary['price_count']} price row(s), "
+            f"{summary['universe_count']} universe member(s) across {summary['symbols_attempted']} symbol(s)\n"
+        )
+        for w in result.warnings:
+            stdout.write(f"warning: {w}\n")
+
+    if args.dry_run:
+        return 0
+
+    written = write_raw_data_files(result, args.raw_root)
+    for name, path in written.items():
+        stdout.write(f"wrote {name}: {path}\n")
+
+    manifest = build_acquisition_manifest(
+        result, dataset_identity_label=args.dataset_label, strategy_config_identity=FilingMomentumMLConfig().identity(),
+        retrieval_date=retrieved_at.date(),
+        data_cutoff=retrieved_at, git_commit=None,
+    )
+    args.manifest.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(args.manifest, manifest.to_dict(), overwrite=True)
+    stdout.write(f"wrote manifest: {args.manifest}\n")
+    return 0
+
+
+def cmd_acquire_sic_history(args: argparse.Namespace, stdout, stderr) -> int:
+    """One-time backfill: real point-in-time SIC (and its SIC->GICS
+    crosswalk sector) for every already-acquired filing accession in
+    ``--raw-root``'s ``filings.json``, written to ``sic_history.json`` --
+    this platform's sole sector source (see ``load_normalized_bundle``).
+    Real network requests against SEC EDGAR -- see
+    ``acquisition/sic_history.py`` for why this is a separate, slower
+    subcommand from ``acquire-data``.
+    """
+    try:
+        user_agent = resolve_user_agent(args.sec_user_agent)
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+
+    sic_history_path = args.raw_root / "sic_history.json"
+    if not args.dry_run and not args.overwrite and sic_history_path.exists():
+        stderr.write(f"{sic_history_path} already exists -- pass --overwrite to replace it\n")
+        return 1
+
+    raw_filings = [_parse_raw_filing(d) for d in _read_json_list(args.raw_root / "filings.json")]
+    if not raw_filings:
+        stderr.write(f"no filings found at {args.raw_root / 'filings.json'} -- run acquire-data first\n")
+        return 1
+
+    client = RequestsHttpClient()
+    ticker_to_cik = fetch_ticker_to_cik_map(client, user_agent=user_agent)
+
+    def _progress(symbol: str, index: int, total: int) -> None:
+        stdout.write(f"[{index}/{total}] {symbol}\n")
+
+    retrieved_at = datetime.now()
+    result = fetch_sic_history(
+        client, raw_filings, ticker_to_cik, user_agent=user_agent, retrieved_at=retrieved_at,
+        requests_per_second=args.requests_per_second,
+        progress_callback=_progress if not args.as_json else None,
+    )
+
+    summary = {
+        "pairs_attempted": result.pairs_attempted, "pairs_with_sic": result.pairs_with_sic,
+        "warning_count": len(result.warnings),
+    }
+    if args.as_json:
+        stdout.write(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    else:
+        stdout.write(
+            f"acquired SIC for {summary['pairs_with_sic']}/{summary['pairs_attempted']} "
+            f"filing accession(s), {summary['warning_count']} warning(s)\n"
+        )
+        for w in result.warnings:
+            stdout.write(f"warning: {w}\n")
+
+    if args.dry_run:
+        return 0
+
+    path = write_sic_history_file(result, args.raw_root)
+    stdout.write(f"wrote sic_history.json: {path}\n")
+    return 0
+
+
 def cmd_validate_data(args: argparse.Namespace, stdout, stderr) -> int:
     bundle = load_normalized_bundle(args.raw_root)
     calendar = _build_trading_calendar(bundle)
@@ -375,11 +533,11 @@ def cmd_build_features(args: argparse.Namespace, stdout, stderr) -> int:
             stderr.write(f"feature cache already exists for this identity under {cache_root} -- pass --overwrite to replace it\n")
             return 1
 
-    targets = [(instrument_id, p.quarter_end) for p in periods for instrument_id in bundle.universe]
+    targets = [(instrument_id, p.quarter_end, p.entry_timestamp) for p in periods for instrument_id in bundle.universe]
     result = build_production_features(
         config=config, calendar=calendar, sector_encoder=SectorEncoder(), targets=targets,
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
-        sector_by_instrument=bundle.sector_by_instrument, data_cutoff=max(p.evaluation_timestamp for p in periods),
+        sector_by_instrument=bundle.sector_by_instrument,
         cache_identity=cache_identity, cache_root=cache_root, mode="training",
     )
     if result.blocked:
@@ -412,11 +570,11 @@ def cmd_build_labels(args: argparse.Namespace, stdout, stderr) -> int:
         return 2
 
     config = FilingMomentumMLConfig()
-    targets = [(instrument_id, p.quarter_end) for p in periods for instrument_id in bundle.universe]
+    targets = [(instrument_id, p.quarter_end, p.entry_timestamp) for p in periods for instrument_id in bundle.universe]
     feature_result = build_production_features(
         config=config, calendar=calendar, sector_encoder=SectorEncoder(), targets=targets,
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
-        sector_by_instrument=bundle.sector_by_instrument, data_cutoff=max(p.evaluation_timestamp for p in periods),
+        sector_by_instrument=bundle.sector_by_instrument,
         cache_identity=_feature_cache_identity(config, periods), cache_root=None, mode="training",
     )
     if feature_result.blocked:
@@ -425,7 +583,9 @@ def cmd_build_labels(args: argparse.Namespace, stdout, stderr) -> int:
 
     observations_by_quarter: dict = {}
     for obs in feature_result.feature_pipeline_result.observations:
-        observations_by_quarter.setdefault(obs.quarter_end, []).append(obs)
+        # Grouped by the shared strategy cohort, never the issuer's own
+        # fiscal quarter_end -- these routinely differ.
+        observations_by_quarter.setdefault(obs.strategy_cohort_end, []).append(obs)
 
     label_result = build_production_labels(
         periods=periods, observations_by_quarter=observations_by_quarter,
@@ -462,8 +622,10 @@ def _build_run_inputs(args: argparse.Namespace, bundle: NormalizedBundle, calend
     source_html = None
     if with_report and getattr(args, "source_report_html", None):
         source_html = Path(args.source_report_html).read_text()
+
+    backtest_config = FilingMomentumBacktestConfig()
     return ProductionRunInputs(
-        backtest_config=FilingMomentumBacktestConfig(), periods=periods, universe=bundle.universe,
+        backtest_config=backtest_config, periods=periods, universe=bundle.universe,
         benchmark_instrument_id=benchmark, trading_calendar=calendar, sector_encoder=SectorEncoder(),
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
         sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
@@ -481,6 +643,116 @@ def cmd_run_backtest(args: argparse.Namespace, stdout, stderr) -> int:
     result = run_filing_momentum_production_backtest(inputs)
     _print_run_result(result, as_json=args.as_json, stream=stdout)
     return 0 if result.state in _COMPLETED_STATES else _exit_code_for_state(result.state)
+
+
+def cmd_current_status(args: argparse.Namespace, stdout, stderr) -> int:
+    """Report where the strategy stands right now -- see
+    :func:`atlas_quant.strategies.filing_momentum_ml.production.orchestration
+    .run_filing_momentum_current_status`'s docstring for exactly what this
+    does and does not guarantee.
+
+    Uses :class:`WeekdayTradingCalendar` (no holiday awareness -- a
+    documented, pre-existing simplification in
+    ``atlas_quant.data.point_in_time``) instead of the real acquired-price
+    calendar, because periods here necessarily extend past the last
+    acquired price date into the current/next quarter -- the exact
+    calendar the historical backtest commands use only has trading days
+    up to whenever data was last acquired via ``acquire-data`` and cannot
+    answer "what's the next trading day" beyond that. This only affects
+    day-level filing-knowability sequencing, never any resolved price --
+    prices/entry values still only ever come from genuinely acquired
+    data or a live quote, never fabricated.
+    """
+    bundle = load_normalized_bundle(args.raw_root)
+    manifest = _load_manifest(args.manifest)
+    as_of = datetime.fromisoformat(args.as_of) if args.as_of else datetime.now()
+    start_quarter = date.fromisoformat(args.start_quarter)
+
+    horizon = next_calendar_quarter_end(as_of.date())
+    end_quarter = next_calendar_quarter_end(horizon + timedelta(days=1))
+    lag = args.earnings_lag_days if args.earnings_lag_days is not None else FilingMomentumMLConfig().earnings_lag_days
+    periods = generate_quarterly_periods(start_quarter, end_quarter, earnings_lag_days=lag)
+
+    backtest_config = FilingMomentumBacktestConfig()
+    inputs = ProductionRunInputs(
+        backtest_config=backtest_config, periods=periods, universe=bundle.universe,
+        benchmark_instrument_id=InstrumentId(symbol=args.benchmark, asset_class=AssetClass.EQUITY),
+        trading_calendar=WeekdayTradingCalendar(), sector_encoder=SectorEncoder(),
+        filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
+        sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
+        checkpoint_root=None, run_mode="production",
+    )
+    result = run_filing_momentum_current_status(inputs, as_of=as_of)
+    _print_current_status(result, as_json=args.as_json, stream=stdout)
+    return 0 if result.state in _COMPLETED_STATES else _exit_code_for_state(result.state)
+
+
+def _print_current_status(result: CurrentStatusResult, *, as_json: bool, stream) -> None:
+    if as_json:
+        payload = {
+            "state": result.state.value,
+            "as_of": result.as_of.isoformat(),
+            "blocked_reason": result.blocked_reason,
+            "held_quarter_end": result.held_quarter_end.isoformat() if result.held_quarter_end else None,
+            "held_entry_date": result.held_entry_date.isoformat() if result.held_entry_date else None,
+            "held_exit_date": result.held_exit_date.isoformat() if result.held_exit_date else None,
+            "held_positions": [
+                {
+                    "instrument": p.instrument_id.symbol, "role": p.role.value, "target_weight": p.target_weight,
+                    "entry_date": p.entry_date.isoformat() if p.entry_date else None,
+                    "entry_price": p.entry_price,
+                    "current_date": p.current_date.isoformat() if p.current_date else None,
+                    "current_price": p.current_price, "unrealized_return": p.unrealized_return,
+                    "lifecycle_state": p.lifecycle_state.value, "warnings": list(p.warnings),
+                }
+                for p in result.held_positions
+            ],
+            "portfolio_qtd_return": result.portfolio_qtd_return,
+            "benchmark_qtd_return": result.benchmark_qtd_return,
+            "qtd_alpha": result.qtd_alpha,
+            "next_quarter_end": result.next_quarter_end.isoformat() if result.next_quarter_end else None,
+            "next_entry_date": result.next_entry_date.isoformat() if result.next_entry_date else None,
+            "next_picks": [
+                {"instrument": p.instrument_id.symbol, "role": p.role.value, "target_weight": p.target_weight}
+                for p in result.next_picks
+            ],
+            "warnings": list(result.warnings),
+        }
+        stream.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        return
+
+    stream.write(f"state: {result.state.value}\n")
+    stream.write(f"as of: {result.as_of.isoformat()}\n")
+    if result.blocked_reason:
+        stream.write(f"reason: {result.blocked_reason}\n")
+        return
+
+    stream.write(
+        f"\nheld cohort: quarter_end={result.held_quarter_end} "
+        f"entry={result.held_entry_date} scheduled_exit={result.held_exit_date}\n"
+    )
+    for p in result.held_positions:
+        current = f"{p.current_price:.2f} (as of {p.current_date})" if p.current_price is not None else "unavailable"
+        unrealized = f"{p.unrealized_return:+.2%}" if p.unrealized_return is not None else "n/a"
+        stream.write(
+            f"  {p.instrument_id.symbol:<8} {p.role.value:<8} weight={p.target_weight:.2%}  "
+            f"entry={p.entry_price:.2f} ({p.entry_date})  current={current}  unrealized={unrealized}\n"
+        )
+        for w in p.warnings:
+            stream.write(f"    warning: {w}\n")
+    if result.portfolio_qtd_return is not None:
+        stream.write(f"  portfolio QTD return: {result.portfolio_qtd_return:+.2%}\n")
+    if result.benchmark_qtd_return is not None:
+        stream.write(f"  benchmark QTD return: {result.benchmark_qtd_return:+.2%}\n")
+    if result.qtd_alpha is not None:
+        stream.write(f"  QTD alpha: {result.qtd_alpha:+.2%}\n")
+
+    stream.write(f"\nnext scheduled cohort: quarter_end={result.next_quarter_end} entry={result.next_entry_date}\n")
+    for p in result.next_picks:
+        stream.write(f"  {p.instrument_id.symbol:<8} {p.role.value:<8} weight={p.target_weight:.2%}  (not yet entered)\n")
+
+    for w in result.warnings:
+        stream.write(f"warning: {w}\n")
 
 
 def cmd_build_report(args: argparse.Namespace, stdout, stderr) -> int:
@@ -529,10 +801,13 @@ def cmd_run_all(args: argparse.Namespace, stdout, stderr) -> int:
 
 
 _HANDLERS = {
+    "acquire-data": cmd_acquire_data,
+    "acquire-sic-history": cmd_acquire_sic_history,
     "validate-data": cmd_validate_data,
     "build-features": cmd_build_features,
     "build-labels": cmd_build_labels,
     "run-backtest": cmd_run_backtest,
+    "current-status": cmd_current_status,
     "build-report": cmd_build_report,
     "compare-report": cmd_compare_report,
     "run-all": cmd_run_all,
@@ -563,6 +838,23 @@ def build_parser() -> argparse.ArgumentParser:
     fm = top.add_parser("filing-momentum", help="Filing Momentum ML production research workflow")
     sub = fm.add_subparsers(dest="subcommand", required=True)
 
+    acquire_p = sub.add_parser("acquire-data", help="acquire real universe/sector/filing/price data (real network requests)")
+    _add_common_arguments(acquire_p)
+    acquire_p.add_argument("--sec-user-agent", type=str, default=None, help="or set SEC_EDGAR_USER_AGENT")
+    acquire_p.add_argument("--symbol-limit", type=int, default=None, help="cap on how many universe members to acquire")
+    acquire_p.add_argument("--dataset-label", type=str, default="sec_edgar_yfinance_wikipedia_snapshot")
+
+    sic_history_p = sub.add_parser(
+        "acquire-sic-history",
+        help="one-time backfill: real point-in-time SIC history for already-acquired filings (real network requests)",
+    )
+    _add_common_arguments(sic_history_p)
+    sic_history_p.add_argument("--sec-user-agent", type=str, default=None, help="or set SEC_EDGAR_USER_AGENT")
+    sic_history_p.add_argument(
+        "--requests-per-second", type=float, default=DEFAULT_REQUESTS_PER_SECOND,
+        help="rate limit for the per-filing SIC fetch loop",
+    )
+
     validate_p = sub.add_parser("validate-data", help="validate normalized raw data")
     _add_common_arguments(validate_p)
 
@@ -577,6 +869,18 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_p = sub.add_parser("run-backtest", help="run the full production backtest (no report)")
     _add_common_arguments(backtest_p)
     backtest_p.add_argument("--checkpoint-root", type=Path, default=None)
+
+    current_status_p = sub.add_parser(
+        "current-status",
+        help="live status: currently-held cohort's unrealized return/alpha + next cohort's scheduled picks",
+    )
+    current_status_p.add_argument("--raw-root", type=Path, default=Path("data/raw/filing_momentum_ml"))
+    current_status_p.add_argument("--manifest", type=Path, default=Path("data/manifests/filing_momentum_ml/data_manifest.json"))
+    current_status_p.add_argument("--start-quarter", type=str, required=True, help="YYYY-MM-DD, a valid calendar quarter-end -- the training-history buffer's start")
+    current_status_p.add_argument("--as-of", type=str, default=None, help="ISO datetime; defaults to now")
+    current_status_p.add_argument("--benchmark", type=str, default="SPY")
+    current_status_p.add_argument("--earnings-lag-days", type=int, default=None)
+    current_status_p.add_argument("--json", action="store_true", dest="as_json", help="machine-readable JSON output")
 
     report_p = sub.add_parser("build-report", help="run the full production backtest and build a report")
     _add_common_arguments(report_p)

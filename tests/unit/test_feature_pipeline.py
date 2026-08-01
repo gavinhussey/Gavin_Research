@@ -33,6 +33,13 @@ def _is_nan(v):
 
 
 QUARTERS = [date(2025, 3, 31), date(2025, 6, 30), date(2025, 9, 30), date(2025, 12, 31)]
+_EARNINGS_LAG_DAYS = FilingMomentumMLConfig().earnings_lag_days
+
+
+def _cohort_buy_timestamp(quarter_end: date, lag_days: int = _EARNINGS_LAG_DAYS) -> datetime:
+    """The shared cohort's own buy timestamp: quarter_end + earnings_lag_days,
+    matching atlas_quant.backtest.clock.build_period's convention exactly."""
+    return datetime.combine(quarter_end, datetime.min.time()) + timedelta(days=lag_days)
 
 
 class TestFundamentalFeatures:
@@ -214,7 +221,8 @@ class TestContextualFeatures:
 
         result = build_feature_observation(
             config=config, calendar=cal, sector_encoder=encoder,
-            instrument_id=iid, target_quarter_end=QUARTERS[-1],
+            instrument_id=iid, strategy_cohort_end=QUARTERS[-1],
+            cohort_buy_timestamp=_cohort_buy_timestamp(QUARTERS[-1]),
             filings=filings, prices=prices, sector_record=sector,
             data_cutoff=datetime(2026, 3, 1), mode="training",
         )
@@ -237,13 +245,16 @@ class TestFeaturePipeline:
         config = FilingMomentumMLConfig()
         result = build_feature_observation(
             config=config, calendar=cal, sector_encoder=SectorEncoder(),
-            instrument_id=iid, target_quarter_end=QUARTERS[-1],
+            instrument_id=iid, strategy_cohort_end=QUARTERS[-1],
+            cohort_buy_timestamp=_cohort_buy_timestamp(QUARTERS[-1]),
             filings=filings, prices=prices, sector_record=sector,
             data_cutoff=datetime(2026, 3, 1),
         )
         assert not isinstance(result, RejectedObservation)
         assert set(result.features) == set(FEATURE_NAMES)
         assert result.config_identity == config.identity()
+        assert result.strategy_cohort_end == QUARTERS[-1]
+        assert result.cohort_buy_timestamp == _cohort_buy_timestamp(QUARTERS[-1])
 
     def test_partially_missing_observation_short_price_history(self):
         iid = instrument("JNJ")
@@ -252,24 +263,53 @@ class TestFeaturePipeline:
         short_prices = prices[-10:]
         result = build_feature_observation(
             config=config, calendar=cal, sector_encoder=SectorEncoder(),
-            instrument_id=iid, target_quarter_end=QUARTERS[-1],
+            instrument_id=iid, strategy_cohort_end=QUARTERS[-1],
+            cohort_buy_timestamp=_cohort_buy_timestamp(QUARTERS[-1]),
             filings=filings, prices=short_prices, sector_record=sector,
             data_cutoff=datetime(2026, 3, 1),
         )
         assert not isinstance(result, RejectedObservation)
         assert "price_mom_12m" in result.missing_features
 
-    def test_rejected_observation_target_quarter_not_knowable(self):
+    def test_rejected_observation_no_knowable_history_at_all(self):
+        """Genuine data insufficiency (no filing knowable at all as of
+        data_cutoff) is still rejected -- unlike a fiscal/calendar
+        mismatch, which is never a rejection condition."""
         iid = instrument("JNJ")
         filings, cal, prices, sector = self._setup(iid)
         config = FilingMomentumMLConfig()
         result = build_feature_observation(
             config=config, calendar=cal, sector_encoder=SectorEncoder(),
-            instrument_id=iid, target_quarter_end=QUARTERS[-1],
+            instrument_id=iid, strategy_cohort_end=QUARTERS[-1],
+            cohort_buy_timestamp=_cohort_buy_timestamp(QUARTERS[-1]),
             filings=filings, prices=prices, sector_record=sector,
-            data_cutoff=datetime(2026, 1, 1),  # before Q4 filing's filed_at
+            data_cutoff=datetime(2024, 1, 1),  # before every filing's own filed_at
         )
         assert isinstance(result, RejectedObservation)
+        assert result.reason == "no fundamental history knowable as of data_cutoff"
+
+    def test_no_exact_cohort_match_uses_cohort_buy_timestamp_not_rejected(self):
+        """Recovered report/legacy behavior: a cohort with no exactly-matching
+        issuer fiscal quarter-end is never rejected -- it uses the most
+        recently knowable fiscal history, timed at cohort_buy_timestamp."""
+        iid = instrument("JNJ")
+        filings, cal, prices, sector = self._setup(iid)
+        config = FilingMomentumMLConfig()
+        offset_cohort_end = date(2026, 1, 15)  # does not match any fixture quarter_end
+        cohort_buy_ts = _cohort_buy_timestamp(offset_cohort_end)
+        result = build_feature_observation(
+            config=config, calendar=cal, sector_encoder=SectorEncoder(),
+            instrument_id=iid, strategy_cohort_end=offset_cohort_end,
+            cohort_buy_timestamp=cohort_buy_ts,
+            filings=filings, prices=prices, sector_record=sector,
+            data_cutoff=cohort_buy_ts,
+        )
+        assert not isinstance(result, RejectedObservation)
+        assert result.quarter_end == QUARTERS[-1]  # actual fiscal quarter, most recently knowable
+        assert result.strategy_cohort_end == offset_cohort_end
+        assert result.feature_timestamp == cohort_buy_ts.date()
+        stages = {r.stage: r for r in result.audit_trail}
+        assert stages["timing_resolution"].data["cohort_match"] is False
 
     def test_multiple_instruments_via_run_feature_pipeline(self):
         iid_a = instrument("AAA")
@@ -277,14 +317,14 @@ class TestFeaturePipeline:
         filings_a, cal, prices_a, sector_a = self._setup(iid_a)
         filings_b, _, prices_b, sector_b = self._setup(iid_b)
         config = FilingMomentumMLConfig()
+        buy_ts = _cohort_buy_timestamp(QUARTERS[-1])
 
         result = run_feature_pipeline(
             config=config, calendar=cal, sector_encoder=SectorEncoder(),
-            targets=[(iid_a, QUARTERS[-1]), (iid_b, QUARTERS[-1])],
+            targets=[(iid_a, QUARTERS[-1], buy_ts), (iid_b, QUARTERS[-1], buy_ts)],
             filings_by_instrument={iid_a: filings_a, iid_b: filings_b},
             prices_by_instrument={iid_a: prices_a, iid_b: prices_b},
-            sector_by_instrument={iid_a: sector_a, iid_b: sector_b},
-            data_cutoff=datetime(2026, 3, 1),
+            sector_by_instrument={iid_a: (sector_a,), iid_b: (sector_b,)},
         )
         assert len(result.observations) == 2
         assert {o.instrument_id.symbol for o in result.observations} == {"AAA", "BBB"}
@@ -295,11 +335,10 @@ class TestFeaturePipeline:
         config = FilingMomentumMLConfig()
         kwargs = dict(
             config=config, calendar=cal, sector_encoder=SectorEncoder(),
-            targets=[(iid, QUARTERS[-1])],
+            targets=[(iid, QUARTERS[-1], _cohort_buy_timestamp(QUARTERS[-1]))],
             filings_by_instrument={iid: filings},
             prices_by_instrument={iid: prices},
-            sector_by_instrument={iid: sector},
-            data_cutoff=datetime(2026, 3, 1),
+            sector_by_instrument={iid: (sector,)},
         )
         r1 = run_feature_pipeline(**kwargs)
         r2 = run_feature_pipeline(**kwargs)
@@ -311,7 +350,8 @@ class TestFeaturePipeline:
         config = FilingMomentumMLConfig()
         result = build_feature_observation(
             config=config, calendar=cal, sector_encoder=SectorEncoder(),
-            instrument_id=iid, target_quarter_end=QUARTERS[-1],
+            instrument_id=iid, strategy_cohort_end=QUARTERS[-1],
+            cohort_buy_timestamp=_cohort_buy_timestamp(QUARTERS[-1]),
             filings=filings, prices=prices, sector_record=sector,
             data_cutoff=datetime(2026, 3, 1),
         )
@@ -326,7 +366,8 @@ class TestFeaturePipeline:
         config = FilingMomentumMLConfig()
         result = build_feature_observation(
             config=config, calendar=cal, sector_encoder=SectorEncoder(),
-            instrument_id=iid, target_quarter_end=QUARTERS[-1],
+            instrument_id=iid, strategy_cohort_end=QUARTERS[-1],
+            cohort_buy_timestamp=_cohort_buy_timestamp(QUARTERS[-1]),
             filings=filings, prices=prices, sector_record=sector,
             data_cutoff=datetime(2026, 3, 1),
         )
@@ -338,11 +379,10 @@ class TestFeaturePipeline:
         config = FilingMomentumMLConfig()
         result = run_feature_pipeline(
             config=config, calendar=cal, sector_encoder=SectorEncoder(),
-            targets=[(iid, QUARTERS[-1])],
+            targets=[(iid, QUARTERS[-1], _cohort_buy_timestamp(QUARTERS[-1]))],
             filings_by_instrument={iid: filings},
             prices_by_instrument={iid: prices},
-            sector_by_instrument={iid: sector},
-            data_cutoff=datetime(2026, 3, 1),
+            sector_by_instrument={iid: (sector,)},
         )
         assert len(result.to_dicts()) == 1
         assert len(result.to_model_matrix()) == 1

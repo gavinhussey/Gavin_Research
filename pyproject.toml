@@ -18,10 +18,9 @@ dev = ["pytest>=8.0.0"]
 # must keep importing without them (verified by tests/_safety.py-adjacent
 # import-smoke tests). Install only the group(s) a given task needs.
 model = ["scikit-learn>=1.3.0,<2.0.0"]
-regime = ["hmmlearn>=0.3.0,<0.4.0"]
-production-data = ["requests>=2.31.0", "pyarrow>=14.0.0"]
+production-data = ["requests>=2.31.0", "pyarrow>=14.0.0", "yfinance>=0.2.40", "lxml>=5.0.0"]
 notebooks = ["jupyter>=1.0.0", "nbformat>=5.9.0"]
-research = ["atlas-quant[model,regime,production-data,notebooks]"]
+research = ["atlas-quant[model,production-data,notebooks]"]
 
 [project.scripts]
 atlas-quant = "atlas_quant.cli.main:main"
@@ -32,7 +31,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Plain `pytest` must be safe by default — network, external-env (e.g. a
-# separate Python env needed for hmmlearn once the regime gate lands),
+# separate Python env needed for an optional heavy dependency),
 # slow (full historical backtests), and production_data tests are opt-in
 # only. See tests/conftest.py and tests/_safety.py.
 addopts = "-m \"not network and not external_env and not slow and not production_data\""

@@ -1,11 +1,11 @@
 """Checkpointed offline production workflow state — resumable, never silently reused.
 
 A genuine production research run is expensive (real filing/price
-acquisition, real model fits, real HMM fits) and may span multiple
+acquisition and real model fits) and may span multiple
 sessions. This module persists, per run, which of the nine ordered
 workflow steps have completed, each step's own content identity/hashes/
 warnings, and rejects resuming a checkpoint file whose stored identity
-components (dataset manifest, strategy config, regime config) do not
+components (dataset manifest, strategy config) do not
 match the run being resumed — a stale checkpoint is never silently
 treated as compatible just because a file happens to exist at the
 expected path.
@@ -79,7 +79,7 @@ class CheckpointCorrupted(Exception):
 
 class CheckpointIdentityMismatch(Exception):
     """A checkpoint manifest exists but its stored identity components
-    (dataset manifest, strategy config, or regime config identity) do not
+    (dataset manifest or strategy config identity) do not
     match the run being resumed -- resuming it would silently mix
     incompatible data/configuration, so it is refused rather than reused."""
 
@@ -134,7 +134,6 @@ class RunManifest:
     run_identity: str
     dataset_manifest_identity: str
     strategy_config_identity: str
-    regime_config_identity: str
     git_commit: str | None
     dependency_versions: Mapping[str, str | None]
     run_mode: str
@@ -175,7 +174,6 @@ class RunManifest:
             run_identity=self.run_identity,
             dataset_manifest_identity=self.dataset_manifest_identity,
             strategy_config_identity=self.strategy_config_identity,
-            regime_config_identity=self.regime_config_identity,
             git_commit=self.git_commit,
             dependency_versions=self.dependency_versions,
             run_mode=self.run_mode,
@@ -191,7 +189,6 @@ class RunManifest:
             run_identity=self.run_identity,
             dataset_manifest_identity=self.dataset_manifest_identity,
             strategy_config_identity=self.strategy_config_identity,
-            regime_config_identity=self.regime_config_identity,
             git_commit=self.git_commit,
             dependency_versions=self.dependency_versions,
             run_mode=self.run_mode,
@@ -208,7 +205,6 @@ class RunManifest:
             "run_identity": self.run_identity,
             "dataset_manifest_identity": self.dataset_manifest_identity,
             "strategy_config_identity": self.strategy_config_identity,
-            "regime_config_identity": self.regime_config_identity,
             "git_commit": self.git_commit,
             "dependency_versions": dict(sorted(self.dependency_versions.items())),
             "run_mode": self.run_mode,
@@ -224,7 +220,6 @@ class RunManifest:
             run_identity=data["run_identity"],
             dataset_manifest_identity=data["dataset_manifest_identity"],
             strategy_config_identity=data["strategy_config_identity"],
-            regime_config_identity=data["regime_config_identity"],
             git_commit=data.get("git_commit"),
             dependency_versions=dict(data.get("dependency_versions", {})),
             run_mode=data["run_mode"],
@@ -241,7 +236,6 @@ def new_run_manifest(
     run_identity: str,
     dataset_manifest_identity: str,
     strategy_config_identity: str,
-    regime_config_identity: str,
     git_commit: str | None,
     dependency_versions: Mapping[str, str | None],
     run_mode: str,
@@ -252,7 +246,6 @@ def new_run_manifest(
         run_identity=run_identity,
         dataset_manifest_identity=dataset_manifest_identity,
         strategy_config_identity=strategy_config_identity,
-        regime_config_identity=regime_config_identity,
         git_commit=git_commit,
         dependency_versions=dict(dependency_versions),
         run_mode=run_mode,
@@ -267,7 +260,6 @@ def validate_resume_compatibility(
     *,
     dataset_manifest_identity: str,
     strategy_config_identity: str,
-    regime_config_identity: str,
 ) -> None:
     """Raise :class:`CheckpointIdentityMismatch` if ``manifest`` cannot be resumed as-is.
 
@@ -281,8 +273,6 @@ def validate_resume_compatibility(
         mismatches.append("dataset_manifest_identity")
     if manifest.strategy_config_identity != strategy_config_identity:
         mismatches.append("strategy_config_identity")
-    if manifest.regime_config_identity != regime_config_identity:
-        mismatches.append("regime_config_identity")
     if mismatches:
         raise CheckpointIdentityMismatch(
             f"checkpoint manifest {manifest.run_identity!r} cannot be resumed: "

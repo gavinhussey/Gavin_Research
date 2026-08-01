@@ -3,8 +3,8 @@
 Separates core (always required), research-only, production-data, and
 optional-provider dependencies so a caller can tell exactly what a given
 workflow step needs before attempting it. Importing this module (or the
-rest of the AtlasQuant package) never requires scikit-learn, hmmlearn,
-pyarrow, requests, Jupyter/nbformat, Bloomberg, or Schwab libraries.
+rest of the AtlasQuant package) never requires scikit-learn, pyarrow,
+requests, Jupyter/nbformat, Bloomberg, or Schwab libraries.
 """
 
 from __future__ import annotations
@@ -56,9 +56,10 @@ DEPENDENCY_SPECS: tuple[DependencySpec, ...] = (
     DependencySpec("pandas", DependencyCategory.CORE, "pandas", True, "2.0.0"),
     DependencySpec("numpy", DependencyCategory.CORE, "numpy", True, "1.25.0"),
     DependencySpec("scikit-learn", DependencyCategory.PRODUCTION_DATA, "sklearn", True, "1.3.0"),
-    DependencySpec("hmmlearn", DependencyCategory.PRODUCTION_DATA, "hmmlearn", True, "0.3.0"),
     DependencySpec("pyarrow", DependencyCategory.PRODUCTION_DATA, "pyarrow", False, "14.0.0"),
     DependencySpec("requests", DependencyCategory.PRODUCTION_DATA, "requests", True, "2.31.0"),
+    DependencySpec("yfinance", DependencyCategory.PRODUCTION_DATA, "yfinance", True, "0.2.40"),
+    DependencySpec("lxml", DependencyCategory.PRODUCTION_DATA, "lxml", True, "5.0.0"),
     DependencySpec("jupyter", DependencyCategory.RESEARCH_ONLY, "jupyter", False, None),
     DependencySpec("nbformat", DependencyCategory.RESEARCH_ONLY, "nbformat", False, "5.9.0"),
     DependencySpec("bloomberg (blpapi)", DependencyCategory.OPTIONAL_PROVIDER, "blpapi", False, None),

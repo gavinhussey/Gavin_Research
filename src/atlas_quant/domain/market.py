@@ -31,9 +31,9 @@ class PriceBar:
 class MarketContext:
     """The market-level information available to a strategy at evaluation time.
 
-    This is deliberately open-ended: regime classification, benchmark
-    levels, and other market-wide signals are populated by later stages
-    (regime gate work lands in Stage 4). ``extra`` exists so strategies can
+    This is deliberately open-ended: benchmark levels and other
+    market-wide signals are populated by later stages. ``extra`` exists so
+    strategies can
     attach strategy-agnostic market data without requiring a schema change
     here for every new data point — but any field a *strategy* meaningfully
     depends on for its own logic belongs in that strategy's own config or
