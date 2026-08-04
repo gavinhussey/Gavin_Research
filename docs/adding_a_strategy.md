@@ -11,12 +11,17 @@ A second strategy, **Ranked Multi-Factor Rotation**, is now under
 construction following this pattern
 (`src/atlas_quant/strategies/ranked_multi_factor_rotation/`,
 `research/strategies/ranked_multi_factor_rotation/`). As of this writing
-only layers 1–2 exist (a registry-metadata-only registration and a
-structural config shell with no factor/formula/universe values decided
-yet — `factory=None`, `enabled=False`); layers 3 onward will be filled in
-as its own specification
-(`research/strategies/ranked_multi_factor_rotation/docs/specification.md`)
-is written, formula by formula.
+its specification (a monthly-rebalance, 11-ETF-universe momentum/
+volatility/correlation/trend rotation) is written down in
+`research/strategies/ranked_multi_factor_rotation/docs/specification.md`,
+and layers 1–5 exist and are tested: the `DailyOHLCObservation` domain
+record, a real typed config, pure formulas (momentum, EWMA volatility,
+rolling correlation, ATR trend breakout, ranking/total-rank), the
+point-in-time monthly selection pipeline, and a real, protocol-conforming
+`RankedMultiFactorRotationStrategy` (`factory` set, `enabled=True`). Not
+yet built: a backtest runner (layer 6), real data acquisition, and
+performance reporting (layer 7) — no genuine historical backtest of this
+strategy has been run.
 
 ## The layers every strategy needs
 

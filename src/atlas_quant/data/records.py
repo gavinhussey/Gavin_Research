@@ -1,9 +1,11 @@
-"""Provider-neutral, typed data records for Filing Momentum ML's inputs.
+"""Provider-neutral, typed data records shared across strategies.
 
 Every record here represents data *as delivered by some provider*, before
 any strategy-specific feature computation. None of these types perform
 I/O; they are the shapes a :mod:`atlas_quant.data.providers` protocol
-implementation returns.
+implementation returns. Originally written for Filing Momentum ML's
+inputs; ``DailyOHLCObservation`` was added for Ranked Multi-Factor
+Rotation's ATR/true-range formulas, which need high/low, not just close.
 """
 
 from __future__ import annotations
@@ -92,6 +94,58 @@ class DailyPriceObservation:
         if self.price_convention not in ("split_dividend_adjusted", "unadjusted"):
             raise ValueError(
                 "DailyPriceObservation.price_convention must be "
+                f"'split_dividend_adjusted' or 'unadjusted', got "
+                f"{self.price_convention!r}"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class DailyOHLCObservation:
+    """One instrument's daily open/high/low/close for one trading date.
+
+    Distinct from :class:`DailyPriceObservation` (close-only) because
+    true-range/ATR-based formulas need the full daily range, not just the
+    close. ``price_convention`` carries the same meaning and the same
+    single-convention-per-series requirement as
+    :class:`DailyPriceObservation`.
+    """
+
+    instrument_id: InstrumentId
+    trading_date: date
+    open: float
+    high: float
+    low: float
+    close: float
+    price_convention: PriceConvention
+    provenance: DataProvenance
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("open", self.open),
+            ("high", self.high),
+            ("low", self.low),
+            ("close", self.close),
+        ):
+            if value < 0:
+                raise ValueError(f"DailyOHLCObservation.{field_name} cannot be negative")
+        if self.high < self.low:
+            raise ValueError(
+                f"DailyOHLCObservation.high ({self.high!r}) cannot be below "
+                f"low ({self.low!r})"
+            )
+        if not (self.low <= self.open <= self.high):
+            raise ValueError(
+                f"DailyOHLCObservation.open ({self.open!r}) must be within "
+                f"[low, high] = [{self.low!r}, {self.high!r}]"
+            )
+        if not (self.low <= self.close <= self.high):
+            raise ValueError(
+                f"DailyOHLCObservation.close ({self.close!r}) must be within "
+                f"[low, high] = [{self.low!r}, {self.high!r}]"
+            )
+        if self.price_convention not in ("split_dividend_adjusted", "unadjusted"):
+            raise ValueError(
+                "DailyOHLCObservation.price_convention must be "
                 f"'split_dividend_adjusted' or 'unadjusted', got "
                 f"{self.price_convention!r}"
             )

@@ -53,12 +53,15 @@ independently verified against this platform's own configuration (see
 diagnostic-only pass over it and never deserializes its pickle caches).
 
 See `docs/adding_a_strategy.md` for the pattern a second strategy
-follows. A second strategy, **Ranked Multi-Factor Rotation**, is now
-scaffolded (`src/atlas_quant/strategies/ranked_multi_factor_rotation/`,
-`research/strategies/ranked_multi_factor_rotation/`) but has no factor,
-formula, universe, or portfolio-construction logic yet — only a
-registry-metadata-only registration (`factory=None`, `enabled=False`)
-and a structural config shell pending its own specification.
+follows. A second strategy, **Ranked Multi-Factor Rotation** — a
+monthly-rebalance, 11-ETF momentum/volatility/correlation/trend rotation
+strategy — is under construction
+(`src/atlas_quant/strategies/ranked_multi_factor_rotation/`,
+`research/strategies/ranked_multi_factor_rotation/`). Its specification,
+config, pure formulas, point-in-time monthly selection pipeline, and
+strategy decision evaluator all exist and are tested; no backtest
+runner, real data acquisition, or genuine historical backtest exists yet
+for it.
 
 ## Layout
 

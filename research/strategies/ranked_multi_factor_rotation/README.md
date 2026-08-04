@@ -1,10 +1,9 @@
 # Ranked Multi-Factor Rotation — research workspace
 
-Scaffold only, mirroring `research/strategies/filing_momentum_ml/`'s
-layout per `docs/adding_a_strategy.md`. No specification, formula, or
-result in this directory is authoritative until it also exists as tested
-code under
-`src/atlas_quant/strategies/ranked_multi_factor_rotation/` — this
+Mirrors `research/strategies/filing_momentum_ml/`'s layout per
+`docs/adding_a_strategy.md`. No specification, formula, or result in
+this directory is authoritative until it also exists as tested code
+under `src/atlas_quant/strategies/ranked_multi_factor_rotation/` — this
 directory is never authoritative on its own.
 
 - `docs/` — this strategy's own specification documents (the equivalent
@@ -23,7 +22,13 @@ directory is never authoritative on its own.
 
 ## Status
 
-No factors, formulas, universe, or rebalance cadence have been specified
-yet. See
-`src/atlas_quant/strategies/ranked_multi_factor_rotation/config.py` for
-the current (placeholder-only) configuration shell.
+`docs/specification.md` §§1–6 (universe, momentum/volatility/
+correlation/trend factors, ranking, total rank, selection/allocation,
+rebalance cadence) are specified and implemented as tested code in
+`src/atlas_quant/strategies/ranked_multi_factor_rotation/` (config,
+formulas, point-in-time monthly pipeline, strategy evaluator). Not yet
+built: a backtest runner, real data acquisition, or a genuine historical
+backtest — nothing in this directory should be read as a strategy
+performance claim until one exists. §7 (risk/sizing beyond flat
+per-slot weighting) and §8 (transaction cost/slippage assumptions)
+remain open questions, not decided rules.
