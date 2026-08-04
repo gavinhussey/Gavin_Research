@@ -14,14 +14,18 @@ construction following this pattern
 its specification (a monthly-rebalance, 11-ETF-universe momentum/
 volatility/correlation/trend rotation) is written down in
 `research/strategies/ranked_multi_factor_rotation/docs/specification.md`,
-and layers 1–5 exist and are tested: the `DailyOHLCObservation` domain
+and layers 1–6 exist and are tested: the `DailyOHLCObservation` domain
 record, a real typed config, pure formulas (momentum, EWMA volatility,
 rolling correlation, ATR trend breakout, ranking/total-rank), the
-point-in-time monthly selection pipeline, and a real, protocol-conforming
-`RankedMultiFactorRotationStrategy` (`factory` set, `enabled=True`). Not
-yet built: a backtest runner (layer 6), real data acquisition, and
-performance reporting (layer 7) — no genuine historical backtest of this
-strategy has been run.
+point-in-time monthly selection pipeline, a real, protocol-conforming
+`RankedMultiFactorRotationStrategy` (`factory` set, `enabled=True`), real
+yfinance data acquisition, and a standalone monthly backtest runner
+(`atlas_quant.backtest.ranked_multi_factor_rotation_runner`) with
+turnover-based transaction costs. A genuine historical backtest has been
+run end-to-end on real data — see
+`research/strategies/ranked_multi_factor_rotation/docs/reproducibility_findings.md`
+for results and current caveats (no walk-forward validation yet). Not
+yet built: performance-statistics/reporting (layer 7).
 
 ## The layers every strategy needs
 

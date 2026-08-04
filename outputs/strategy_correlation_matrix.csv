@@ -1,3 +1,4 @@
-,filing_momentum_ml,S&P 500 (SPY)
-filing_momentum_ml,1.0,0.7508349483259945
-S&P 500 (SPY),0.7508349483259945,1.0
+,filing_momentum_ml,ranked_multi_factor_rotation,S&P 500 (SPY)
+filing_momentum_ml,1.0,0.3200775281553284,0.7508349483259945
+ranked_multi_factor_rotation,0.3200775281553284,1.0,0.2757768659105
+S&P 500 (SPY),0.7508349483259945,0.2757768659105,1.0

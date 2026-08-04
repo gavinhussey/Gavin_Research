@@ -22,7 +22,7 @@ from atlas_quant.strategies.ranked_multi_factor_rotation.config import (
 )
 from atlas_quant.strategies.ranked_multi_factor_rotation.formulas import (
     allocate_weights,
-    average_relative_correlation,
+    average_relative_correlation_at,
     average_true_range,
     ewma_volatility,
     momentum,
@@ -132,13 +132,21 @@ def compute_factor_snapshot(
         breakouts = trend_breakouts(df["high"], df["low"], upper, lower)
         trend_values[ticker] = compute_trend_state(breakouts).loc[as_of]
 
-    correlation_matrix = average_relative_correlation(returns, config.correlation_lookback_days)
+    # Only this one date's correlation is ever needed here -- see
+    # average_relative_correlation_at's docstring for why this avoids
+    # recomputing a full historical series (average_relative_correlation)
+    # just to read its last row, at every rebalance of a backtest.
+    correlation_window = returns.tail(config.correlation_lookback_days)
+    if len(correlation_window) < config.correlation_lookback_days:
+        correlation_values = pd.Series(float("nan"), index=list(config.ranked_tickers))
+    else:
+        correlation_values = average_relative_correlation_at(correlation_window)
 
     return pd.DataFrame(
         {
             "momentum": pd.Series(momentum_values),
             "volatility": pd.Series(volatility_values),
-            "correlation": correlation_matrix.loc[as_of],
+            "correlation": correlation_values,
             "trend": pd.Series(trend_values),
         }
     )

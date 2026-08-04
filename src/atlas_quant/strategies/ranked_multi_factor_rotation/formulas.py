@@ -70,21 +70,19 @@ def ewma_volatility(returns: pd.Series, lam: float) -> pd.Series:
     convention; this is the standard RiskMetrics bootstrap and is
     disclosed here as an explicit, deliberate choice, not a hidden
     default). Every date before the first non-NaN return is NaN.
+
+    Implemented via ``pandas.Series.ewm(adjust=False)`` on ``returns**2``
+    (with ``alpha = 1 - lam``) rather than a Python loop -- algebraically
+    identical to the recursion above (``ewm(adjust=False)`` seeds at the
+    first non-NaN value and applies exactly
+    ``y_t = (1-alpha)*y_{t-1} + alpha*x_t``), but vectorized: a from-
+    scratch backtest re-evaluating this over growing history at every
+    rebalance would otherwise cost O(n^2) in a pure-Python loop.
     """
     if not (0.0 < lam < 1.0):
         raise ValueError(f"lam must be within (0.0, 1.0), got {lam!r}")
 
-    variance = pd.Series(_NAN, index=returns.index, dtype=float)
-    prev_variance: float | None = None
-    for ts, r in returns.items():
-        if pd.isna(r):
-            continue
-        if prev_variance is None:
-            prev_variance = r * r
-        else:
-            prev_variance = lam * prev_variance + (1.0 - lam) * r * r
-        variance.loc[ts] = prev_variance
-    return variance.pow(0.5)
+    return returns.pow(2).ewm(alpha=1.0 - lam, adjust=False).mean().pow(0.5)
 
 
 def smoothed_volatility(sigma: pd.Series, window: int) -> pd.Series:
@@ -113,12 +111,27 @@ def average_relative_correlation(returns: pd.DataFrame, lookback_days: int) -> p
     result = pd.DataFrame(_NAN, index=returns.index, columns=returns.columns, dtype=float)
     for i in range(lookback_days - 1, len(returns)):
         window = returns.iloc[i - lookback_days + 1 : i + 1]
-        corr = window.corr()
-        n = len(corr)
-        # Row-wise mean excluding the self-correlation (always 1.0) on the diagonal.
-        row_sum = corr.sum(axis=1) - 1.0
-        result.iloc[i] = row_sum / (n - 1)
+        result.iloc[i] = average_relative_correlation_at(window)
     return result
+
+
+def average_relative_correlation_at(returns_window: pd.DataFrame) -> pd.Series:
+    """Correlation factor C for a single date, spec §2.3 -- same
+    calculation as one row of :func:`average_relative_correlation`, but
+    taking an already-sliced trailing window directly (exactly
+    ``lookback_days`` rows ending at the date being scored) instead of
+    recomputing a full historical series just to read its last row. A
+    from-scratch backtest calling :func:`average_relative_correlation`
+    over the full truncated-to-date history at every rebalance would cost
+    O(n) work per rebalance for a value it only ever uses once; this is
+    the O(lookback) equivalent for that call site.
+    """
+    if returns_window.shape[1] < 2:
+        raise ValueError("average_relative_correlation_at needs at least 2 asset columns")
+    corr = returns_window.corr()
+    n = len(corr)
+    row_sum = corr.sum(axis=1) - 1.0
+    return row_sum / (n - 1)
 
 
 def trend_bands(
