@@ -6,6 +6,7 @@ import pytest
 
 from atlas_quant.data.records import (
     CANONICAL_PRICE_CONVENTION,
+    DailyOHLCObservation,
     DailyPriceObservation,
     FilingFundamentals,
     SectorRecord,
@@ -116,6 +117,74 @@ class TestDailyPriceObservation:
             provenance=provenance(datetime(2026, 1, 3)),
         )
         assert adjusted.price_convention != unadjusted.price_convention
+
+
+class TestDailyOHLCObservation:
+    def test_valid_observation_constructs(self):
+        obs = DailyOHLCObservation(
+            instrument_id=instrument(),
+            trading_date=date(2026, 1, 2),
+            open=100.0,
+            high=102.0,
+            low=99.0,
+            close=101.0,
+            price_convention=CANONICAL_PRICE_CONVENTION,
+            provenance=provenance(datetime(2026, 1, 2)),
+        )
+        assert obs.high == 102.0
+
+    def test_rejects_high_below_low(self):
+        with pytest.raises(ValueError):
+            DailyOHLCObservation(
+                instrument_id=instrument(),
+                trading_date=date(2026, 1, 2),
+                open=100.0,
+                high=98.0,
+                low=99.0,
+                close=98.5,
+                price_convention=CANONICAL_PRICE_CONVENTION,
+                provenance=provenance(datetime(2026, 1, 2)),
+            )
+
+    def test_rejects_open_outside_high_low_range(self):
+        with pytest.raises(ValueError):
+            DailyOHLCObservation(
+                instrument_id=instrument(),
+                trading_date=date(2026, 1, 2),
+                open=105.0,
+                high=102.0,
+                low=99.0,
+                close=101.0,
+                price_convention=CANONICAL_PRICE_CONVENTION,
+                provenance=provenance(datetime(2026, 1, 2)),
+            )
+
+    def test_rejects_close_outside_high_low_range(self):
+        with pytest.raises(ValueError):
+            DailyOHLCObservation(
+                instrument_id=instrument(),
+                trading_date=date(2026, 1, 2),
+                open=100.0,
+                high=102.0,
+                low=99.0,
+                close=95.0,
+                price_convention=CANONICAL_PRICE_CONVENTION,
+                provenance=provenance(datetime(2026, 1, 2)),
+            )
+
+    def test_to_dict_from_dict_round_trips(self):
+        obs = DailyOHLCObservation(
+            instrument_id=instrument(),
+            trading_date=date(2026, 1, 2),
+            open=100.0,
+            high=102.0,
+            low=99.0,
+            close=101.0,
+            price_convention=CANONICAL_PRICE_CONVENTION,
+            provenance=provenance(datetime(2026, 1, 2)),
+        )
+        round_tripped = DailyOHLCObservation.from_dict(obs.to_dict())
+        assert round_tripped == obs
 
 
 class TestUniverseMembershipRecord:

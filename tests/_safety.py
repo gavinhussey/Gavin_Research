@@ -58,9 +58,13 @@ import pytest
 # paper-trading sleeve ledger (atlas_quant.execution.sleeve_ledger
 # .DEFAULT_LEDGER_ROOT = <repo>/data/ledger) and the order-run audit log
 # (atlas_quant.execution.order_log.DEFAULT_ORDER_LOG_ROOT =
-# <repo>/data/orders/filing_momentum_ml). The substrings below match these
-# paths (and their atomic-write temp files, which live alongside them in
-# the same directory) whether referenced as an absolute or a repo-relative
+# <repo>/data/orders/filing_momentum_ml). Stage 16 introduces Ranked
+# Multi-Factor Rotation's real-data acquisition output
+# (atlas_quant.strategies.ranked_multi_factor_rotation.acquisition
+# .run_acquisition.write_raw_data_files -> <repo>/data/raw/
+# ranked_multi_factor_rotation). The substrings below match these paths
+# (and their atomic-write temp files, which live alongside them in the
+# same directory) whether referenced as an absolute or a repo-relative
 # path.
 PROTECTED_PATH_NAMES: tuple[str, ...] = (
     "data/cache/filing_momentum_ml",
@@ -73,6 +77,7 @@ PROTECTED_PATH_NAMES: tuple[str, ...] = (
     "data/decisions/filing_momentum_ml",
     "data/ledger",
     "data/orders/filing_momentum_ml",
+    "data/raw/ranked_multi_factor_rotation",
 )
 
 

@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
-from atlas_quant.domain.identifiers import InstrumentId
+from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
+from atlas_quant.domain.serialization import to_jsonable
 
 #: The only two price conventions this platform recognizes. The legacy
 #: prototype downloads via ``yfinance`` with ``auto_adjust=True``
@@ -133,12 +134,22 @@ class DailyOHLCObservation:
                 f"DailyOHLCObservation.high ({self.high!r}) cannot be below "
                 f"low ({self.low!r})"
             )
-        if not (self.low <= self.open <= self.high):
+        # A provider's split/dividend adjustment arithmetic (each of
+        # open/high/low/close adjusted independently) can leave a genuine
+        # trading day's adjusted open/close a tiny relative amount outside
+        # its own adjusted [low, high] -- observed in real yfinance data at
+        # ~1e-13 relative magnitude, floating-point noise from the
+        # adjustment computation, not a real market anomaly. A relative
+        # tolerance far above that noise floor and far below any plausible
+        # real violation (a whole-cent-scale mismatch) avoids rejecting
+        # genuine trading days for this while still catching real ones.
+        _tol = 1e-6
+        if not (self.low * (1 - _tol) <= self.open <= self.high * (1 + _tol)):
             raise ValueError(
                 f"DailyOHLCObservation.open ({self.open!r}) must be within "
                 f"[low, high] = [{self.low!r}, {self.high!r}]"
             )
-        if not (self.low <= self.close <= self.high):
+        if not (self.low * (1 - _tol) <= self.close <= self.high * (1 + _tol)):
             raise ValueError(
                 f"DailyOHLCObservation.close ({self.close!r}) must be within "
                 f"[low, high] = [{self.low!r}, {self.high!r}]"
@@ -149,6 +160,42 @@ class DailyOHLCObservation:
                 f"'split_dividend_adjusted' or 'unadjusted', got "
                 f"{self.price_convention!r}"
             )
+
+    def to_dict(self) -> dict:
+        """JSON-compatible representation, built on :func:`to_jsonable`."""
+        return to_jsonable(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DailyOHLCObservation":
+        iid = data["instrument_id"]
+        prov = data["provenance"]
+        return cls(
+            instrument_id=InstrumentId(
+                symbol=iid["symbol"],
+                asset_class=AssetClass(iid["asset_class"]),
+                venue=iid.get("venue"),
+            ),
+            trading_date=date.fromisoformat(data["trading_date"]),
+            open=data["open"],
+            high=data["high"],
+            low=data["low"],
+            close=data["close"],
+            price_convention=data["price_convention"],
+            provenance=DataProvenance(
+                source=prov["source"],
+                as_of=_parse_date_or_datetime(prov["as_of"]),
+                retrieved_at=datetime.fromisoformat(prov["retrieved_at"]),
+                cache_hit=prov.get("cache_hit", False),
+                notes=prov.get("notes"),
+            ),
+        )
+
+
+def _parse_date_or_datetime(value: str) -> "date | datetime":
+    """``DataProvenance.as_of`` may be a plain ``date`` or a full
+    ``datetime`` -- ``len(value) == 10`` (``YYYY-MM-DD``) distinguishes
+    them in their own ``.isoformat()`` output."""
+    return date.fromisoformat(value) if len(value) == 10 else datetime.fromisoformat(value)
 
 
 @dataclass(frozen=True, slots=True)

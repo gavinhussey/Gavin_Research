@@ -10,11 +10,13 @@ underlying math, per ``docs/adding_a_strategy.md``'s layering.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import pandas as pd
 
+from atlas_quant.data.records import DailyOHLCObservation
 from atlas_quant.strategies.ranked_multi_factor_rotation.config import (
     RankedMultiFactorRotationConfig,
 )
@@ -47,6 +49,35 @@ class MonthlySelectionResult:
     trend_values: pd.Series
     total_rank_scores: pd.Series
     selected_tickers: list[str]
+
+
+def observations_to_price_frames(
+    observations: Sequence[DailyOHLCObservation],
+) -> dict[str, pd.DataFrame]:
+    """Group flat :class:`DailyOHLCObservation` rows (e.g. loaded from
+    ``acquisition.run_acquisition.load_raw_observations``) into the
+    ticker -> OHLC-DataFrame shape :func:`compute_factor_snapshot` and
+    :func:`select_for_month_end` expect: one DataFrame per ticker,
+    indexed by trading date ascending, with ``open``/``high``/``low``/
+    ``close`` columns.
+    """
+    by_ticker: dict[str, list[DailyOHLCObservation]] = defaultdict(list)
+    for obs in observations:
+        by_ticker[obs.instrument_id.symbol].append(obs)
+
+    frames: dict[str, pd.DataFrame] = {}
+    for ticker, rows in by_ticker.items():
+        rows_sorted = sorted(rows, key=lambda r: r.trading_date)
+        frames[ticker] = pd.DataFrame(
+            {
+                "open": [r.open for r in rows_sorted],
+                "high": [r.high for r in rows_sorted],
+                "low": [r.low for r in rows_sorted],
+                "close": [r.close for r in rows_sorted],
+            },
+            index=pd.DatetimeIndex([r.trading_date for r in rows_sorted]),
+        )
+    return frames
 
 
 def compute_trend_state(breakouts: pd.Series) -> pd.Series:
