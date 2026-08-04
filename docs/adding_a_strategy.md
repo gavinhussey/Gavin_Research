@@ -7,6 +7,17 @@ simulating a future one, and no multi-strategy allocation logic; those
 remain explicitly out of scope until a real second strategy is actually
 built.
 
+A second strategy, **Ranked Multi-Factor Rotation**, is now under
+construction following this pattern
+(`src/atlas_quant/strategies/ranked_multi_factor_rotation/`,
+`research/strategies/ranked_multi_factor_rotation/`). As of this writing
+only layers 1–2 exist (a registry-metadata-only registration and a
+structural config shell with no factor/formula/universe values decided
+yet — `factory=None`, `enabled=False`); layers 3 onward will be filled in
+as its own specification
+(`research/strategies/ranked_multi_factor_rotation/docs/specification.md`)
+is written, formula by formula.
+
 ## The layers every strategy needs
 
 Reading `src/atlas_quant/strategies/filing_momentum_ml/` top to bottom is
@@ -115,9 +126,13 @@ pytest markers (mirroring `network`/`production_data`/`external_env`/
 
 ## What this guide does not authorize
 
-- Building a second strategy's actual implementation — this document
-  only describes the pattern; no code for a second strategy exists or
-  should exist until a real one is deliberately started.
+- Building a second strategy's actual selection/scoring/construction
+  logic ahead of its own specification being written down — Ranked
+  Multi-Factor Rotation's scaffold (registration metadata, structural
+  config shell) exists, but no factor, formula, universe, or portfolio-
+  construction rule should be implemented until
+  `research/strategies/ranked_multi_factor_rotation/docs/specification.md`
+  states it.
 - Multi-strategy capital allocation, signal netting, shared cash, or
   consolidated multi-strategy reporting — `strategy_budget_pct` exists on
   every backtest config specifically so a future portfolio-level stage

@@ -52,8 +52,13 @@ independently verified against this platform's own configuration (see
 `production/legacy_audit.py`, which performs only a read-only,
 diagnostic-only pass over it and never deserializes its pickle caches).
 
-See `docs/adding_a_strategy.md` for the pattern a second strategy would
-follow — no second strategy exists yet.
+See `docs/adding_a_strategy.md` for the pattern a second strategy
+follows. A second strategy, **Ranked Multi-Factor Rotation**, is now
+scaffolded (`src/atlas_quant/strategies/ranked_multi_factor_rotation/`,
+`research/strategies/ranked_multi_factor_rotation/`) but has no factor,
+formula, universe, or portfolio-construction logic yet — only a
+registry-metadata-only registration (`factory=None`, `enabled=False`)
+and a structural config shell pending its own specification.
 
 ## Layout
 
