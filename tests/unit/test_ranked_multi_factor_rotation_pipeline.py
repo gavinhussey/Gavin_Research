@@ -20,6 +20,10 @@ from atlas_quant.domain.status import StrategyStatus
 from atlas_quant.strategies.ranked_multi_factor_rotation.config import (
     RankedMultiFactorRotationConfig,
 )
+from atlas_quant.strategies.ranked_multi_factor_rotation.formulas import (
+    legacy_highest_total_rank_select,
+    select_top_n,
+)
 from atlas_quant.strategies.ranked_multi_factor_rotation.pipeline import (
     compute_trend_state,
     select_for_month_end,
@@ -96,6 +100,33 @@ def test_select_for_month_end_produces_weights_summing_to_one_or_is_all_cash():
     assert total_weight == pytest.approx(config.top_n * config.position_weight) or set(
         result.weights
     ) == {config.cash_ticker}
+
+
+def test_select_for_month_end_uses_lowest_total_rank_canonically():
+    # The canonical strategy configuration must select the lowest Total
+    # Rank tickers -- confirm select_for_month_end's actual selection
+    # matches formulas.select_top_n applied directly to the same scores,
+    # and explicitly does NOT match the superseded highest-wins ordering.
+    config = _small_config()
+    prices = _price_fixture()
+    as_of = prices["A"].index[-1]
+    result = select_for_month_end(prices, as_of, config)
+
+    canonical_expected = select_top_n(result.total_rank_scores, config.top_n)
+    legacy_would_have_selected = legacy_highest_total_rank_select(
+        result.total_rank_scores, config.top_n
+    )
+    assert result.selected_tickers == canonical_expected
+    assert result.selected_tickers != legacy_would_have_selected
+
+
+def test_legacy_highest_total_rank_select_is_not_referenced_by_the_pipeline_module():
+    # formulas.legacy_highest_total_rank_select is preserved only for
+    # research/forensic comparison -- the canonical pipeline must never
+    # import or call it.
+    import atlas_quant.strategies.ranked_multi_factor_rotation.pipeline as pipeline_module
+
+    assert "legacy_highest_total_rank_select" not in vars(pipeline_module)
 
 
 def test_select_for_month_end_respects_point_in_time_cutoff():

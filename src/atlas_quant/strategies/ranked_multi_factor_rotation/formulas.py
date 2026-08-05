@@ -279,11 +279,21 @@ def total_rank(
     the primary source defines these weights' existence and role but
     discloses no numeric defaults (see spec §4 for the full citation).
 
-    Selection uses the *highest* Total Rank -- a deliberate correction
-    from the source paper's literal wording, confirmed against the
-    11-best ranking convention and real live-portfolio holdings (spec
-    §4). This function only computes the score; selecting the top
-    candidates is :func:`select_top_n`'s job.
+    Selection uses the *lowest* Total Rank -- the primary source's own
+    literal, unambiguous wording (Giordano, "RANKED ASSET ALLOCATION
+    MODEL," 2018 CMT Association Charles H. Dow Award paper, p.15 of 24:
+    "Only the 5 ETFs with the lowest Total Rank will be taken in
+    consideration"). An earlier version of this repository selected the
+    *highest* Total Rank instead, describing that as "confirmed against
+    real live-portfolio holdings" -- no such evidence is archived
+    anywhere in this repository, and a forensic worked-example
+    comparison against the source's own published 11/28/2017 holdings
+    (see ``docs/reproducibility_findings.md``) found "lowest" reproduces
+    more of the published selection (3/5) than "highest" did (2/5). That
+    claim has been retracted; see :func:`legacy_highest_total_rank_select`
+    for the superseded behavior, preserved for research/forensic
+    comparison only. This function only computes the score; selecting
+    the top candidates is :func:`select_top_n`'s job.
     """
     return (
         momentum_weight * rank_momentum
@@ -294,12 +304,25 @@ def total_rank(
 
 
 def select_top_n(total_rank_scores: pd.Series, n: int) -> list[str]:
-    """The ``n`` tickers with the highest Total Rank, spec §5 step 1.
+    """**Canonical** selection: the ``n`` tickers with the *lowest* Total
+    Rank, spec §5 step 1 -- the primary source's literal rule (Giordano,
+    "RANKED ASSET ALLOCATION MODEL," 2018 CMT Association Charles H. Dow
+    Award paper, p.15 of 24: "Only the 5 ETFs with the lowest Total Rank
+    will be taken in consideration"). See :func:`total_rank`'s docstring
+    for the full citation and why this supersedes an earlier "highest
+    wins" implementation (still available, clearly marked noncanonical,
+    as :func:`legacy_highest_total_rank_select`).
 
     NaN scores (insufficient history for that ticker as of this date)
     are never selected. Raises if fewer than ``n`` tickers have a valid
     score -- callers must decide how to handle a too-thin universe
     explicitly, not receive a silently short list.
+
+    Tie handling, deterministic and independent of input ordering: the
+    source's own tie-breaker term (``M/x``, spec §4) is undisclosed and
+    is *not* invented here. Ties in Total Rank are instead broken by
+    ticker symbol ascending -- an explicit engineering safeguard for
+    determinism, not a claim about the original RAAM methodology.
     """
     if n <= 0:
         raise ValueError(f"n must be > 0, got {n!r}")
@@ -308,7 +331,37 @@ def select_top_n(total_rank_scores: pd.Series, n: int) -> list[str]:
         raise ValueError(
             f"only {len(valid)} tickers have a valid Total Rank score, need at least {n!r}"
         )
-    return valid.sort_values(ascending=False).head(n).index.tolist()
+    # Sort by ticker symbol first (deterministic regardless of input
+    # ordering), then a stable sort by score ascending -- ties land in
+    # ticker-ascending order, never in whatever order the caller's
+    # Series/DataFrame happened to be built in.
+    ordered = valid.sort_index().sort_values(ascending=True, kind="mergesort")
+    return ordered.head(n).index.tolist()
+
+
+def legacy_highest_total_rank_select(total_rank_scores: pd.Series, n: int) -> list[str]:
+    """**Legacy, noncanonical** selection: the ``n`` tickers with the
+    *highest* Total Rank -- the repository's original (2026-08-04)
+    selection rule, superseded once the primary source's literal
+    "lowest Total Rank" wording was located and no archived evidence was
+    found to support "highest" (see :func:`total_rank`'s docstring).
+
+    Preserved only for research/forensic comparison against the earlier
+    implementation -- never called by the canonical pipeline
+    (``pipeline.select_for_month_end`` calls :func:`select_top_n`, not
+    this function). Do not treat this as an alternative valid
+    interpretation of the source paper; it is a superseded assumption,
+    not a documented ambiguity.
+    """
+    if n <= 0:
+        raise ValueError(f"n must be > 0, got {n!r}")
+    valid = total_rank_scores.dropna()
+    if len(valid) < n:
+        raise ValueError(
+            f"only {len(valid)} tickers have a valid Total Rank score, need at least {n!r}"
+        )
+    ordered = valid.sort_index().sort_values(ascending=False, kind="mergesort")
+    return ordered.head(n).index.tolist()
 
 
 def allocate_weights(

@@ -240,18 +240,50 @@ disclosed here per this project's provenance-transparency policy:
 - The paper's `+M` term is dropped — it mixed a raw momentum value with
   ranked units inconsistently.
 - The paper's `/x` tie-breaker term is dropped — §3's
-  `rank(method="first")` already breaks ties deterministically, making a
-  separate term redundant.
+  `rank(method="first")` already breaks ties deterministically at the
+  per-factor level, but the *composite* `TotalRank` sum can still tie
+  across tickers even when its per-factor inputs don't (e.g. two
+  different rank combinations summing to the same value). Because `x`
+  is undisclosed (spec, unresolved) and is not invented here, any
+  residual tie in `TotalRank` itself is broken by **ticker symbol
+  ascending** (`formulas.select_top_n`) — an explicit engineering
+  safeguard for deterministic, input-order-independent selection, not a
+  claim about the original RAAM methodology.
 
-**Selection direction — corrected from the paper's literal wording:**
-despite how the source paper's text reads, cross-checking the ranking
-convention (11 = best) against real live-portfolio holdings confirmed
-the model selects the **highest** `TotalRank`, not the lowest. This
-implementation selects highest-`TotalRank` accordingly.
+**Selection direction — confirmed original rule, the paper's literal
+wording (2026-08-04 correction).** The primary source (Giordano, "RANKED
+ASSET ALLOCATION MODEL," 2018 CMT Association Charles H. Dow Award
+paper, §V, p.15 of 24) states, verbatim and without qualification: "Only
+the 5 ETFs with the lowest Total Rank will be taken in consideration for
+the upcoming allocation." This implementation selects the **lowest**
+`TotalRank` accordingly.
+
+An earlier version of this document claimed the opposite ("highest"),
+describing it as "corrected from the paper's literal wording" and
+"confirmed against real live-portfolio holdings." **That claim has been
+retracted: no such evidence is archived anywhere in this repository.**
+A forensic worked-example comparison against the source's own published
+11/28/2017 holdings (Table 2, p.17 of 24: VV, IJH, EFA, DBC, VAW) found
+"lowest" reproduces 3 of the 5 published holdings (VV, IJH, EFA) vs.
+"highest" reproducing 1 of 5 (DBC) once ties at the 4th/5th-place
+boundary (DBC/IGOV/VAW, all tied at 8.333) are broken deterministically
+by ticker symbol ascending (see §5's tie-handling note) — not
+dispositive on its own
+(the factor weights below and the dropped `M/x` term remain unresolved,
+so an exact match is not yet expected either way), but it is the only
+reproducible evidence this repository has ever produced on the
+question, and it favors the paper's literal wording, not the
+repository's prior assumption. See
+`docs/reproducibility_findings.md` for the full comparison. The prior
+"highest" behavior is preserved only as
+`formulas.legacy_highest_total_rank_select`, explicitly noncanonical,
+for research/forensic comparison — it is not used by the canonical
+pipeline and must not be described as an alternative valid reading of
+the source.
 
 ## 5. Selection & allocation
 
-1. Take the 5 assets with the highest `TotalRank`.
+1. Take the 5 assets with the lowest `TotalRank`.
 2. For each of those 5: if its raw `M` (§2.1, not its rank) is positive,
    allocate 20% of the portfolio to that asset. If `M` is negative,
    allocate that 20% to **SHY** (§ preamble) instead.

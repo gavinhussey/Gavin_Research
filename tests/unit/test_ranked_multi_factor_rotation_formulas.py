@@ -16,6 +16,7 @@ from atlas_quant.strategies.ranked_multi_factor_rotation.formulas import (
     average_true_range,
     canonical_source_trend_bands,
     ewma_volatility,
+    legacy_highest_total_rank_select,
     legacy_symmetric_trend_bands,
     momentum,
     rank_scores,
@@ -289,15 +290,42 @@ def test_total_rank_combines_weighted_ranks_and_subtracts_trend():
     assert total.iloc[0] == pytest.approx((3.0 + 2.0 + 1.0) / 3 - 2.0)
 
 
-def test_select_top_n_picks_highest_total_rank():
+def test_select_top_n_picks_lowest_total_rank():
+    # Canonical rule: primary source, p.15 of 24, "Only the 5 ETFs with
+    # the lowest Total Rank will be taken in consideration."
     scores = pd.Series([5.0, 9.0, 1.0, 7.0], index=["A", "B", "C", "D"])
-    assert select_top_n(scores, n=2) == ["B", "D"]
+    assert select_top_n(scores, n=2) == ["C", "A"]  # 1.0, 5.0 -- the two lowest
+
+
+def test_select_top_n_does_not_pick_the_highest_scores():
+    scores = pd.Series([5.0, 9.0, 1.0, 7.0], index=["A", "B", "C", "D"])
+    selected = select_top_n(scores, n=2)
+    assert "B" not in selected  # highest score (9.0) must not be selected
+    assert "D" not in selected  # second-highest score (7.0) must not be selected
+
+
+def test_select_top_n_breaks_ties_by_ticker_ascending_regardless_of_input_order():
+    # Deliberately shuffled input ordering -- C and A tie at the lowest
+    # score; the deterministic ticker-ascending fallback must pick A
+    # before C regardless of which one appears first in the Series.
+    shuffled = pd.Series([3.0, 1.0, 1.0, 9.0], index=["D", "C", "A", "B"])
+    reordered = pd.Series([1.0, 9.0, 3.0, 1.0], index=["A", "B", "D", "C"])
+    assert select_top_n(shuffled, n=2) == ["A", "C"]
+    assert select_top_n(reordered, n=2) == ["A", "C"]
 
 
 def test_select_top_n_raises_if_too_few_valid_scores():
     scores = pd.Series([5.0, np.nan, np.nan], index=["A", "B", "C"])
     with pytest.raises(ValueError):
         select_top_n(scores, n=2)
+
+
+def test_legacy_highest_total_rank_select_picks_highest_not_lowest():
+    # The superseded convention, preserved only for research/forensic
+    # comparison -- never called by the canonical pipeline.
+    scores = pd.Series([5.0, 9.0, 1.0, 7.0], index=["A", "B", "C", "D"])
+    assert legacy_highest_total_rank_select(scores, n=2) == ["B", "D"]
+    assert legacy_highest_total_rank_select(scores, n=2) != select_top_n(scores, n=2)
 
 
 def test_allocate_weights_positive_momentum_gets_position_weight():
@@ -322,3 +350,69 @@ def test_allocate_weights_all_negative_is_full_portfolio_cash():
         ["A", "B", "C"], momentum_values, position_weight=0.20, cash_ticker="SHY"
     )
     assert weights == {"SHY": 1.0}
+
+
+def test_selection_happens_before_the_absolute_momentum_cash_gate():
+    # spec §5: (1) rank and select the 5 lowest-Total-Rank tickers first,
+    # only *then* (2) apply the absolute-momentum cash gate to those 5.
+    # "F" has the lowest Total Rank of all (would be selected) but a
+    # negative-momentum "A" that IS selected must still occupy a slot
+    # (as cash) rather than "F" replacing it -- F is never a candidate
+    # because it isn't in the top 5 to begin with in this fixture; the
+    # top-5 selection set is fixed before momentum is even consulted.
+    total_rank_scores = pd.Series(
+        {"A": 1.0, "B": 2.0, "C": 3.0, "D": 4.0, "E": 5.0, "F": 6.0}
+    )
+    selected = select_top_n(total_rank_scores, n=5)
+    assert selected == ["A", "B", "C", "D", "E"]  # F excluded by rank alone
+
+    # "A" (selected, lowest Total Rank) has negative momentum -- selection
+    # already happened and does not change; only allocation redirects A's
+    # slot to cash. F is never consulted at all.
+    momentum_values = pd.Series({"A": -0.01, "B": 0.02, "C": 0.03, "D": 0.04, "E": 0.05, "F": 0.99})
+    weights = allocate_weights(selected, momentum_values, position_weight=0.20, cash_ticker="SHY")
+    assert "F" not in weights
+    assert weights == {"SHY": 0.20, "B": 0.20, "C": 0.20, "D": 0.20, "E": 0.20}
+
+
+def test_a_failed_selected_asset_becomes_cash_not_the_sixth_ranked_asset():
+    # Explicit sixth-ranked-asset promotion check: F has a *better*
+    # (lower) Total Rank than nothing outside the top 5 and strong
+    # positive momentum, but it must never appear in the final weights
+    # merely because a selected slot failed its momentum test.
+    total_rank_scores = pd.Series(
+        {"A": 1.0, "B": 2.0, "C": 3.0, "D": 4.0, "E": 5.0, "F": 6.0}
+    )
+    selected = select_top_n(total_rank_scores, n=5)
+    momentum_values = pd.Series({"A": -0.01, "B": 0.02, "C": 0.03, "D": 0.04, "E": 0.05, "F": 0.99})
+    weights = allocate_weights(selected, momentum_values, position_weight=0.20, cash_ticker="SHY")
+    assert "F" not in weights
+    assert set(weights) == {"SHY", "B", "C", "D", "E"}
+
+
+def test_exactly_five_20pct_slots_are_created_before_cash_substitution():
+    total_rank_scores = pd.Series({"A": 1.0, "B": 2.0, "C": 3.0, "D": 4.0, "E": 5.0, "F": 6.0})
+    selected = select_top_n(total_rank_scores, n=5)
+    assert len(selected) == 5
+    momentum_values = pd.Series({t: 0.01 for t in selected} | {"F": 0.01})
+    weights = allocate_weights(selected, momentum_values, position_weight=0.20, cash_ticker="SHY")
+    assert len(weights) == 5
+    assert all(w == pytest.approx(0.20) for w in weights.values())
+    assert sum(weights.values()) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "failed_count,expected_cash",
+    [(1, 0.20), (2, 0.40), (3, 0.60), (4, 0.80), (5, 1.00)],
+)
+def test_multiple_failed_selections_aggregate_into_correct_cash_weight(failed_count, expected_cash):
+    selected = ["A", "B", "C", "D", "E"]
+    momentum_values = pd.Series(
+        {t: (-0.01 if i < failed_count else 0.01) for i, t in enumerate(selected)}
+    )
+    weights = allocate_weights(selected, momentum_values, position_weight=0.20, cash_ticker="SHY")
+    if failed_count == 5:
+        assert weights == {"SHY": 1.0}
+    else:
+        assert weights["SHY"] == pytest.approx(expected_cash)
+        assert sum(weights.values()) == pytest.approx(1.0)
