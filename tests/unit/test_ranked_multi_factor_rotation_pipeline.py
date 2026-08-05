@@ -54,6 +54,7 @@ def _small_config(**overrides) -> RankedMultiFactorRotationConfig:
         momentum_lookback_days=5,
         correlation_lookback_days=5,
         atr_window=5,
+        trend_model="legacy_symmetric",  # small fixture window too short for 63/105-day canonical lookbacks
         trend_lookback_n=5,
         volatility_smoothing_window=3,
     )

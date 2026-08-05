@@ -14,13 +14,14 @@ from atlas_quant.strategies.ranked_multi_factor_rotation.formulas import (
     allocate_weights,
     average_relative_correlation,
     average_true_range,
+    canonical_source_trend_bands,
     ewma_volatility,
+    legacy_symmetric_trend_bands,
     momentum,
     rank_scores,
     select_top_n,
     smoothed_volatility,
     total_rank,
-    trend_bands,
     trend_breakouts,
     true_range,
 )
@@ -115,14 +116,136 @@ def test_average_relative_correlation_rejects_single_asset():
         average_relative_correlation(pd.DataFrame({"A": [0.01, 0.02, -0.01]}, index=dates), lookback_days=3)
 
 
-def test_trend_bands_add_atr_to_both_highest_high_and_lowest_low():
+def test_legacy_symmetric_trend_bands_add_atr_to_both_highest_high_and_lowest_low():
     high = pd.Series([10.0, 12.0, 11.0])
     low = pd.Series([8.0, 9.0, 7.0])
     atr = pd.Series([1.0, 1.0, 1.0])
-    upper, lower = trend_bands(high, low, atr, lookback_n=2)
+    upper, lower = legacy_symmetric_trend_bands(high, low, atr, lookback_n=2)
     # window [12,11] highest high=12, window [9,7] lowest low=7
     assert upper.iloc[2] == pytest.approx(12.0 + 1.0)
     assert lower.iloc[2] == pytest.approx(7.0 + 1.0)
+
+
+# --- canonical_source_trend_bands: transcribed literally from the primary
+# source (Giordano, "RANKED ASSET ALLOCATION MODEL," 2018 CMT Association
+# Charles H. Dow Award paper, p.6 of 24): "Upper Band = 42 periods ATR +
+# Highest Close of 63 periods. Lower Band = 42 periods ATR + Highest Low
+# of 105 periods." Each test below traces to that rule, not to whatever
+# the implementation happens to compute.
+
+
+def test_canonical_upper_band_uses_highest_close_over_its_own_lookback():
+    # Upper band statistic is HighestClose(upper_lookback), independent
+    # of high/low -- close deliberately diverges from high/low here so a
+    # test that accidentally used high instead of close would fail.
+    close = pd.Series([10.0, 50.0, 20.0, 30.0])  # window [50,20,30] -> highest close = 50
+    high = pd.Series([999.0, 999.0, 999.0, 999.0])  # must NOT be used for the upper band
+    low = pd.Series([1.0, 1.0, 1.0, 1.0])
+    atr = pd.Series([2.0, 2.0, 2.0, 2.0])
+    upper, _ = canonical_source_trend_bands(
+        high, low, close, atr, upper_lookback=3, lower_lookback=3
+    )
+    assert upper.iloc[3] == pytest.approx(50.0 + 2.0)
+
+
+def test_canonical_lower_band_uses_highest_low_literally_not_lowest_low():
+    # Source text says "Highest Low," transcribed literally: this is the
+    # *maximum* of the low series over the lookback, not the minimum.
+    low = pd.Series([5.0, 40.0, 15.0, 25.0])  # highest low over last 3 = 40
+    high = pd.Series([999.0, 999.0, 999.0, 999.0])
+    close = pd.Series([1.0, 1.0, 1.0, 1.0])
+    atr = pd.Series([3.0, 3.0, 3.0, 3.0])
+    _, lower = canonical_source_trend_bands(
+        high, low, close, atr, upper_lookback=3, lower_lookback=3
+    )
+    assert lower.iloc[3] == pytest.approx(40.0 + 3.0)
+
+
+def test_canonical_bands_respect_independent_warmup_windows():
+    # 10 observations; upper_lookback=6 (ready at index 5), lower_lookback=8
+    # (ready at index 7) -- independently, not tied to a single shared N.
+    close = pd.Series(range(1, 11), dtype=float)
+    high = close.copy()
+    low = close.copy()
+    atr = pd.Series([1.0] * 10)
+    upper, lower = canonical_source_trend_bands(
+        high, low, close, atr, upper_lookback=6, lower_lookback=8
+    )
+    assert pd.isna(upper.iloc[4]) and not pd.isna(upper.iloc[5])
+    assert pd.isna(lower.iloc[6]) and not pd.isna(lower.iloc[7])
+
+
+def test_canonical_bands_use_atr_confirmed_42_period_window_in_practice():
+    # Confirms the 42/63/105 windows are independently satisfiable: ATR
+    # itself needs 42 true-range observations before it's valid, so a
+    # band cannot be valid before max(atr_window, own_lookback) rows.
+    n = 110
+    high = pd.Series(np.linspace(100, 110, n))
+    low = pd.Series(np.linspace(99, 109, n))
+    close = pd.Series(np.linspace(99.5, 109.5, n))
+    tr = true_range(high, low, close)
+    atr = average_true_range(tr, window=42)
+    upper, lower = canonical_source_trend_bands(
+        high, low, close, atr, upper_lookback=63, lower_lookback=105
+    )
+    assert pd.isna(upper.iloc[61]) and not pd.isna(upper.iloc[62])  # ready at 63 obs (index 62)
+    assert pd.isna(lower.iloc[103]) and not pd.isna(lower.iloc[104])  # ready at 105 obs (index 104)
+
+
+def test_canonical_bands_no_look_ahead():
+    rng = np.random.default_rng(7)
+    n = 150
+    close = pd.Series(100.0 * np.cumprod(1.0 + rng.normal(0.0, 0.01, n)))
+    high = close * 1.01
+    low = close * 0.99
+    tr = true_range(high, low, close)
+    atr = average_true_range(tr, window=42)
+    upper_full, lower_full = canonical_source_trend_bands(
+        high, low, close, atr, upper_lookback=63, lower_lookback=105
+    )
+
+    cutoff = 120
+    high_t, low_t, close_t = high.iloc[: cutoff + 1], low.iloc[: cutoff + 1], close.iloc[: cutoff + 1]
+    tr_t = true_range(high_t, low_t, close_t)
+    atr_t = average_true_range(tr_t, window=42)
+    upper_trunc, lower_trunc = canonical_source_trend_bands(
+        high_t, low_t, close_t, atr_t, upper_lookback=63, lower_lookback=105
+    )
+    assert upper_full.iloc[cutoff] == pytest.approx(upper_trunc.iloc[cutoff])
+    assert lower_full.iloc[cutoff] == pytest.approx(lower_trunc.iloc[cutoff])
+
+
+def test_canonical_trend_breakout_is_strict_not_inclusive_at_the_band():
+    # Equality at the band must not itself trigger a breakout -- the
+    # source's rule is "higher than"/"lower than" (strict), spec §2.4.
+    high = pd.Series([12.0])
+    low = pd.Series([5.0])
+    upper = pd.Series([12.0])  # high == upper exactly
+    lower = pd.Series([5.0])  # low == lower exactly
+    breakouts = trend_breakouts(high, low, upper, lower)
+    assert breakouts.iloc[0] == 0.0
+
+
+def test_canonical_and_legacy_trend_bands_diverge_on_the_same_data():
+    # A direct fixture demonstrating the two implementations are not
+    # interchangeable: same OHLC input, different band values, because
+    # their lookback windows and base price statistics differ.
+    rng = np.random.default_rng(11)
+    n = 130
+    close = pd.Series(100.0 * np.cumprod(1.0 + rng.normal(0.0002, 0.012, n)))
+    high = close * 1.015
+    low = close * 0.985
+    tr = true_range(high, low, close)
+    atr = average_true_range(tr, window=42)
+
+    canonical_upper, canonical_lower = canonical_source_trend_bands(
+        high, low, close, atr, upper_lookback=63, lower_lookback=105
+    )
+    legacy_upper, legacy_lower = legacy_symmetric_trend_bands(high, low, atr, lookback_n=42)
+
+    last = n - 1
+    assert canonical_upper.iloc[last] != pytest.approx(legacy_upper.iloc[last])
+    assert canonical_lower.iloc[last] != pytest.approx(legacy_lower.iloc[last])
 
 
 def test_trend_breakouts_detects_upper_and_lower_crossings():

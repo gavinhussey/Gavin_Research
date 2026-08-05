@@ -87,6 +87,23 @@ Output equity curve:
   run yet. Do not read these numbers as a claim the strategy "works,"
   only as confirmation the backtest loop executes correctly end-to-end
   on real data.
+- **Stale relative to the current default (2026-08-04 correction).**
+  This run used `trend_model="legacy_symmetric"` (the only Trend/
+  Breakout construction that existed at the time). Following the
+  forensic reconstruction of the primary source's literal Trend/
+  Breakout formula (see the "Primary-source identity and documentation
+  corrections" entry above, and `specification.md` §2.4),
+  `RankedMultiFactorRotationConfig`'s default is now
+  `trend_model="canonical_source"`. The canonical trend signal is
+  materially different in practice — a real-data check found it in the
+  Neutral/Short (`T=-2`) state roughly 98% of trading days for VV over
+  its full history, vs. legacy's own already-heavy skew toward `T=-2` —
+  so the `+161.40%`/sub-window figures above should not be read as
+  reflecting the current default configuration. No new backtest has
+  been run under `trend_model="canonical_source"` as part of this
+  correction (rerunning the full backtest is deliberately out of scope
+  for a source-fidelity correction — see the roadmap for when a fresh
+  run belongs).
 
 ## Late-inception handling (spec §1) — resolved by evidence, not decision
 

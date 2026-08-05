@@ -35,7 +35,10 @@ def test_defaults_match_specification():
     assert config.volatility_smoothing_window == 10  # spec §2.2
     assert config.correlation_lookback_days == 84  # spec §2.3
     assert config.atr_window == 42  # spec §2.4
-    assert config.trend_lookback_n == 42  # spec §2.4 (confirmed default)
+    assert config.trend_model == "canonical_source"  # spec §2.4
+    assert config.trend_upper_lookback == 63  # spec §2.4 (confirmed original rule)
+    assert config.trend_lower_lookback == 105  # spec §2.4 (confirmed original rule)
+    assert config.trend_lookback_n == 42  # spec §2.4 (legacy_symmetric-only default)
     assert config.momentum_weight == pytest.approx(1 / 3)  # spec §4
     assert config.volatility_weight == pytest.approx(1 / 3)  # spec §4
     assert config.correlation_weight == pytest.approx(1 / 3)  # spec §4
@@ -66,6 +69,23 @@ def test_ewma_lambda_must_be_within_open_unit_interval():
         RankedMultiFactorRotationConfig(ewma_lambda=1.0)
     with pytest.raises(ValueError):
         RankedMultiFactorRotationConfig(ewma_lambda=0.0)
+
+
+def test_trend_model_must_be_a_known_value():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(trend_model="something_else")
+
+
+def test_canonical_trend_model_validates_its_own_lookbacks():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(trend_upper_lookback=0)
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(trend_lower_lookback=0)
+
+
+def test_legacy_trend_model_validates_its_own_lookback():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(trend_model="legacy_symmetric", trend_lookback_n=0)
 
 
 def test_config_identity_is_stable_and_sensitive_to_changes():

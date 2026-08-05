@@ -148,22 +148,84 @@ def average_relative_correlation_at(returns_window: pd.DataFrame) -> pd.Series:
     return row_sum / (n - 1)
 
 
-def trend_bands(
+def legacy_symmetric_trend_bands(
     high: pd.Series, low: pd.Series, atr: pd.Series, lookback_n: int
 ) -> tuple[pd.Series, pd.Series]:
-    """Trend breakout bands, spec §2.4.
+    """**Legacy, noncanonical** trend breakout bands -- a symmetric,
+    single-lookback construction that predates recovery of the primary
+    source's exact Trend/Breakout formula. Not RAAM's confirmed original
+    rule; kept only so existing research artifacts that reference it
+    keep working. Do not use as the default for anything labeled
+    canonical RAAM -- see :func:`canonical_source_trend_bands`.
 
     ``Upper Band = HighestHigh(N) + ATR``, ``Lower Band = LowestLow(N) + ATR``
-    -- both *added*, per the spec's explicit note that this is not a typo:
-    higher volatility widens both bands outward from the recent
-    high/low, making the breakout more (not less) responsive in volatile
-    regimes.
+    -- both *added*, consistent with the primary source's confirmed
+    add-not-subtract design (see :func:`canonical_source_trend_bands`'s
+    citation), but using one shared lookback ``N`` for both bands and
+    high/low (not close/low) as each band's base statistic -- both
+    **confirmed deviations** from the primary source's literal formula.
     """
     if lookback_n <= 0:
         raise ValueError(f"lookback_n must be > 0, got {lookback_n!r}")
     highest_high = high.rolling(window=lookback_n, min_periods=lookback_n).max()
     lowest_low = low.rolling(window=lookback_n, min_periods=lookback_n).min()
     return highest_high + atr, lowest_low + atr
+
+
+def canonical_source_trend_bands(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    atr: pd.Series,
+    *,
+    upper_lookback: int,
+    lower_lookback: int,
+) -> tuple[pd.Series, pd.Series]:
+    """**Canonical** RAAM trend breakout bands -- transcribed literally
+    from the primary source, not normalized to a conventional ATR
+    channel.
+
+    Primary source: Gioele Giordano, CFTe, "RANKED ASSET ALLOCATION
+    MODEL," 2018 CMT Association Charles H. Dow Award paper
+    (`http://www.tanassociation.org/wp-content/uploads/2018/05/2018_dowaward-giordano.pdf`),
+    p.6 of 24, verbatim: "(T) ATR Trend/Breakout System: trend
+    identification algorithm. Calculation: ATR Bands on daily timeframe.
+    Upper Band = 42 periods ATR + Highest Close of 63 periods. Lower
+    Band = 42 periods ATR + Highest Low of 105 periods." The paper's
+    §IV (p.10 of 24) independently confirms ATR is *added* to both
+    bands (not subtracted from the lower band, as "similar models"
+    would do), an explicit, deliberate design choice on the author's
+    part: "the greater market volatility is, more responsive is the
+    model to signals."
+
+    ``Upper Band = HighestClose(upper_lookback) + ATR``,
+    ``Lower Band = HighestLow(lower_lookback) + ATR`` -- note the lower
+    band literally uses the *highest* value of the low series, not the
+    lowest, exactly as the source states. This is transcribed as-is:
+    it is unconventional for a lower breakout band (it sits close to,
+    or above, price far more often than a lowest-low construction
+    would, making downside breakouts comparatively easy to trigger),
+    and it is *possible* this reflects a drafting inconsistency in the
+    source rather than the author's intent -- but per this project's
+    policy of implementing the literal source formula before any
+    "corrected" reading, no such correction is applied here. A
+    conventional/corrected reading may only be added later as a
+    separately named research candidate, not as this canonical
+    function's behavior.
+
+    ``atr`` is one shared Average True Range series (42-period per the
+    source) added to both bands, matching the source's own reuse of a
+    single ATR value for both. ``upper_lookback``/``lower_lookback``
+    default to 63/105 in ``RankedMultiFactorRotationConfig`` -- both are
+    confirmed original values, cited above, not tunable placeholders.
+    """
+    if upper_lookback <= 0:
+        raise ValueError(f"upper_lookback must be > 0, got {upper_lookback!r}")
+    if lower_lookback <= 0:
+        raise ValueError(f"lower_lookback must be > 0, got {lower_lookback!r}")
+    highest_close = close.rolling(window=upper_lookback, min_periods=upper_lookback).max()
+    highest_low = low.rolling(window=lower_lookback, min_periods=lower_lookback).max()
+    return highest_close + atr, highest_low + atr
 
 
 def trend_breakouts(

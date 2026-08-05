@@ -141,24 +141,54 @@ independently source-confirmed value.
 
 ### 2.4 Trend (T)
 
-An explicit, tunable ATR-breakout implementation — the original paper's
-exact bands were ambiguous in text, so this is a deliberate, disclosed
-assumption rather than a black box:
+**Canonical (default, `trend_model = "canonical_source"`) — confirmed
+original rule, transcribed literally from the primary source.** An
+earlier version of this document called the source's bands "ambiguous
+in text" and used that as grounds for a symmetric, single-lookback
+placeholder; that characterization was wrong. The primary source
+(Giordano, "RANKED ASSET ALLOCATION MODEL," 2018 CMT Association Charles
+H. Dow Award paper, p.6 of 24) states the bands exactly, verbatim: "Upper
+Band = 42 periods ATR + Highest Close of 63 periods. Lower Band = 42
+periods ATR + Highest Low of 105 periods."
 
 ```
 True Range = max(H - L, |H - C_prev|, |L - C_prev|)
 ATR_42 = 42-period rolling average of True Range
-Upper Band = HighestHigh(N) + ATR_42
-Lower Band  = LowestLow(N)  + ATR_42   # added, not subtracted — higher
-                                        # vol -> more responsive bands,
-                                        # per the paper's stated design
+Upper Band = HighestClose(63) + ATR_42
+Lower Band = HighestLow(105)  + ATR_42   # added, not subtracted — higher
+                                          # vol -> more responsive bands,
+                                          # per the paper's stated design
+                                          # (confirmed, §IV, p.10 of 24)
 ```
 
-`N = 42` (confirmed default; open to sensitivity-testing per §11 of the
-walkthrough).
+`Lower Band` literally uses the *highest* value of the low series over
+105 periods, not the lowest — transcribed as-is from the source's exact
+wording (repeated identically both times the formula appears in the
+paper), even though this is an unconventional construction for a lower
+breakout band. This may reflect a drafting inconsistency in the source
+rather than the author's intent, but per this project's policy of
+implementing the literal source formula before any "corrected" reading,
+no correction is applied in the canonical implementation
+(`formulas.canonical_source_trend_bands`). A conventional/corrected
+reading, if ever added, must be a separately named research candidate,
+never this canonical default.
+
+**Legacy (`trend_model = "legacy_symmetric"`) — noncanonical, deprecated,
+kept only for research-artifact compatibility.** The original repository
+implementation before this correction, using one shared lookback `N`
+(default 42) and high/low (not close/low) as each band's base statistic:
+
+```
+Upper Band = HighestHigh(N) + ATR_42
+Lower Band = LowestLow(N)   + ATR_42
+```
+
+This does not match the primary source and must not be used as the
+default for anything labeled canonical RAAM
+(`formulas.legacy_symmetric_trend_bands`).
 
 Signal, effective the *next* trading session (never same-session — this
-is what keeps the rule point-in-time-safe):
+is what keeps the rule point-in-time-safe), identical for both models:
 
 - today's high > Upper Band → `T = +2` (Long)
 - today's low < Lower Band → `T = -2` (Neutral/Short)

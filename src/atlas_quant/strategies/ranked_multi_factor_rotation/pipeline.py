@@ -24,13 +24,14 @@ from atlas_quant.strategies.ranked_multi_factor_rotation.formulas import (
     allocate_weights,
     average_relative_correlation_at,
     average_true_range,
+    canonical_source_trend_bands,
     ewma_volatility,
+    legacy_symmetric_trend_bands,
     momentum,
     rank_scores,
     select_top_n,
     smoothed_volatility,
     total_rank,
-    trend_bands,
     trend_breakouts,
     true_range,
 )
@@ -128,7 +129,19 @@ def compute_factor_snapshot(
 
         tr = true_range(df["high"], df["low"], df["close"])
         atr = average_true_range(tr, config.atr_window)
-        upper, lower = trend_bands(df["high"], df["low"], atr, config.trend_lookback_n)
+        if config.trend_model == "canonical_source":
+            upper, lower = canonical_source_trend_bands(
+                df["high"],
+                df["low"],
+                df["close"],
+                atr,
+                upper_lookback=config.trend_upper_lookback,
+                lower_lookback=config.trend_lower_lookback,
+            )
+        else:
+            upper, lower = legacy_symmetric_trend_bands(
+                df["high"], df["low"], atr, config.trend_lookback_n
+            )
         breakouts = trend_breakouts(df["high"], df["low"], upper, lower)
         trend_values[ticker] = compute_trend_state(breakouts).loc[as_of]
 

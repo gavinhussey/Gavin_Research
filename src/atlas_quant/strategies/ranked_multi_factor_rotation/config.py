@@ -20,11 +20,23 @@ authoritative spec for this strategy. Field-by-field provenance:
 - ``correlation_lookback_days`` = 84 — spec §2.3. **Derived
   implementation convention, not source-confirmed**, same caveat as
   ``momentum_lookback_days`` above.
-- ``atr_window`` = 42, ``trend_lookback_n`` = 42 — spec §2.4 (``N``
-  confirmed with the user 2026-08-04; not paper-sourced, an explicit
-  tunable default). Note: the primary source's own Trend/Breakout bands
-  use three *different* lookback windows (42/63/105), not one shared
-  ``N`` — see spec §2.4 for the reconstruction status of this factor.
+- ``trend_model`` = "canonical_source" — spec §2.4. Selects which
+  Trend/Breakout construction is used: ``"canonical_source"`` (default)
+  implements the primary source's literal formula
+  (:func:`formulas.canonical_source_trend_bands`); ``"legacy_symmetric"``
+  is a **noncanonical, deprecated** single-lookback construction kept
+  only for existing research-artifact compatibility
+  (:func:`formulas.legacy_symmetric_trend_bands`) and must not be used
+  as the default for anything labeled canonical RAAM.
+- ``atr_window`` = 42 — spec §2.4, confirmed original rule, shared by
+  both trend models.
+- ``trend_upper_lookback`` = 63, ``trend_lower_lookback`` = 105 — spec
+  §2.4, confirmed original rule (primary source: "Highest Close of 63
+  periods" / "Highest Low of 105 periods"). Only used when
+  ``trend_model == "canonical_source"``.
+- ``trend_lookback_n`` = 42 — spec §2.4 legacy note (``N`` confirmed
+  with the user 2026-08-04; not paper-sourced, an explicit tunable
+  default). Only used when ``trend_model == "legacy_symmetric"``.
 - ``momentum_weight``/``volatility_weight``/``correlation_weight`` =
   1/3 each — spec §4. **Temporary unresolved placeholder, not a
   source-confirmed value**: the primary source defines these weights'
@@ -78,6 +90,9 @@ class RankedMultiFactorRotationConfig:
     volatility_smoothing_window: int = 10
     correlation_lookback_days: int = 84
     atr_window: int = 42
+    trend_model: str = "canonical_source"
+    trend_upper_lookback: int = 63
+    trend_lower_lookback: int = 105
     trend_lookback_n: int = 42
 
     momentum_weight: float = 1.0 / 3.0
@@ -122,8 +137,23 @@ class RankedMultiFactorRotationConfig:
             )
         if self.atr_window <= 0:
             raise ValueError(f"atr_window must be > 0, got {self.atr_window!r}")
-        if self.trend_lookback_n <= 0:
-            raise ValueError(f"trend_lookback_n must be > 0, got {self.trend_lookback_n!r}")
+        if self.trend_model not in ("canonical_source", "legacy_symmetric"):
+            raise ValueError(
+                "trend_model must be 'canonical_source' or 'legacy_symmetric', got "
+                f"{self.trend_model!r}"
+            )
+        if self.trend_model == "canonical_source":
+            if self.trend_upper_lookback <= 0:
+                raise ValueError(
+                    f"trend_upper_lookback must be > 0, got {self.trend_upper_lookback!r}"
+                )
+            if self.trend_lower_lookback <= 0:
+                raise ValueError(
+                    f"trend_lower_lookback must be > 0, got {self.trend_lower_lookback!r}"
+                )
+        else:
+            if self.trend_lookback_n <= 0:
+                raise ValueError(f"trend_lookback_n must be > 0, got {self.trend_lookback_n!r}")
         weight_sum = self.momentum_weight + self.volatility_weight + self.correlation_weight
         if not (0.999 <= weight_sum <= 1.001):
             raise ValueError(
