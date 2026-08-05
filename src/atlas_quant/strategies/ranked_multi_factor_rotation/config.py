@@ -5,17 +5,31 @@ Every default value here is taken from
 (the equivalent of ``report_current.html`` for Filing Momentum ML) as the
 authoritative spec for this strategy. Field-by-field provenance:
 
-- ``ranked_tickers`` = the 11-asset universe — spec §1
+- ``ranked_tickers`` = the 11-asset universe — spec §1 (confirmed
+  original rule: matches the primary source's 7Twelve universe exactly,
+  see spec preamble for citation)
 - ``cash_ticker`` = "SHY" — spec preamble/§1/§5 (confirmed with the user
   2026-08-04: SHY is held as a real position, not a synthetic 0% return)
-- ``momentum_lookback_days`` = 84 — spec §2.1
-- ``ewma_lambda`` = 0.94, ``volatility_smoothing_window`` = 10 — spec §2.2
-- ``correlation_lookback_days`` = 84 — spec §2.3
+- ``momentum_lookback_days`` = 84 — spec §2.1. **Derived implementation
+  convention, not source-confirmed**: the primary source states "4
+  months momentum," never an exact trading-day count.
+- ``ewma_lambda`` = 0.94, ``volatility_smoothing_window`` = 10 — spec
+  §2.2. **Confirmed original rule**: the primary source names this exact
+  RiskMetrics-EWMA construction (λ=0.94, 10-day smoothing) as its own
+  volatility method, not an approximation of something else.
+- ``correlation_lookback_days`` = 84 — spec §2.3. **Derived
+  implementation convention, not source-confirmed**, same caveat as
+  ``momentum_lookback_days`` above.
 - ``atr_window`` = 42, ``trend_lookback_n`` = 42 — spec §2.4 (``N``
   confirmed with the user 2026-08-04; not paper-sourced, an explicit
-  tunable default)
+  tunable default). Note: the primary source's own Trend/Breakout bands
+  use three *different* lookback windows (42/63/105), not one shared
+  ``N`` — see spec §2.4 for the reconstruction status of this factor.
 - ``momentum_weight``/``volatility_weight``/``correlation_weight`` =
-  1/3 each — spec §4
+  1/3 each — spec §4. **Temporary unresolved placeholder, not a
+  source-confirmed value**: the primary source defines these weights'
+  existence and role but discloses no numeric defaults anywhere in the
+  retrieved text. Equal-thirds is this repository's own placeholder.
 - ``top_n`` = 5, ``position_weight`` = 0.20 — spec §5
 - ``rebalance_frequency`` = "monthly" — spec §6
 - ``strategy_budget_pct`` = 1.0 — standalone-backtest default, same

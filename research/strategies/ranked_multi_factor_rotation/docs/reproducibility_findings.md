@@ -7,6 +7,42 @@ source of truth, so this file records data-provenance and
 implementation caveats in the current implementation, not mismatches
 against an external target.
 
+## Primary-source identity and documentation corrections (2026-08-04)
+
+A forensic audit round recovered and read in full the primary source
+underlying `docs/specification.md`'s walkthrough: Gioele Giordano, CFTe,
+"RANKED ASSET ALLOCATION MODEL," 2018 CMT Association Charles H. Dow
+Award paper
+(`http://www.tanassociation.org/wp-content/uploads/2018/05/2018_dowaward-giordano.pdf`).
+This identity is now confirmed by direct evidence (matching universe,
+author, title, and formula language), not merely probable. See the
+specification's preamble for the full citation and the explicit note
+that Giordano's later, distinct "Antifragile Asset Allocation Model"
+(2019 NAAIM Founders Award) must not be used to fill RAAM gaps.
+
+Reading the primary source directly corrected two documentation
+mischaracterizations that predated this round (no formula, default, or
+computed value changed by this correction — see `specification.md` §2.1,
+§2.2, §2.3, and §4 for the corrected text in place):
+
+- The EWMA/RiskMetrics volatility calculation (`λ=0.94`, 10-day
+  smoothing) was previously documented as "a simplified stand-in for the
+  original paper's modified-GARCH approach." The primary source's §III
+  names this exact construction as its own volatility method — it is a
+  **confirmed original rule**, not an approximation of something more
+  complex.
+- The equal-thirds factor weights (`wM=wV=wC=1/3`) were previously
+  documented as though `spec §4` settled them. The primary source's §V
+  defines these weights' existence and role but discloses no numeric
+  defaults anywhere in the retrieved text — they are a **temporary
+  unresolved placeholder**, not a source-confirmed value, and remain
+  configurable for that reason.
+
+The 84-trading-day momentum/correlation lookback is now explicitly
+documented as a **derived implementation convention** (the source states
+"4 months," never an exact day count), downgraded from implicit
+"confirmed."
+
 ## Real data acquisition (2026-08-04)
 
 A genuine acquisition has been run:

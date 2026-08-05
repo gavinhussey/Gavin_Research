@@ -26,7 +26,11 @@ def momentum(prices: pd.Series, lookback_days: int) -> pd.Series:
     """Momentum factor M, spec §2.1: ``M_t = (P_t / P_{t-lookback}) - 1``.
 
     ``prices`` is a single instrument's daily (adjusted) close series,
-    indexed by trading date in ascending order.
+    indexed by trading date in ascending order. ``lookback_days``
+    (default 84, spec §2.1) is a *derived* implementation convention for
+    the primary source's "4 months momentum" -- the source never
+    discloses an exact trading-day count, so 84 is not itself a
+    source-confirmed value.
     """
     if lookback_days <= 0:
         raise ValueError(f"lookback_days must be > 0, got {lookback_days!r}")
@@ -63,6 +67,12 @@ def average_true_range(true_range_series: pd.Series, window: int) -> pd.Series:
 def ewma_volatility(returns: pd.Series, lam: float) -> pd.Series:
     """EWMA volatility, spec §2.2 (RiskMetrics-style, before the 10-day
     smoothing pass): ``sigma_t = sqrt(lambda * sigma_{t-1}^2 + (1-lambda) * r_t^2)``.
+
+    Confirmed original rule, not a simplified stand-in: the primary
+    source (Giordano, "RANKED ASSET ALLOCATION MODEL," 2018 CMT
+    Association Charles H. Dow Award paper, §III, p.9 of 24) names this
+    exact RiskMetrics-EWMA construction (``lambda=0.94``) as its own
+    "edited version of GARCH."
 
     ``returns`` is a single instrument's daily simple-return series. The
     recursion is seeded at the first non-NaN return with
@@ -102,6 +112,10 @@ def average_relative_correlation(returns: pd.DataFrame, lookback_days: int) -> p
     ``returns`` is a wide DataFrame of daily simple returns, one column
     per (ranked, non-cash) instrument, indexed by trading date. A date's
     row is entirely NaN until ``lookback_days`` of history is available.
+    ``lookback_days`` (default 84, spec §2.3) is a *derived*
+    implementation convention for the primary source's "4 months average
+    correlation" -- same evidentiary caveat as :func:`momentum`'s
+    lookback.
     """
     if lookback_days <= 1:
         raise ValueError(f"lookback_days must be > 1, got {lookback_days!r}")
@@ -196,6 +210,12 @@ def total_rank(
 ) -> pd.Series:
     """Composite Total Rank, spec §4:
     ``wM*Rank(M) + wV*Rank(V) + wC*Rank(C) - T``.
+
+    ``momentum_weight``/``volatility_weight``/``correlation_weight``
+    default to 1/3 each in ``RankedMultiFactorRotationConfig`` -- a
+    **temporary unresolved placeholder**, not a source-confirmed value;
+    the primary source defines these weights' existence and role but
+    discloses no numeric defaults (see spec §4 for the full citation).
 
     Selection uses the *highest* Total Rank -- a deliberate correction
     from the source paper's literal wording, confirmed against the
