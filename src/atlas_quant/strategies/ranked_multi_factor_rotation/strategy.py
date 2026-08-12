@@ -93,6 +93,13 @@ class RankedMultiFactorRotationStrategy:
                     "as_of": as_of.isoformat(),
                     "selected_tickers": selection.selected_tickers,
                     "weights": selection.weights,
+                    "weight_model": selection.weight_model,
+                    "weight_artifact_id": selection.weight_artifact_id,
+                    "weight_training_start": selection.weight_training_start,
+                    "weight_training_end": selection.weight_training_end,
+                    "momentum_weight": selection.momentum_weight,
+                    "volatility_weight": selection.volatility_weight,
+                    "correlation_weight": selection.correlation_weight,
                 },
             )
         )

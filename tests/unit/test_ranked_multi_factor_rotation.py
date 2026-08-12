@@ -45,6 +45,16 @@ def test_defaults_match_specification():
     assert config.top_n == 5  # spec §5
     assert config.position_weight == 0.20  # spec §5
     assert config.strategy_budget_pct == 1.0  # standalone-backtest default
+    assert config.rank_direction_mode == "desirable_first"  # spec §3, 2026-08-05 correction
+    # Provisional RAAM Total Rank scaffolding (spec §4A) -- inert defaults,
+    # must reproduce existing behavior exactly.
+    assert config.cash_proxy_symbol == "SHY"
+    assert config.absolute_momentum_model == "price_relative"
+    assert config.absolute_momentum_lookback_sessions == 84
+    assert config.total_rank_divisor == 11.0
+    assert config.weight_model == "equal"
+    assert config.fixed_weight_artifact_id is None
+    assert config.total_rank_formula == "legacy"
 
 
 def test_cash_ticker_cannot_also_be_a_ranked_ticker():
@@ -88,6 +98,165 @@ def test_legacy_trend_model_validates_its_own_lookback():
         RankedMultiFactorRotationConfig(trend_model="legacy_symmetric", trend_lookback_n=0)
 
 
+def test_rank_direction_mode_must_be_a_known_value():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(rank_direction_mode="something_else")
+
+
+def test_rank_direction_mode_legacy_desirable_last_is_selectable():
+    config = RankedMultiFactorRotationConfig(rank_direction_mode="legacy_desirable_last")
+    assert config.rank_direction_mode == "legacy_desirable_last"
+
+
+def test_cash_proxy_symbol_must_be_non_empty():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(cash_proxy_symbol="")
+
+
+def test_cash_proxy_symbol_cannot_also_be_a_ranked_ticker():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(cash_proxy_symbol="VV")
+
+
+def test_cash_proxy_symbol_independent_of_cash_ticker():
+    # Distinct fields (momentum benchmark vs allocation destination) --
+    # both may be set independently without validation coupling them.
+    config = RankedMultiFactorRotationConfig(cash_proxy_symbol="TLT", cash_ticker="SHY")
+    assert config.cash_proxy_symbol == "TLT"
+    assert config.cash_ticker == "SHY"
+
+
+def test_absolute_momentum_model_must_be_a_known_value():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(absolute_momentum_model="something_else")
+
+
+def test_absolute_momentum_model_asset_minus_cash_is_now_selectable():
+    # Activated 2026-08-05: an explicit opt-in research mode, not the
+    # default -- see test_defaults_match_specification for the default.
+    config = RankedMultiFactorRotationConfig(absolute_momentum_model="asset_minus_cash")
+    assert config.absolute_momentum_model == "asset_minus_cash"
+
+
+def test_absolute_momentum_lookback_sessions_must_be_positive():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(absolute_momentum_lookback_sessions=0)
+
+
+def test_total_rank_divisor_must_be_positive():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(total_rank_divisor=0.0)
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(total_rank_divisor=-11.0)
+
+
+def test_weight_model_must_be_a_known_value():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(weight_model="something_else")
+
+
+def test_weight_model_walk_forward_estimated_not_yet_available():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(weight_model="walk_forward_estimated")
+
+
+def test_weight_model_fixed_estimated_remains_rejected():
+    # Activated 2026-08-06, then reverted the same day: the empirical
+    # weight investigation (spec §4D-§4H) found no reliable evidence for
+    # unequal factor weights (a degenerate 1/0/0 ridge corner solution,
+    # independently confirmed near-null by a second estimator). Only
+    # "equal" is selectable today -- see config.py's module docstring
+    # and docs/reproducibility_findings.md.
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(weight_model="fixed_estimated")
+
+
+def test_weight_model_fixed_estimated_rejected_even_with_a_valid_looking_artifact_id():
+    # The rejection is unconditional on weight_model itself, not merely
+    # a missing-artifact-id check -- providing an artifact id (even one
+    # pointing at a real, validated artifact) does not reopen this path.
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(
+            weight_model="fixed_estimated",
+            fixed_weight_artifact_id="outputs/ranked_multi_factor_rotation/weight_estimation_artifact.json",
+        )
+
+
+def test_fixed_weight_artifact_id_requires_fixed_estimated_weight_model():
+    # weight_model="equal" with a stray artifact id set is a
+    # misconfiguration, not a silent no-op.
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(fixed_weight_artifact_id="some_artifact_v1")
+
+
+def test_factor_weights_must_be_finite():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(momentum_weight=float("nan"), volatility_weight=1 / 3, correlation_weight=1 / 3)
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(momentum_weight=float("inf"), volatility_weight=-float("inf"), correlation_weight=1.0)
+
+
+def test_total_rank_divisor_must_be_finite():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(total_rank_divisor=float("nan"))
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(total_rank_divisor=float("inf"))
+
+
+def test_total_rank_formula_default_is_legacy():
+    config = RankedMultiFactorRotationConfig()
+    assert config.total_rank_formula == "legacy"
+
+
+def test_total_rank_formula_must_be_a_known_value():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(total_rank_formula="something_else")
+
+
+def test_total_rank_formula_full_provisional_requires_asset_minus_cash_momentum():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(
+            total_rank_formula="full_provisional", absolute_momentum_model="price_relative"
+        )
+
+
+def test_total_rank_formula_full_provisional_is_selectable_with_asset_minus_cash():
+    config = RankedMultiFactorRotationConfig(
+        total_rank_formula="full_provisional", absolute_momentum_model="asset_minus_cash"
+    )
+    assert config.total_rank_formula == "full_provisional"
+
+
+def test_total_rank_formula_faa_faithful_candidate_requires_price_relative_momentum():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(
+            total_rank_formula="faa_faithful_candidate", absolute_momentum_model="asset_minus_cash"
+        )
+
+
+def test_total_rank_formula_faa_faithful_candidate_is_selectable_with_price_relative():
+    config = RankedMultiFactorRotationConfig(
+        total_rank_formula="faa_faithful_candidate", absolute_momentum_model="price_relative"
+    )
+    assert config.total_rank_formula == "faa_faithful_candidate"
+
+
+def test_total_rank_formula_faa_faithful_candidate_decimal_m_requires_price_relative_momentum():
+    with pytest.raises(ValueError):
+        RankedMultiFactorRotationConfig(
+            total_rank_formula="faa_faithful_candidate_decimal_m",
+            absolute_momentum_model="asset_minus_cash",
+        )
+
+
+def test_total_rank_formula_faa_faithful_candidate_decimal_m_is_selectable_with_price_relative():
+    config = RankedMultiFactorRotationConfig(
+        total_rank_formula="faa_faithful_candidate_decimal_m",
+        absolute_momentum_model="price_relative",
+    )
+    assert config.total_rank_formula == "faa_faithful_candidate_decimal_m"
+
+
 def test_config_identity_is_stable_and_sensitive_to_changes():
     a = RankedMultiFactorRotationConfig()
     b = RankedMultiFactorRotationConfig()
@@ -95,6 +264,15 @@ def test_config_identity_is_stable_and_sensitive_to_changes():
 
     c = RankedMultiFactorRotationConfig(top_n=3)
     assert c.identity() != a.identity()
+
+
+def test_config_identity_is_sensitive_to_provisional_scaffolding_fields():
+    a = RankedMultiFactorRotationConfig()
+    b = RankedMultiFactorRotationConfig(total_rank_divisor=12.0)
+    assert a.identity() != b.identity()
+
+    c = RankedMultiFactorRotationConfig(cash_proxy_symbol="TLT")
+    assert a.identity() != c.identity()
 
 
 def test_registration_metadata():

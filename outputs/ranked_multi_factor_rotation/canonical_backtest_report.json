@@ -1,0 +1,465 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-08-06T02:46:03.200243+00:00",
+  "strategy_id": "ranked_multi_factor_rotation",
+  "config_identity": "4e4acf43105b5e701918018bc9e771b41a3ec5f15cba86f2baf3c4d89148b476",
+  "data_fingerprint": "a284227e34238577c49752e55d8b3aa03fca52b904655b22a45517b4ef7875d8",
+  "canonical_equation": "TotalRank_i,t = ( (1/3)*Rank(M_i,t) + (1/3)*Rank(V_i,t) + (1/3)*Rank(C_i,t) - T_i,t + M_i,t ) / 11",
+  "gate_ordering": "A: rank all 11 by Total Rank; select the 5 lowest; apply the absolute-momentum gate separately to each selected 20% slot; a failing slot redirects to SHY; no replacement with the next positive-momentum candidate.",
+  "evaluation_range": {
+    "start": "2009-06-30",
+    "end": "2026-06-30"
+  },
+  "metrics": {
+    "n_months": 205,
+    "total_return": 1.2263324748724735,
+    "cagr": 0.04796489058675135,
+    "annualized_volatility": 0.055046388505157265,
+    "sharpe_ratio": 0.8800538723864682,
+    "sortino_ratio": 1.417208404195622,
+    "max_drawdown": -0.09026581693933566,
+    "calmar_ratio": 0.5313738047591902,
+    "best_month": 0.04711886550829537,
+    "worst_month": -0.042318673252314976,
+    "pct_positive_months": 61.46341463414634,
+    "avg_turnover": 0.2834146341463415,
+    "n_rebalances": 205,
+    "avg_shy_allocation_pct": 29.07317073170732,
+    "median_shy_allocation_pct": 20.0,
+    "shy_allocation_bucket_pct": {
+      "0%": 31.70731707317073,
+      "20%": 23.902439024390244,
+      "40%": 22.926829268292686,
+      "60%": 12.682926829268293,
+      "80%": 6.341463414634147,
+      "100%": 2.4390243902439024
+    },
+    "avg_risky_holdings": 3.546341463414634
+  },
+  "allocation_stats": {
+    "avg_shy_allocation_pct": 29.07317073170732,
+    "median_shy_allocation_pct": 20.0,
+    "shy_allocation_bucket_pct": {
+      "0%": 31.70731707317073,
+      "20%": 23.902439024390244,
+      "40%": 22.926829268292686,
+      "60%": 12.682926829268293,
+      "80%": 6.341463414634147,
+      "100%": 2.4390243902439024
+    },
+    "avg_risky_holdings": 3.546341463414634
+  },
+  "annual_returns": {
+    "2009": 0.09935580246624554,
+    "2010": 0.14142429827384428,
+    "2011": 0.0734709546034591,
+    "2012": 0.004750164149920577,
+    "2013": 0.009543731428801605,
+    "2014": 0.10847544460254355,
+    "2015": -0.06704176254289962,
+    "2016": 0.0026234845614725444,
+    "2017": 0.10292385339146914,
+    "2018": -0.04293354617435308,
+    "2019": 0.0308375511351604,
+    "2020": 0.11489639107994498,
+    "2021": 0.12269082893220196,
+    "2022": -0.03782658234654901,
+    "2023": -0.014070275273507016,
+    "2024": 0.028378522133786,
+    "2025": 0.10802015358841643,
+    "2026": 0.06741290787444187
+  },
+  "drawdown_periods": [
+    {
+      "peak_date": "2022-01-31",
+      "trough_date": "2022-09-30",
+      "recovery_date": "2025-08-29",
+      "magnitude": -0.09026581693933566
+    },
+    {
+      "peak_date": "2014-12-31",
+      "trough_date": "2016-10-31",
+      "recovery_date": "2017-09-29",
+      "magnitude": -0.083543089016889
+    },
+    {
+      "peak_date": "2018-07-31",
+      "trough_date": "2018-11-30",
+      "recovery_date": "2020-07-31",
+      "magnitude": -0.057939429139872045
+    },
+    {
+      "peak_date": "2010-03-31",
+      "trough_date": "2010-05-28",
+      "recovery_date": "2010-08-31",
+      "magnitude": -0.04393927317722557
+    },
+    {
+      "peak_date": "2012-03-30",
+      "trough_date": "2012-04-30",
+      "recovery_date": "2013-03-28",
+      "magnitude": -0.042318673252314976
+    }
+  ],
+  "selection_stats": {
+    "n_periods": 205,
+    "selected_frequency_pct": {
+      "VV": 35.12,
+      "IJH": 10.24,
+      "IJR": 20.98,
+      "EFA": 16.59,
+      "EEM": 17.56,
+      "RWR": 45.85,
+      "VAW": 11.22,
+      "DBC": 58.54,
+      "AGG": 99.51,
+      "TIP": 100.0,
+      "IGOV": 84.39
+    },
+    "held_frequency_pct": {
+      "VV": 30.24,
+      "IJH": 8.78,
+      "IJR": 18.05,
+      "EFA": 14.63,
+      "EEM": 14.15,
+      "RWR": 41.95,
+      "VAW": 11.22,
+      "DBC": 40.98,
+      "AGG": 65.37,
+      "TIP": 64.88,
+      "IGOV": 44.39
+    },
+    "gated_frequency_pct": {
+      "VV": 4.88,
+      "IJH": 1.46,
+      "IJR": 2.93,
+      "EFA": 1.95,
+      "EEM": 3.41,
+      "RWR": 3.9,
+      "VAW": 0.0,
+      "DBC": 17.56,
+      "AGG": 34.15,
+      "TIP": 35.12,
+      "IGOV": 40.0
+    },
+    "fifth_vs_sixth_gap_distribution": {
+      "min": 4.5537470167444916e-05,
+      "p25": 0.017618784837377555,
+      "median": 0.035434859423923104,
+      "p75": 0.06427729139644323,
+      "max": 0.2648490423786951,
+      "pct_below_0.001": 3.902439024390244
+    }
+  },
+  "diagnostic_alternatives": {
+    "B_prefilter_equals_C_waterfall": true,
+    "B_prefilter_metrics": {
+      "n_months": 205,
+      "total_return": 1.516104611049585,
+      "cagr": 0.05549769537094007,
+      "annualized_volatility": 0.08214707793186876,
+      "sharpe_ratio": 0.6997971636332766,
+      "sortino_ratio": 1.0198312159450607,
+      "max_drawdown": -0.14027306512224802,
+      "calmar_ratio": 0.3956404269242553,
+      "best_month": 0.07442424469635914,
+      "worst_month": -0.07463379821634201,
+      "pct_positive_months": 63.41463414634146,
+      "avg_turnover": 0.2941463414634147,
+      "n_rebalances": 205,
+      "avg_shy_allocation_pct": 12.29268292682927,
+      "median_shy_allocation_pct": 0.0,
+      "shy_allocation_bucket_pct": {
+        "0%": 75.60975609756098,
+        "20%": 7.317073170731707,
+        "40%": 5.365853658536586,
+        "60%": 5.365853658536586,
+        "80%": 4.390243902439024,
+        "100%": 1.951219512195122
+      },
+      "avg_risky_holdings": 4.385365853658537
+    },
+    "pct_months_different_portfolio_vs_canonical": 50.24
+  },
+  "baseline_comparisons": {
+    "shy_buy_and_hold": {
+      "n_months": 205,
+      "total_return": 0.2613718829215037,
+      "cagr": 0.013684984480772489,
+      "annualized_volatility": 0.014055811310518498,
+      "sharpe_ratio": 0.9745470459721841,
+      "sortino_ratio": 1.3128803795673736,
+      "max_drawdown": -0.05484180727930554,
+      "calmar_ratio": 0.24953562181267672,
+      "best_month": 0.019586427508121625,
+      "worst_month": -0.01834167595274316,
+      "pct_positive_months": 62.926829268292686,
+      "avg_turnover": 0.0024390243902439024,
+      "n_rebalances": 205,
+      "avg_shy_allocation_pct": 100.0,
+      "median_shy_allocation_pct": 100.0,
+      "shy_allocation_bucket_pct": {
+        "0%": 0.0,
+        "20%": 0.0,
+        "40%": 0.0,
+        "60%": 0.0,
+        "80%": 0.0,
+        "100%": 100.0
+      },
+      "avg_risky_holdings": 0.0
+    },
+    "equal_weight_11_risky_monthly_rebalanced": {
+      "n_months": 205,
+      "total_return": 2.912587124144123,
+      "cagr": 0.08313058830674946,
+      "annualized_volatility": 0.12219081336710272,
+      "sharpe_ratio": 0.7174572454188084,
+      "sortino_ratio": 0.8991221400796597,
+      "max_drawdown": -0.22652622265020272,
+      "calmar_ratio": 0.3669799784509631,
+      "best_month": 0.10359594109574227,
+      "worst_month": -0.17932689680202307,
+      "pct_positive_months": 63.90243902439025,
+      "avg_turnover": 0.0024390243902439024,
+      "n_rebalances": 205,
+      "avg_shy_allocation_pct": 0.0,
+      "median_shy_allocation_pct": 0.0,
+      "shy_allocation_bucket_pct": {
+        "0%": 100.0,
+        "20%": 0.0,
+        "40%": 0.0,
+        "60%": 0.0,
+        "80%": 0.0,
+        "100%": 0.0
+      },
+      "avg_risky_holdings": 11.0
+    },
+    "equal_weight_top5_momentum_gated": {
+      "n_months": 205,
+      "total_return": 2.1715827322651124,
+      "cagr": 0.06989950842894666,
+      "annualized_volatility": 0.11286699579928018,
+      "sharpe_ratio": 0.6562741754432732,
+      "sortino_ratio": 0.9302633748641682,
+      "max_drawdown": -0.17547123689494248,
+      "calmar_ratio": 0.39835308433368277,
+      "best_month": 0.12415185136709783,
+      "worst_month": -0.11253641632585809,
+      "pct_positive_months": 60.97560975609756,
+      "avg_turnover": 0.30390243902439035,
+      "n_rebalances": 205,
+      "avg_shy_allocation_pct": 12.29268292682927,
+      "median_shy_allocation_pct": 0.0,
+      "shy_allocation_bucket_pct": {
+        "0%": 75.60975609756098,
+        "20%": 7.317073170731707,
+        "40%": 5.365853658536586,
+        "60%": 5.365853658536586,
+        "80%": 4.390243902439024,
+        "100%": 1.951219512195122
+      },
+      "avg_risky_holdings": 4.385365853658537
+    },
+    "legacy_rmfr_config_default": {
+      "n_months": 205,
+      "total_return": 1.1919359793613995,
+      "cagr": 0.047010168252088036,
+      "annualized_volatility": 0.056173561062881974,
+      "sharpe_ratio": 0.8472125070884424,
+      "sortino_ratio": 1.367116565607891,
+      "max_drawdown": -0.08546552109888006,
+      "calmar_ratio": 0.5500483428597975,
+      "best_month": 0.04711886550829537,
+      "worst_month": -0.04210220647107203,
+      "pct_positive_months": 60.0,
+      "avg_turnover": 0.284390243902439,
+      "n_rebalances": 205,
+      "avg_shy_allocation_pct": 25.75609756097561,
+      "median_shy_allocation_pct": 20.0,
+      "shy_allocation_bucket_pct": {
+        "0%": 40.0,
+        "20%": 19.51219512195122,
+        "40%": 21.951219512195124,
+        "60%": 11.219512195121952,
+        "80%": 4.878048780487805,
+        "100%": 2.4390243902439024
+      },
+      "avg_risky_holdings": 3.7121951219512197
+    }
+  },
+  "subperiod_stability": {
+    "first_half": {
+      "start": "2009-06-30",
+      "end": "2017-11-30",
+      "n_months": 102,
+      "total_return": 0.549349700384107,
+      "cagr": 0.052859751346956196,
+      "annualized_volatility": 0.05402702562424001,
+      "sharpe_ratio": 0.9820800695984186,
+      "sortino_ratio": 1.491714200880054,
+      "max_drawdown": -0.083543089016889,
+      "calmar_ratio": 0.632724405680883,
+      "best_month": 0.0460193756680523,
+      "worst_month": -0.042318673252314976,
+      "pct_positive_months": 62.745098039215684,
+      "avg_turnover": 0.2617647058823529,
+      "n_rebalances": 102,
+      "avg_shy_allocation_pct": 25.49019607843137,
+      "median_shy_allocation_pct": 20.0,
+      "shy_allocation_bucket_pct": {
+        "0%": 37.254901960784316,
+        "20%": 20.588235294117645,
+        "40%": 26.47058823529412,
+        "60%": 10.784313725490197,
+        "80%": 2.941176470588235,
+        "100%": 1.9607843137254901
+      },
+      "avg_risky_holdings": 3.7254901960784315
+    },
+    "second_half": {
+      "start": "2017-12-29",
+      "end": "2026-06-30",
+      "n_months": 103,
+      "total_return": 0.436946400364314,
+      "cagr": 0.04313997949389492,
+      "annualized_volatility": 0.056270547743621536,
+      "sharpe_ratio": 0.7796888067299993,
+      "sortino_ratio": 1.3338770112410334,
+      "max_drawdown": -0.09026581693933622,
+      "calmar_ratio": 0.477921553879997,
+      "best_month": 0.04711886550829537,
+      "worst_month": -0.04210220647107203,
+      "pct_positive_months": 60.19417475728155,
+      "avg_turnover": 0.3048543689320388,
+      "n_rebalances": 103,
+      "avg_shy_allocation_pct": 32.62135922330098,
+      "median_shy_allocation_pct": 20.0,
+      "shy_allocation_bucket_pct": {
+        "0%": 26.21359223300971,
+        "20%": 27.184466019417474,
+        "40%": 19.41747572815534,
+        "60%": 14.563106796116504,
+        "80%": 9.70873786407767,
+        "100%": 2.912621359223301
+      },
+      "avg_risky_holdings": 3.3689320388349513
+    },
+    "start_date_sensitivity": {
+      "drop_first_0_months": {
+        "start": "2009-06-30",
+        "cagr": 0.04796489058675135,
+        "total_return": 1.2263324748724735
+      },
+      "drop_first_12_months": {
+        "start": "2010-06-30",
+        "cagr": 0.04167626777031441,
+        "total_return": 0.9284218720534048
+      },
+      "drop_first_24_months": {
+        "start": "2011-06-30",
+        "cagr": 0.03585347534240291,
+        "total_return": 0.7011780583689526
+      },
+      "drop_first_36_months": {
+        "start": "2012-06-29",
+        "cagr": 0.037419709512275245,
+        "total_return": 0.67761564384345
+      }
+    },
+    "cost_sensitivity": {
+      "0bps": {
+        "n_months": 205,
+        "total_return": 1.358963924668883,
+        "cagr": 0.05152071362111821,
+        "annualized_volatility": 0.055054319516064265,
+        "sharpe_ratio": 0.9417020032275933,
+        "sortino_ratio": 1.5244670724932332,
+        "max_drawdown": -0.08861164705522184,
+        "calmar_ratio": 0.5814214647089343,
+        "best_month": 0.047518865508295365,
+        "worst_month": -0.04211867325231498,
+        "pct_positive_months": 62.4390243902439,
+        "avg_turnover": 0.2834146341463415,
+        "n_rebalances": 205,
+        "avg_shy_allocation_pct": 29.07317073170732,
+        "median_shy_allocation_pct": 20.0,
+        "shy_allocation_bucket_pct": {
+          "0%": 31.70731707317073,
+          "20%": 23.902439024390244,
+          "40%": 22.926829268292686,
+          "60%": 12.682926829268293,
+          "80%": 6.341463414634147,
+          "100%": 2.4390243902439024
+        },
+        "avg_risky_holdings": 3.546341463414634
+      },
+      "5bps": {
+        "n_months": 205,
+        "total_return": 1.2916958231967288,
+        "cagr": 0.04974148227340769,
+        "annualized_volatility": 0.0550493038202924,
+        "sharpe_ratio": 0.9108975352972104,
+        "sortino_ratio": 1.4707872972787253,
+        "max_drawdown": -0.08943902957784611,
+        "calmar_ratio": 0.5561496195585799,
+        "best_month": 0.047318865508295366,
+        "worst_month": -0.04221867325231498,
+        "pct_positive_months": 61.951219512195124,
+        "avg_turnover": 0.2834146341463415,
+        "n_rebalances": 205,
+        "avg_shy_allocation_pct": 29.07317073170732,
+        "median_shy_allocation_pct": 20.0,
+        "shy_allocation_bucket_pct": {
+          "0%": 31.70731707317073,
+          "20%": 23.902439024390244,
+          "40%": 22.926829268292686,
+          "60%": 12.682926829268293,
+          "80%": 6.341463414634147,
+          "100%": 2.4390243902439024
+        },
+        "avg_risky_holdings": 3.546341463414634
+      },
+      "10bps": {
+        "n_months": 205,
+        "total_return": 1.2263324748724735,
+        "cagr": 0.04796489058675135,
+        "annualized_volatility": 0.055046388505157265,
+        "sharpe_ratio": 0.8800538723864682,
+        "sortino_ratio": 1.417208404195622,
+        "max_drawdown": -0.09026581693933566,
+        "calmar_ratio": 0.5313738047591902,
+        "best_month": 0.04711886550829537,
+        "worst_month": -0.042318673252314976,
+        "pct_positive_months": 61.46341463414634,
+        "avg_turnover": 0.2834146341463415,
+        "n_rebalances": 205,
+        "avg_shy_allocation_pct": 29.07317073170732,
+        "median_shy_allocation_pct": 20.0,
+        "shy_allocation_bucket_pct": {
+          "0%": 31.70731707317073,
+          "20%": 23.902439024390244,
+          "40%": 22.926829268292686,
+          "60%": 12.682926829268293,
+          "80%": 6.341463414634147,
+          "100%": 2.4390243902439024
+        },
+        "avg_risky_holdings": 3.546341463414634
+      }
+    }
+  },
+  "trend_behavior": {
+    "n_rebalance_dates": 205,
+    "pct_dates_trend_uniform_across_universe": 96.59,
+    "pct_dates_removing_trend_changes_selection": 0.49
+  },
+  "limitations": [
+    "This is a research backtest, not a guarantee of future performance and not a claim of author-reported/live-portfolio performance.",
+    "WeekdayTradingCalendar/ListTradingCalendar are not a real NYSE holiday calendar -- see docs/reproducibility_findings.md's backtest readiness audit for the bounded, disclosed consequence.",
+    "Survivorship: only currently-active ETFs are in the acquired dataset; a historically delisted/merged fund in this universe would not be represented.",
+    "Price series is yfinance split/dividend-adjusted close, an approximate total-return series, not a literal total-return index.",
+    "Instrument return is capped at +/-50% per accounting.INSTRUMENT_RETURN_CAP; extreme single-month moves beyond that are truncated.",
+    "wM=wV=wC=1/3 remain a provisional, unresolved-by-source placeholder (see reproducibility_findings.md), not a source-confirmed default.",
+    "Trend T is near-constant historically (see the trend-state semantics investigation) -- its contribution to Total Rank is close to a constant offset in most months of this backtest window."
+  ],
+  "label": "RESEARCH BACKTEST -- not a guarantee of future performance, not author-reported/live-portfolio performance."
+}
