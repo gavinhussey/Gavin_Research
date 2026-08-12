@@ -7,25 +7,8 @@ simulating a future one, and no multi-strategy allocation logic; those
 remain explicitly out of scope until a real second strategy is actually
 built.
 
-A second strategy, **Ranked Multi-Factor Rotation**, is now under
-construction following this pattern
-(`src/atlas_quant/strategies/ranked_multi_factor_rotation/`,
-`research/strategies/ranked_multi_factor_rotation/`). As of this writing
-its specification (a monthly-rebalance, 11-ETF-universe momentum/
-volatility/correlation/trend rotation) is written down in
-`research/strategies/ranked_multi_factor_rotation/docs/specification.md`,
-and layers 1–6 exist and are tested: the `DailyOHLCObservation` domain
-record, a real typed config, pure formulas (momentum, EWMA volatility,
-rolling correlation, ATR trend breakout, ranking/total-rank), the
-point-in-time monthly selection pipeline, a real, protocol-conforming
-`RankedMultiFactorRotationStrategy` (`factory` set, `enabled=True`), real
-yfinance data acquisition, and a standalone monthly backtest runner
-(`atlas_quant.backtest.ranked_multi_factor_rotation_runner`) with
-turnover-based transaction costs. A genuine historical backtest has been
-run end-to-end on real data — see
-`research/strategies/ranked_multi_factor_rotation/docs/reproducibility_findings.md`
-for results and current caveats (no walk-forward validation yet). Not
-yet built: performance-statistics/reporting (layer 7).
+No second strategy is currently built. This guide describes the pattern
+to follow when one is.
 
 ## The layers every strategy needs
 
@@ -136,12 +119,10 @@ pytest markers (mirroring `network`/`production_data`/`external_env`/
 ## What this guide does not authorize
 
 - Building a second strategy's actual selection/scoring/construction
-  logic ahead of its own specification being written down — Ranked
-  Multi-Factor Rotation's scaffold (registration metadata, structural
-  config shell) exists, but no factor, formula, universe, or portfolio-
-  construction rule should be implemented until
-  `research/strategies/ranked_multi_factor_rotation/docs/specification.md`
-  states it.
+  logic ahead of its own specification being written down — no factor,
+  formula, universe, or portfolio-construction rule should be
+  implemented until that strategy's own specification document states
+  it.
 - Multi-strategy capital allocation, signal netting, shared cash, or
   consolidated multi-strategy reporting — `strategy_budget_pct` exists on
   every backtest config specifically so a future portfolio-level stage

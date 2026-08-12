@@ -35,7 +35,3 @@ data/orders/filing_momentum_ml/
 
 # Scheduled-job output (nightly data-refresh check, daily paper-trade run).
 data/logs/filing_momentum_ml/
-
-# Ranked Multi-Factor Rotation production research data -- never
-# committed, same convention as Filing Momentum ML above.
-data/raw/ranked_multi_factor_rotation/

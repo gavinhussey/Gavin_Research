@@ -52,24 +52,8 @@ independently verified against this platform's own configuration (see
 `production/legacy_audit.py`, which performs only a read-only,
 diagnostic-only pass over it and never deserializes its pickle caches).
 
-See `docs/adding_a_strategy.md` for the pattern a second strategy
-follows. A second strategy, **Ranked Multi-Factor Rotation** — a
-monthly-rebalance, 11-ETF momentum/volatility/correlation/trend rotation
-strategy — is under construction
-(`src/atlas_quant/strategies/ranked_multi_factor_rotation/`,
-`research/strategies/ranked_multi_factor_rotation/`). Its specification,
-config, pure formulas, point-in-time monthly selection pipeline,
-strategy decision evaluator, real yfinance data acquisition, and a
-standalone monthly backtest runner (with turnover-based transaction
-costs) all exist and are tested. **A real acquisition and a genuine
-historical backtest have both been run**: 69,948 real daily OHLC rows
-(2000–2026) across all 12 tickers, and a full-universe backtest from
-IGOV's real 2009-01-30 inception through 2026-06-30 (+161.40% total
-return over that window; 5/10/15-year sub-window figures also
-recorded). See
-`research/strategies/ranked_multi_factor_rotation/docs/reproducibility_findings.md`
-— these are raw, unvalidated backtest results, not a signal-quality
-claim; no walk-forward/out-of-sample validation has been run yet.
+See `docs/adding_a_strategy.md` for the pattern a second strategy should
+follow. No second strategy is currently built.
 
 ## Layout
 
