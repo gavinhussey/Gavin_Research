@@ -57,6 +57,14 @@ quarter's `exit_timestamp` (`sell_dt`). Both resolve through one explicit,
 typed `PriceResolutionPolicy` (`price_resolution.py`) rather than Stage
 6's unnamed "last price on or before" helper behavior.
 
+Daily-close availability is timestamp-aware: a close for trading date `D`
+is modeled as available at 16:00 on `D`, and may only be consumed by a
+price request strictly after that availability timestamp and before the
+outer data cutoff. Since the strategy clock's `buy_dt`/`sell_dt` are
+midnight timestamps, the same day's close is not observable for those
+midnight events; resolution falls back to the most recent completed
+session found in the observed price series, subject to stale-price bounds.
+
 ## Stale-price policy — an explicit departure from Stage 6/legacy
 
 **Default policy is conservative, not a silent carry-over of Stage 6's

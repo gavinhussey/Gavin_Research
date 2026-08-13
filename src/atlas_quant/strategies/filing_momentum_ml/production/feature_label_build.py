@@ -181,7 +181,7 @@ def build_production_labels(
                 obs.instrument_id,
                 period.quarter_end,
                 obs.feature_timestamp,
-                period.exit_timestamp.date(),
+                period.exit_timestamp,
                 prices_by_instrument.get(obs.instrument_id, ()),
                 period.exit_timestamp,
             )
@@ -189,8 +189,9 @@ def build_production_labels(
         ]
         labeling = assign_quarterly_labels(outcomes, period.quarter_end, n_winners=n_winners)
         label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
+        outcome_by_id = {o.instrument_id: o for o in outcomes}
         labeled[period.quarter_end] = tuple(
-            LabeledObservation(obs, label_by_id[obs.instrument_id], period.label_availability_cutoff)
+            LabeledObservation(obs, label_by_id[obs.instrument_id], outcome_by_id[obs.instrument_id].label_available_at)
             for obs in observations
         )
         if labeling.small_quarter:

@@ -29,9 +29,9 @@ class BenchmarkResult:
     """SPY's resolved return over one strategy period's cohort interval."""
 
     instrument_id: InstrumentId
-    requested_entry_timestamp: date
+    requested_entry_timestamp: datetime
     resolved_entry: ResolvedPrice
-    requested_exit_timestamp: date
+    requested_exit_timestamp: datetime
     resolved_exit: ResolvedPrice
     raw_return: float | None
     warnings: tuple[str, ...]
@@ -40,8 +40,8 @@ class BenchmarkResult:
 def resolve_benchmark(
     instrument_id: InstrumentId,
     prices: Sequence[DailyPriceObservation],
-    entry_target: date,
-    exit_target: date,
+    entry_target: date | datetime,
+    exit_target: date | datetime,
     policy: PriceResolutionPolicy,
     data_cutoff: datetime,
     calendar: TradingCalendar,
@@ -62,21 +62,21 @@ def resolve_benchmark(
     if entry.status not in resolvable_statuses:
         warnings += ("benchmark entry price unresolved",)
         return BenchmarkResult(
-            instrument_id=instrument_id, requested_entry_timestamp=entry_target, resolved_entry=entry,
-            requested_exit_timestamp=exit_target, resolved_exit=exit_resolved, raw_return=None,
+            instrument_id=instrument_id, requested_entry_timestamp=entry.requested_timestamp, resolved_entry=entry,
+            requested_exit_timestamp=exit_resolved.requested_timestamp, resolved_exit=exit_resolved, raw_return=None,
             warnings=warnings,
         )
     if exit_resolved.status not in resolvable_statuses:
         warnings += ("benchmark exit price unresolved",)
         return BenchmarkResult(
-            instrument_id=instrument_id, requested_entry_timestamp=entry_target, resolved_entry=entry,
-            requested_exit_timestamp=exit_target, resolved_exit=exit_resolved, raw_return=None,
+            instrument_id=instrument_id, requested_entry_timestamp=entry.requested_timestamp, resolved_entry=entry,
+            requested_exit_timestamp=exit_resolved.requested_timestamp, resolved_exit=exit_resolved, raw_return=None,
             warnings=warnings,
         )
 
     raw_return = (exit_resolved.price - entry.price) / entry.price
     return BenchmarkResult(
-        instrument_id=instrument_id, requested_entry_timestamp=entry_target, resolved_entry=entry,
-        requested_exit_timestamp=exit_target, resolved_exit=exit_resolved, raw_return=raw_return,
+        instrument_id=instrument_id, requested_entry_timestamp=entry.requested_timestamp, resolved_entry=entry,
+        requested_exit_timestamp=exit_resolved.requested_timestamp, resolved_exit=exit_resolved, raw_return=raw_return,
         warnings=warnings,
     )

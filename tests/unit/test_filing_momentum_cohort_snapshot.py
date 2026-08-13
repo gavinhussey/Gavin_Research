@@ -562,15 +562,16 @@ class TestFullCohortSnapshotIntegration:
             outcomes = [
                 build_forward_return_outcome(
                     obs.instrument_id, period.quarter_end, obs.feature_timestamp,
-                    period.exit_timestamp.date(), prices_by_instrument.get(obs.instrument_id, ()),
+                    period.exit_timestamp, prices_by_instrument.get(obs.instrument_id, ()),
                     period.exit_timestamp,
                 )
                 for obs in obs_for_period
             ]
             labeling = assign_quarterly_labels(outcomes, period.quarter_end, n_winners=config.n_winners)
             label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
+            outcome_by_id = {o.instrument_id: o for o in outcomes}
             labeled_quarters[period.quarter_end] = [
-                LabeledObservation(obs, label_by_id[obs.instrument_id], period.label_availability_cutoff)
+                LabeledObservation(obs, label_by_id[obs.instrument_id], outcome_by_id[obs.instrument_id].label_available_at)
                 for obs in obs_for_period
             ]
 

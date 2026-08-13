@@ -11,13 +11,15 @@ silent carry-over of Stage 6's unlimited backward search.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Literal, Sequence
 
 from atlas_quant.data.point_in_time import TradingCalendar
 from atlas_quant.data.records import CANONICAL_PRICE_CONVENTION, DailyPriceObservation, PriceConvention
 from atlas_quant.domain.provenance import DataProvenance
+
+DAILY_BAR_AVAILABLE_TIME = time(16, 0)
 
 
 class PriceResolutionStatus(str, Enum):
@@ -63,7 +65,7 @@ class PriceResolutionPolicy:
 class ResolvedPrice:
     """The complete, auditable outcome of one price-resolution attempt."""
 
-    requested_timestamp: date
+    requested_timestamp: datetime
     resolved_timestamp: date | None
     price: float | None
     calendar_days_stale: int | None
@@ -74,33 +76,52 @@ class ResolvedPrice:
     warnings: tuple[str, ...] = ()
 
 
+def daily_close_available_at(trading_date: date) -> datetime:
+    """Modeled availability timestamp for one daily close observation."""
+    return datetime.combine(trading_date, DAILY_BAR_AVAILABLE_TIME)
+
+
+def normalize_price_request_timestamp(requested_timestamp: date | datetime) -> datetime:
+    """Convert legacy date-only price requests to the conservative midnight timestamp."""
+    if isinstance(requested_timestamp, datetime):
+        return requested_timestamp
+    return datetime.combine(requested_timestamp, datetime.min.time())
+
+
 def resolve_price(
     prices: Sequence[DailyPriceObservation],
-    requested_timestamp: date,
+    requested_timestamp: date | datetime,
     policy: PriceResolutionPolicy,
     data_cutoff: datetime,
     calendar: TradingCalendar,
 ) -> ResolvedPrice:
     """Resolve a price for ``requested_timestamp`` under ``policy``.
 
-    Never uses a price dated after ``data_cutoff``. Prefers an exact
-    session match; otherwise falls back to the most recent earlier
-    session, bounded by ``policy``'s staleness limits — a fallback beyond
-    those limits is reported as :attr:`PriceResolutionStatus.MISSING`,
-    not silently returned anyway.
+    Never uses a close whose modeled availability timestamp is on or
+    after either ``requested_timestamp`` or ``data_cutoff``. Daily closes
+    are modeled as available at 16:00 on their own trading date; a
+    midnight request therefore cannot consume that same day's close.
+    Prefers an exact session match when it is already available;
+    otherwise falls back to the most recent earlier session, bounded by
+    ``policy``'s staleness limits — a fallback beyond those limits is
+    reported as :attr:`PriceResolutionStatus.MISSING`, not silently
+    returned anyway.
     """
+    requested_at = normalize_price_request_timestamp(requested_timestamp)
+    requested_date = requested_at.date()
     eligible = sorted(
         (
             p
             for p in prices
-            if p.trading_date <= requested_timestamp
-            and datetime.combine(p.trading_date, datetime.min.time()) <= data_cutoff
+            if p.trading_date <= requested_date
+            and daily_close_available_at(p.trading_date) < requested_at
+            and daily_close_available_at(p.trading_date) < data_cutoff
         ),
         key=lambda p: p.trading_date,
     )
     if not eligible:
         return ResolvedPrice(
-            requested_timestamp=requested_timestamp, resolved_timestamp=None, price=None,
+            requested_timestamp=requested_at, resolved_timestamp=None, price=None,
             calendar_days_stale=None, trading_sessions_stale=None,
             status=PriceResolutionStatus.MISSING, price_convention=policy.price_convention,
             provenance=None, warnings=("no eligible price observation found",),
@@ -109,23 +130,23 @@ def resolve_price(
     latest = eligible[-1]
     if latest.close <= 0:
         return ResolvedPrice(
-            requested_timestamp=requested_timestamp, resolved_timestamp=latest.trading_date,
-            price=latest.close, calendar_days_stale=(requested_timestamp - latest.trading_date).days,
+            requested_timestamp=requested_at, resolved_timestamp=latest.trading_date,
+            price=latest.close, calendar_days_stale=(requested_date - latest.trading_date).days,
             trading_sessions_stale=None, status=PriceResolutionStatus.INVALID,
             price_convention=policy.price_convention, provenance=latest.provenance,
             warnings=("resolved price is non-positive",),
         )
 
-    if latest.trading_date == requested_timestamp:
+    if latest.trading_date == requested_date:
         return ResolvedPrice(
-            requested_timestamp=requested_timestamp, resolved_timestamp=latest.trading_date,
+            requested_timestamp=requested_at, resolved_timestamp=latest.trading_date,
             price=latest.close, calendar_days_stale=0, trading_sessions_stale=0,
             status=PriceResolutionStatus.EXACT_SESSION, price_convention=policy.price_convention,
             provenance=latest.provenance, warnings=(),
         )
 
-    calendar_days_stale = (requested_timestamp - latest.trading_date).days
-    trading_sessions_stale = _count_trading_sessions_between(calendar, latest.trading_date, requested_timestamp)
+    calendar_days_stale = (requested_date - latest.trading_date).days
+    trading_sessions_stale = _count_trading_sessions_between(calendar, latest.trading_date, requested_date)
 
     exceeds_calendar_bound = (
         policy.max_stale_calendar_days is not None and calendar_days_stale > policy.max_stale_calendar_days
@@ -136,7 +157,7 @@ def resolve_price(
     )
     if exceeds_calendar_bound or exceeds_session_bound:
         return ResolvedPrice(
-            requested_timestamp=requested_timestamp, resolved_timestamp=latest.trading_date,
+            requested_timestamp=requested_at, resolved_timestamp=latest.trading_date,
             price=latest.close, calendar_days_stale=calendar_days_stale,
             trading_sessions_stale=trading_sessions_stale, status=PriceResolutionStatus.MISSING,
             price_convention=policy.price_convention, provenance=latest.provenance,
@@ -149,7 +170,7 @@ def resolve_price(
     if policy.legacy_compatible:
         warnings = (f"legacy-compatible unbounded stale-price policy used ({calendar_days_stale}d stale)",)
     return ResolvedPrice(
-        requested_timestamp=requested_timestamp, resolved_timestamp=latest.trading_date,
+        requested_timestamp=requested_at, resolved_timestamp=latest.trading_date,
         price=latest.close, calendar_days_stale=calendar_days_stale,
         trading_sessions_stale=trading_sessions_stale, status=status,
         price_convention=policy.price_convention, provenance=latest.provenance, warnings=warnings,

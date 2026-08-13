@@ -18,6 +18,7 @@ from atlas_quant.backtest.price_resolution import (
     PriceResolutionPolicy,
     PriceResolutionStatus,
     ResolvedPrice,
+    normalize_price_request_timestamp,
     resolve_price,
 )
 from atlas_quant.data.point_in_time import TradingCalendar
@@ -55,9 +56,9 @@ class PositionOutcome:
     instrument_id: InstrumentId
     role: SignalKind
     target_weight: float
-    entry_target_timestamp: date
+    entry_target_timestamp: datetime
     entry_resolved: ResolvedPrice | None
-    exit_target_timestamp: date
+    exit_target_timestamp: datetime
     exit_resolved: ResolvedPrice | None
     raw_return: float | None
     capped_return: float | None
@@ -70,8 +71,8 @@ class PositionOutcome:
 def resolve_position(
     recommendation: InstrumentRecommendation,
     prices: Sequence[DailyPriceObservation],
-    entry_target: date,
-    exit_target: date,
+    entry_target: date | datetime,
+    exit_target: date | datetime,
     policy: PriceResolutionPolicy,
     data_cutoff: datetime,
     calendar: TradingCalendar,
@@ -87,6 +88,7 @@ def resolve_position(
     position is visibly distinct from a genuinely flat (0%) one.
     """
     audit = AuditTrail()
+    exit_requested_at = normalize_price_request_timestamp(exit_target)
     entry = resolve_price(prices, entry_target, policy, data_cutoff, calendar)
     audit = audit.append(
         AuditRecord(
@@ -103,8 +105,8 @@ def resolve_position(
     if not entry_ok:
         return PositionOutcome(
             instrument_id=recommendation.instrument_id, role=recommendation.kind,
-            target_weight=recommendation.weight, entry_target_timestamp=entry_target,
-            entry_resolved=entry, exit_target_timestamp=exit_target, exit_resolved=None,
+            target_weight=recommendation.weight, entry_target_timestamp=entry.requested_timestamp,
+            entry_resolved=entry, exit_target_timestamp=exit_requested_at, exit_resolved=None,
             raw_return=None, capped_return=None, contribution=None,
             lifecycle_state=PositionLifecycleState.UNRESOLVED,
             warnings=("entry price unresolved",) + entry.warnings, audit_trail=audit,
@@ -125,8 +127,8 @@ def resolve_position(
     if not exit_ok:
         return PositionOutcome(
             instrument_id=recommendation.instrument_id, role=recommendation.kind,
-            target_weight=recommendation.weight, entry_target_timestamp=entry_target,
-            entry_resolved=entry, exit_target_timestamp=exit_target, exit_resolved=exit_resolved,
+            target_weight=recommendation.weight, entry_target_timestamp=entry.requested_timestamp,
+            entry_resolved=entry, exit_target_timestamp=exit_resolved.requested_timestamp, exit_resolved=exit_resolved,
             raw_return=None, capped_return=None, contribution=None,
             lifecycle_state=PositionLifecycleState.UNRESOLVED,
             warnings=("exit price unresolved",) + exit_resolved.warnings, audit_trail=audit,
@@ -148,8 +150,8 @@ def resolve_position(
     )
     return PositionOutcome(
         instrument_id=recommendation.instrument_id, role=recommendation.kind,
-        target_weight=recommendation.weight, entry_target_timestamp=entry_target,
-        entry_resolved=entry, exit_target_timestamp=exit_target, exit_resolved=exit_resolved,
+        target_weight=recommendation.weight, entry_target_timestamp=entry.requested_timestamp,
+        entry_resolved=entry, exit_target_timestamp=exit_resolved.requested_timestamp, exit_resolved=exit_resolved,
         raw_return=raw_return, capped_return=capped_return, contribution=contribution,
         lifecycle_state=PositionLifecycleState.CLOSED, warnings=warnings, audit_trail=audit,
     )

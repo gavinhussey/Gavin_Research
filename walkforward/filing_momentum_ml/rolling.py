@@ -143,15 +143,16 @@ def main() -> int:
         observations = tuple(observations_by_quarter.get(period.quarter_end, ()))
         outcomes = [
             build_forward_return_outcome(
-                obs.instrument_id, period.quarter_end, obs.feature_timestamp, period.exit_timestamp.date(),
+                obs.instrument_id, period.quarter_end, obs.feature_timestamp, period.exit_timestamp,
                 price_source.get(obs.instrument_id, ()), period.exit_timestamp,
             )
             for obs in observations
         ]
         labeling = assign_quarterly_labels(outcomes, period.quarter_end, n_winners=config.n_winners)
         label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
+        outcome_by_id = {o.instrument_id: o for o in outcomes}
         labeled_quarters[period.quarter_end] = [
-            LabeledObservation(obs, label_by_id[obs.instrument_id], period.label_availability_cutoff)
+            LabeledObservation(obs, label_by_id[obs.instrument_id], outcome_by_id[obs.instrument_id].label_available_at)
             for obs in observations
         ]
 
@@ -196,7 +197,7 @@ def main() -> int:
         )
         fallback_stats = fallback_source(period)
         benchmark = resolve_benchmark(
-            benchmark_id, benchmark_prices, period.entry_timestamp.date(), period.exit_timestamp.date(),
+            benchmark_id, benchmark_prices, period.entry_timestamp, period.exit_timestamp,
             backtest_config.price_policy, period.exit_timestamp, calendar,
         )
         benchmark_return = benchmark.raw_return
@@ -218,8 +219,8 @@ def main() -> int:
 
         positions = tuple(
             resolve_position(
-                rec, price_source.get(rec.instrument_id, ()), period.entry_timestamp.date(),
-                period.exit_timestamp.date(), backtest_config.price_policy, period.exit_timestamp,
+                rec, price_source.get(rec.instrument_id, ()), period.entry_timestamp,
+                period.exit_timestamp, backtest_config.price_policy, period.exit_timestamp,
                 calendar, return_cap=backtest_config.instrument_return_cap,
             )
             for rec in strategy_result.recommendations

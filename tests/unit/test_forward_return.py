@@ -22,6 +22,10 @@ def _price(day: date, close: float) -> DailyPriceObservation:
     )
 
 
+def _after_close(day: date) -> datetime:
+    return datetime.combine(day, datetime.min.time()).replace(hour=16, minute=1)
+
+
 class TestComputeForwardReturn:
     def test_positive_return(self):
         raw, clipped = compute_forward_return(100.0, 110.0)
@@ -64,7 +68,7 @@ class TestBuildForwardReturnOutcome:
 
     def test_correct_price_convention(self):
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 2), date(2026, 4, 15),
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)), _after_close(date(2026, 4, 15)),
             self._prices(), datetime(2026, 5, 1),
         )
         assert outcome.price_convention == "split_dividend_adjusted"
@@ -73,7 +77,7 @@ class TestBuildForwardReturnOutcome:
     def test_entry_price_zero_is_missing_reason(self):
         prices = [_price(date(2026, 1, 2), 0.0), _price(date(2026, 4, 15), 110.0)]
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 2), date(2026, 4, 15), prices, datetime(2026, 5, 1)
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)), _after_close(date(2026, 4, 15)), prices, datetime(2026, 5, 1)
         )
         assert outcome.missing_reason == "non-positive entry price"
         assert outcome.clipped_return is None
@@ -81,7 +85,7 @@ class TestBuildForwardReturnOutcome:
     def test_missing_entry_price(self):
         prices = [_price(date(2026, 4, 15), 110.0)]  # no price on/before feature_timestamp
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 2), date(2026, 4, 15), prices, datetime(2026, 5, 1)
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)), _after_close(date(2026, 4, 15)), prices, datetime(2026, 5, 1)
         )
         assert outcome.missing_reason == "missing entry price"
 
@@ -96,7 +100,7 @@ class TestBuildForwardReturnOutcome:
         # a valid, if stale, exit fallback).
         prices = [_price(date(2026, 6, 1), 100.0)]  # only a price after both timestamps
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 2), date(2026, 4, 15), prices, datetime(2026, 5, 1)
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)), _after_close(date(2026, 4, 15)), prices, datetime(2026, 5, 1)
         )
         assert outcome.missing_reason == "missing entry price"
         assert outcome.exit_price is None
@@ -107,7 +111,7 @@ class TestBuildForwardReturnOutcome:
         # stale price rather than reporting "missing exit."
         prices = [_price(date(2026, 1, 2), 100.0)]
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 2), date(2026, 4, 15), prices, datetime(2026, 5, 1)
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)), _after_close(date(2026, 4, 15)), prices, datetime(2026, 5, 1)
         )
         assert outcome.entry_price == 100.0
         assert outcome.exit_price == 100.0
@@ -118,14 +122,14 @@ class TestBuildForwardReturnOutcome:
         # on or before it (Jan 2) is used.
         prices = [_price(date(2026, 1, 2), 100.0), _price(date(2026, 4, 15), 110.0)]
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 3), date(2026, 4, 15), prices, datetime(2026, 5, 1)
+            IID, date(2025, 12, 31), datetime(2026, 1, 3), _after_close(date(2026, 4, 15)), prices, datetime(2026, 5, 1)
         )
         assert outcome.entry_price == 100.0
 
     def test_non_trading_exit_date_uses_last_price_on_or_before(self):
         prices = [_price(date(2026, 1, 2), 100.0), _price(date(2026, 4, 14), 110.0)]
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 2), date(2026, 4, 15), prices, datetime(2026, 5, 1)
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)), date(2026, 4, 15), prices, datetime(2026, 5, 1)
         )
         assert outcome.exit_price == 110.0
 
@@ -136,13 +140,37 @@ class TestBuildForwardReturnOutcome:
         # (see test_stale_entry_price_serves_as_exit_fallback_by_design),
         # never silently uses the excluded future price.
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 2), date(2026, 4, 15), prices, datetime(2026, 2, 1)
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)), _after_close(date(2026, 4, 15)), prices, datetime(2026, 2, 1)
         )
         assert outcome.exit_price == 100.0
         assert outcome.exit_price != 110.0
 
     def test_label_available_at_equals_sell_timestamp(self):
         outcome = build_forward_return_outcome(
-            IID, date(2025, 12, 31), date(2026, 1, 2), date(2026, 4, 15), self._prices(), datetime(2026, 5, 1)
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)), _after_close(date(2026, 4, 15)), self._prices(), datetime(2026, 5, 1)
         )
+        assert outcome.label_available_at == datetime(2026, 4, 15, 16, 1)
+
+    def test_midnight_target_does_not_use_same_day_close(self):
+        prices = [
+            _price(date(2026, 1, 1), 100.0),
+            _price(date(2026, 1, 2), 999.0),
+            _price(date(2026, 4, 14), 110.0),
+            _price(date(2026, 4, 15), 999.0),
+        ]
+        outcome = build_forward_return_outcome(
+            IID, date(2025, 12, 31), datetime(2026, 1, 2), datetime(2026, 4, 15),
+            prices, datetime(2026, 5, 1),
+        )
+        assert outcome.entry_price == 100.0
+        assert outcome.exit_price == 110.0
+        assert outcome.raw_return == pytest.approx(0.10)
         assert outcome.label_available_at == datetime(2026, 4, 15)
+
+    def test_label_availability_moves_after_close_when_exit_close_required(self):
+        outcome = build_forward_return_outcome(
+            IID, date(2025, 12, 31), _after_close(date(2026, 1, 2)),
+            datetime(2026, 4, 15, 16, 1), self._prices(), datetime(2026, 5, 1),
+        )
+        assert outcome.exit_price == 110.0
+        assert outcome.label_available_at == datetime(2026, 4, 15, 16, 1)

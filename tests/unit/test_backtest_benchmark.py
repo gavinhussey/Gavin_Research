@@ -34,21 +34,25 @@ def _price(day, close):
     )
 
 
+def _after_close(day):
+    return datetime.combine(day, datetime.min.time()).replace(hour=16, minute=1)
+
+
 class TestResolveBenchmark:
     def test_correct_spy_interval_and_return(self):
         prices = [_price(date(2026, 1, 5), 400.0), _price(date(2026, 4, 15), 420.0)]
         result = resolve_benchmark(
-            SPY, prices, date(2026, 1, 5), date(2026, 4, 15),
+            SPY, prices, _after_close(date(2026, 1, 5)), _after_close(date(2026, 4, 15)),
             PriceResolutionPolicy(), datetime(2026, 5, 1), CAL,
         )
         assert result.raw_return == pytest.approx((420.0 - 400.0) / 400.0)
-        assert result.requested_entry_timestamp == date(2026, 1, 5)
-        assert result.requested_exit_timestamp == date(2026, 4, 15)
+        assert result.requested_entry_timestamp == _after_close(date(2026, 1, 5))
+        assert result.requested_exit_timestamp == _after_close(date(2026, 4, 15))
 
     def test_missing_benchmark_entry(self):
         prices = [_price(date(2026, 4, 15), 420.0)]
         result = resolve_benchmark(
-            SPY, prices, date(2026, 1, 5), date(2026, 4, 15),
+            SPY, prices, _after_close(date(2026, 1, 5)), _after_close(date(2026, 4, 15)),
             PriceResolutionPolicy(), datetime(2026, 5, 1), CAL,
         )
         assert result.raw_return is None
@@ -57,7 +61,7 @@ class TestResolveBenchmark:
     def test_missing_benchmark_exit(self):
         prices = [_price(date(2026, 1, 5), 400.0)]
         result = resolve_benchmark(
-            SPY, prices, date(2026, 1, 5), date(2026, 4, 15),
+            SPY, prices, _after_close(date(2026, 1, 5)), _after_close(date(2026, 4, 15)),
             PriceResolutionPolicy(max_stale_calendar_days=1, max_stale_trading_sessions=1),
             datetime(2026, 5, 1), CAL,
         )
@@ -79,6 +83,6 @@ class TestResolveBenchmark:
 
         prices = [_price(date(2026, 1, 5), 400.0), _price(date(2026, 4, 15), 420.0)]
         benchmark_result = resolve_benchmark(
-            SPY, prices, date(2026, 1, 5), date(2026, 4, 15), PriceResolutionPolicy(), datetime(2026, 5, 1), CAL
+            SPY, prices, _after_close(date(2026, 1, 5)), _after_close(date(2026, 4, 15)), PriceResolutionPolicy(), datetime(2026, 5, 1), CAL
         )
         assert not isinstance(benchmark_result, PositionOutcome)

@@ -307,15 +307,16 @@ def _build_labeled_quarters(
         outcomes = [
             build_forward_return_outcome(
                 obs.instrument_id, period.quarter_end, obs.feature_timestamp,
-                period.exit_timestamp.date(), dependencies.price_source.get(obs.instrument_id, ()),
+                period.exit_timestamp, dependencies.price_source.get(obs.instrument_id, ()),
                 period.exit_timestamp,
             )
             for obs in observations
         ]
         labeling = assign_quarterly_labels(outcomes, period.quarter_end, n_winners=n_winners)
         label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
+        outcome_by_id = {o.instrument_id: o for o in outcomes}
         labeled[period.quarter_end] = [
-            LabeledObservation(obs, label_by_id[obs.instrument_id], period.label_availability_cutoff)
+            LabeledObservation(obs, label_by_id[obs.instrument_id], outcome_by_id[obs.instrument_id].label_available_at)
             for obs in observations
         ]
     return labeled
@@ -423,7 +424,7 @@ def run_filing_momentum_backtest(
         positions = tuple(
             resolve_position(
                 rec, dependencies.price_source.get(rec.instrument_id, ()),
-                period.entry_timestamp.date(), period.exit_timestamp.date(),
+                period.entry_timestamp, period.exit_timestamp,
                 config.price_policy, period.exit_timestamp, dependencies.trading_calendar,
                 return_cap=config.instrument_return_cap,
             )
@@ -436,7 +437,7 @@ def run_filing_momentum_backtest(
 
         benchmark = resolve_benchmark(
             dependencies.benchmark_instrument_id, benchmark_prices,
-            period.entry_timestamp.date(), period.exit_timestamp.date(),
+            period.entry_timestamp, period.exit_timestamp,
             config.price_policy, period.exit_timestamp, dependencies.trading_calendar,
         )
         benchmark_return = benchmark.raw_return

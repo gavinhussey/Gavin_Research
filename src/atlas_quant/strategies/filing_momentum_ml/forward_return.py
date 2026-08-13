@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Sequence
 
+from atlas_quant.backtest.price_resolution import (
+    daily_close_available_at,
+    normalize_price_request_timestamp,
+)
 from atlas_quant.data.records import CANONICAL_PRICE_CONVENTION, DailyPriceObservation, PriceConvention
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
@@ -38,9 +42,9 @@ class ForwardReturnOutcome:
     0.0" more explicitly than a float sentinel would.
 
     ``label_available_at`` is the timestamp at which this outcome becomes
-    knowable -- always ``sell_timestamp`` itself, since the forward return
-    cannot be computed before the exit price exists. A training row may
-    only be used when this is ``<=`` the target scoring cutoff (see
+    knowable -- the later of the modeled sell timestamp and the resolved
+    exit close's availability timestamp. A training row may only be used
+    when this is strictly before the target scoring cutoff (see
     ``training_dataset.py``).
     """
 
@@ -61,20 +65,26 @@ class ForwardReturnOutcome:
 
 
 def _price_on_or_before(
-    prices: Sequence[DailyPriceObservation], cutoff: date, data_cutoff: datetime
+    prices: Sequence[DailyPriceObservation], cutoff: date | datetime, data_cutoff: datetime
 ) -> DailyPriceObservation | None:
-    """The last price with ``trading_date <= cutoff``, never after ``data_cutoff``.
+    """The last completed close with ``trading_date <= cutoff``, never after ``data_cutoff``.
 
     Report/legacy convention (``ml_scorer.py``: ``ps[ps.index <=
     feature_dt].iloc[-1]`` / ``ps[ps.index <= sell_dt].iloc[-1]``): the
     *last* price on or before the target date, never the first price on
     or after it -- an "on or after" convention would look ahead past the
-    target date itself.
+    target date itself. Daily closes are eligible only after their 16:00
+    availability timestamp, so a midnight target cannot consume that
+    same day's close.
     """
+    requested_at = normalize_price_request_timestamp(cutoff)
+    requested_date = requested_at.date()
     eligible = [
         p
         for p in prices
-        if p.trading_date <= cutoff and datetime.combine(p.trading_date, datetime.min.time()) <= data_cutoff
+        if p.trading_date <= requested_date
+        and daily_close_available_at(p.trading_date) < requested_at
+        and daily_close_available_at(p.trading_date) < data_cutoff
     ]
     if not eligible:
         return None
@@ -108,31 +118,35 @@ def compute_forward_return(entry_price: float, exit_price: float) -> tuple[float
 def build_forward_return_outcome(
     instrument_id: InstrumentId,
     quarter_end: date,
-    feature_timestamp: date,
-    sell_timestamp: date,
+    feature_timestamp: date | datetime,
+    sell_timestamp: date | datetime,
     prices: Sequence[DailyPriceObservation],
     data_cutoff: datetime,
 ) -> ForwardReturnOutcome:
     """Build one instrument's forward-return outcome, report §4.2/§5.5.
 
-    Entry price: the last available close with ``trading_date <=
-    feature_timestamp``. Exit price: the last available close with
-    ``trading_date <= sell_timestamp``. Neither ever uses a price dated
-    after ``data_cutoff`` -- a price observed only in hindsight cannot
+    Entry price: the last completed daily close with ``trading_date <=
+    feature_timestamp`` and 16:00 close availability strictly before the
+    modeled feature timestamp. Exit price uses the same rule against
+    ``sell_timestamp``. Neither ever uses a close whose availability is on
+    or after ``data_cutoff`` -- a price observed only in hindsight cannot
     resolve an outcome. Missing entry/exit price, or a non-positive entry
     price (division would be undefined or economically meaningless),
     produce ``missing_reason`` and ``None`` returns rather than NaN or an
     exception.
     """
-    entry_obs = _price_on_or_before(prices, feature_timestamp, data_cutoff)
-    exit_obs = _price_on_or_before(prices, sell_timestamp, data_cutoff)
-    label_available_at = datetime.combine(sell_timestamp, datetime.min.time())
+    entry_at = normalize_price_request_timestamp(feature_timestamp)
+    sell_at = normalize_price_request_timestamp(sell_timestamp)
+    entry_obs = _price_on_or_before(prices, entry_at, data_cutoff)
+    exit_obs = _price_on_or_before(prices, sell_at, data_cutoff)
+    exit_available_at = daily_close_available_at(exit_obs.trading_date) if exit_obs else sell_at
+    label_available_at = max(sell_at, exit_available_at)
     provenance = tuple(p.provenance for p in (entry_obs, exit_obs) if p is not None)
 
     if entry_obs is None:
         return ForwardReturnOutcome(
             instrument_id=instrument_id, quarter_end=quarter_end,
-            feature_timestamp=feature_timestamp, sell_timestamp=sell_timestamp,
+            feature_timestamp=entry_at.date(), sell_timestamp=sell_at.date(),
             entry_price=None, exit_price=exit_obs.close if exit_obs else None,
             raw_return=None, clipped_return=None, label_available_at=label_available_at,
             price_convention=CANONICAL_PRICE_CONVENTION, data_cutoff=data_cutoff,
@@ -141,7 +155,7 @@ def build_forward_return_outcome(
     if exit_obs is None:
         return ForwardReturnOutcome(
             instrument_id=instrument_id, quarter_end=quarter_end,
-            feature_timestamp=feature_timestamp, sell_timestamp=sell_timestamp,
+            feature_timestamp=entry_at.date(), sell_timestamp=sell_at.date(),
             entry_price=entry_obs.close, exit_price=None,
             raw_return=None, clipped_return=None, label_available_at=label_available_at,
             price_convention=CANONICAL_PRICE_CONVENTION, data_cutoff=data_cutoff,
@@ -150,7 +164,7 @@ def build_forward_return_outcome(
     if entry_obs.close <= 0:
         return ForwardReturnOutcome(
             instrument_id=instrument_id, quarter_end=quarter_end,
-            feature_timestamp=feature_timestamp, sell_timestamp=sell_timestamp,
+            feature_timestamp=entry_at.date(), sell_timestamp=sell_at.date(),
             entry_price=entry_obs.close, exit_price=exit_obs.close,
             raw_return=None, clipped_return=None, label_available_at=label_available_at,
             price_convention=CANONICAL_PRICE_CONVENTION, data_cutoff=data_cutoff,
@@ -160,7 +174,7 @@ def build_forward_return_outcome(
     raw, clipped = compute_forward_return(entry_obs.close, exit_obs.close)
     return ForwardReturnOutcome(
         instrument_id=instrument_id, quarter_end=quarter_end,
-        feature_timestamp=feature_timestamp, sell_timestamp=sell_timestamp,
+        feature_timestamp=entry_at.date(), sell_timestamp=sell_at.date(),
         entry_price=entry_obs.close, exit_price=exit_obs.close,
         raw_return=raw, clipped_return=clipped, label_available_at=label_available_at,
         price_convention=CANONICAL_PRICE_CONVENTION, data_cutoff=data_cutoff,

@@ -23,9 +23,11 @@ change.
 `raw_return = (exit_price - entry_price) / entry_price`, entry reference
 = `FeatureObservation.feature_timestamp`, exit = the quarter's sell date
 (`next_quarter_end + 42 calendar days`, report §5.5). Entry and exit
-prices both resolve via "last available `split_dividend_adjusted` close
-on or before the target date, never after `data_cutoff`" — cross-checked
-against legacy `ml_scorer.py`'s `ps[ps.index <= X].iloc[-1]` convention.
+prices both resolve via "last completed `split_dividend_adjusted` close
+on or before the target date, whose 16:00 close availability is strictly
+before the modeled target timestamp and never after `data_cutoff`." This
+preserves the legacy `ps[ps.index <= X].iloc[-1]` date direction while
+removing the invalid assumption that a same-day close exists at midnight.
 **Design implication, confirmed and tested**: because `sell_timestamp >=
 feature_timestamp` always, a resolved entry price is always also a valid
 (possibly stale) exit-price fallback — "entry resolves, exit is missing"
@@ -64,9 +66,10 @@ quarter's positive rate.
 
 ## Label availability and the rolling training window (report §4.4)
 
-Every labeled outcome has a `label_available_at` timestamp — always the
-outcome's own `sell_timestamp`, since the forward return cannot be known
-before the exit price exists. `training_dataset.build_training_dataset`
+Every labeled outcome has a `label_available_at` timestamp — the later of
+the modeled sell timestamp and the resolved exit close's availability
+timestamp, since the forward return cannot be known before the exit price
+exists. `training_dataset.build_training_dataset`
 enforces `D_train^(q) = {(x_i,q', y_i,q') : q - 3yr <= q' < q}` (report's
 own set notation, note the strict `q' < q`) *and* an additional,
 essential requirement the report's notation doesn't spell out:
