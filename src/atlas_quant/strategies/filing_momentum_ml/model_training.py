@@ -46,6 +46,7 @@ class ModelIdentity:
     model_schema_identity: str
     model_config_identity: str
     training_window_identity: str
+    training_data_identity: str
     training_cutoff: datetime
     included_quarters: tuple[date, ...]
     estimator_type: str
@@ -61,6 +62,7 @@ class ModelIdentity:
                 "model_schema_identity": self.model_schema_identity,
                 "model_config_identity": self.model_config_identity,
                 "training_window_identity": self.training_window_identity,
+                "training_data_identity": self.training_data_identity,
                 "training_cutoff": self.training_cutoff,
                 "included_quarters": [q.isoformat() for q in self.included_quarters],
                 "estimator_type": self.estimator_type,
@@ -74,6 +76,21 @@ def _training_window_identity(dataset: TrainingDatasetResult) -> str:
         {
             "target_quarter_end": dataset.target_quarter_end.isoformat(),
             "included_quarters": [q.isoformat() for q in dataset.included_quarters],
+        }
+    )
+
+
+def _training_data_identity(dataset: TrainingDatasetResult) -> str:
+    """Fingerprint the exact matrix/label rows a cached fit was trained on."""
+    return compute_config_identity(
+        {
+            "instrument_ids": [str(i) for i in dataset.instrument_ids],
+            "feature_timestamps": [str(t) for t in dataset.feature_timestamps],
+            "label_available_timestamps": [
+                ts.isoformat() for ts in dataset.label_available_timestamps
+            ],
+            "rows": [list(row) for row in dataset.feature_matrix.rows],
+            "labels": list(dataset.labels),
         }
     )
 
@@ -98,6 +115,7 @@ def compute_model_identity(
         model_schema_identity=dataset.model_schema_identity,
         model_config_identity=compute_config_identity(resolve_estimator_parameters(model_config)),
         training_window_identity=_training_window_identity(dataset),
+        training_data_identity=_training_data_identity(dataset),
         training_cutoff=dataset.training_cutoff,
         included_quarters=dataset.included_quarters,
         estimator_type=build_info.estimator_type,

@@ -13,6 +13,7 @@ cohort-snapshot -> features -> labels -> training-dataset path with a
 mixed-calendar universe.
 """
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -29,6 +30,7 @@ from atlas_quant.strategies.filing_momentum_ml.feature_cache import (
 from atlas_quant.strategies.filing_momentum_ml.feature_pipeline import (
     RejectedObservation,
     build_feature_observation,
+    latest_completed_price_bar_date,
     run_feature_pipeline,
 )
 from atlas_quant.strategies.filing_momentum_ml.forward_return import build_forward_return_outcome
@@ -124,6 +126,13 @@ def _make_daily_prices(instrument_id, start, end, start_price=100.0, growth=0.00
 
 _PRICE_START = date(2020, 1, 1)
 _PRICE_END = date(2023, 6, 30)
+
+
+def _with_mutated_close(prices, trading_date: date, close: float):
+    return [
+        replace(p, close=close) if p.trading_date == trading_date else p
+        for p in prices
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +321,61 @@ class TestEntryTimingRefinement:
         assert result.feature_timestamp == buy_ts.date()  # fallback, not filed_at + 1 trading day
         stages = {r.stage: r for r in result.audit_trail}
         assert stages["timing_resolution"].data["cohort_match"] is False
+
+
+class TestPriceFeatureTemporalCutoff:
+    def test_buy_timestamp_before_market_close_uses_prior_completed_bar(self):
+        prices = _make_daily_prices(_AAPL, date(2022, 1, 1), date(2023, 5, 12))
+        decision_ts = datetime(2023, 5, 12, 0, 0)
+
+        assert latest_completed_price_bar_date(prices, date(2023, 5, 12), decision_ts) == date(2023, 5, 11)
+
+    def test_friday_midnight_decision_uses_thursday_not_weekend_placeholder(self):
+        prices = _make_daily_prices(_AAPL, date(2022, 1, 1), date(2023, 5, 12))
+        friday_midnight = datetime(2023, 5, 12, 0, 0)
+
+        assert friday_midnight.date().weekday() == 4
+        assert latest_completed_price_bar_date(prices, friday_midnight.date(), friday_midnight) == date(2023, 5, 11)
+
+    def test_decision_after_market_holiday_uses_latest_observed_session(self):
+        prices = [
+            p
+            for p in _make_daily_prices(_AAPL, date(2022, 1, 1), date(2023, 7, 5))
+            if p.trading_date != date(2023, 7, 4)
+        ]
+        decision_ts = datetime(2023, 7, 5, 0, 0)
+
+        assert latest_completed_price_bar_date(prices, date(2023, 7, 5), decision_ts) == date(2023, 7, 3)
+
+    def test_non_calendar_aligned_cohort_does_not_use_buy_date_close(self):
+        filings = _make_quarterly_filings(_AAPL, _AAPL_FISCAL_ENDS)
+        cohort_end = _SHARED_COHORT_ENDS[-1]
+        buy_ts = _cohort_buy_timestamp(cohort_end)
+        prices = _make_daily_prices(_AAPL, _PRICE_START, _PRICE_END)
+        same_day_mutated = _with_mutated_close(prices, buy_ts.date(), 9999.0)
+        prior_day_mutated = _with_mutated_close(prices, date(2023, 5, 11), 9999.0)
+
+        kwargs = dict(
+            config=_CONFIG,
+            calendar=_calendar_from(_PRICE_START, _PRICE_END),
+            sector_encoder=SectorEncoder(),
+            instrument_id=_AAPL,
+            strategy_cohort_end=cohort_end,
+            cohort_buy_timestamp=buy_ts,
+            filings=filings,
+            sector_record=make_sector_record(_AAPL, "Information Technology", datetime(2023, 1, 1)),
+            data_cutoff=buy_ts,
+        )
+        base = build_feature_observation(prices=prices, **kwargs)
+        same_day = build_feature_observation(prices=same_day_mutated, **kwargs)
+        prior_day = build_feature_observation(prices=prior_day_mutated, **kwargs)
+
+        assert not isinstance(base, RejectedObservation)
+        assert not isinstance(same_day, RejectedObservation)
+        assert not isinstance(prior_day, RejectedObservation)
+        assert base.feature_timestamp == buy_ts.date()
+        assert base.features == same_day.features
+        assert base.features != prior_day.features
 
 
 # ---------------------------------------------------------------------------

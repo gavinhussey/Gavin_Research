@@ -18,7 +18,7 @@ construction, and backtesting.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Mapping, Sequence
 
 from atlas_quant.data.point_in_time import (
@@ -65,6 +65,7 @@ _PRICE_MOMENTUM_WINDOWS: tuple[tuple[str, int], ...] = (
 _VOL_20D_RETURNS = 20
 _VOL_63D_RETURNS = 63
 _TREND_WINDOW = 6
+_DAILY_BAR_AVAILABLE_TIME = time(16, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,19 +192,53 @@ def compute_raw_fcf_trend(filings: Sequence[FilingFundamentals]) -> float:
     return ols_trend(_clean(fcf), window=_TREND_WINDOW)
 
 
+def latest_completed_price_bar_date(
+    prices: Sequence[DailyPriceObservation],
+    feature_timestamp: date,
+    as_of_timestamp: datetime,
+) -> date | None:
+    """Latest daily price bar usable for a decision at ``as_of_timestamp``.
+
+    A daily close is modeled as available at 16:00 on its trading date.
+    Eligibility is strict: ``available_at < as_of_timestamp``. The
+    available price series itself determines the previous completed
+    session, so weekends and holidays do not require calendar-day
+    subtraction.
+    """
+    eligible = [
+        p
+        for p in prices
+        if p.trading_date <= feature_timestamp
+        and datetime.combine(p.trading_date, _DAILY_BAR_AVAILABLE_TIME) < as_of_timestamp
+    ]
+    if not eligible:
+        return None
+    return max(p.trading_date for p in eligible)
+
+
 def compute_price_features(
-    prices: Sequence[DailyPriceObservation], feature_timestamp: date
+    prices: Sequence[DailyPriceObservation],
+    feature_timestamp: date,
+    *,
+    as_of_timestamp: datetime | None = None,
 ) -> dict[str, float]:
     """Compute the 6 price/volatility features (report §3.2-§3.3).
 
-    Only prices with ``trading_date <= feature_timestamp`` are used — the
-    close *on* ``feature_timestamp`` itself is included as ``P_0`` (report
-    §3.2: "closing price on day t, as of entry date"), never a date after
-    it. ``prices`` may be given in any order; this function sorts
-    defensively by ``trading_date`` before use.
+    Only completed daily bars whose availability timestamp is strictly
+    before ``as_of_timestamp`` are eligible. Daily closes are modeled as
+    becoming available at 16:00 on their own trading date; under the
+    historical backtest clock's midnight entry timestamp, the buy-date
+    close is therefore not eligible. If ``as_of_timestamp`` is omitted,
+    the legacy ``trading_date <= feature_timestamp`` behavior is retained
+    for direct callers that are not making a point-in-time decision.
     """
+    cutoff_date = (
+        latest_completed_price_bar_date(prices, feature_timestamp, as_of_timestamp)
+        if as_of_timestamp is not None
+        else feature_timestamp
+    )
     eligible = sorted(
-        (p for p in prices if p.trading_date <= feature_timestamp),
+        (p for p in prices if cutoff_date is not None and p.trading_date <= cutoff_date),
         key=lambda p: p.trading_date,
     )
     closes = [p.close for p in eligible]
@@ -351,7 +386,11 @@ def build_feature_observation(
     if config.fcf_mode == "raw":
         fundamentals["fcf_trend"] = compute_raw_fcf_trend(selection.selected)
 
-    price_features = compute_price_features(prices, feature_date)
+    price_features = compute_price_features(
+        prices,
+        feature_date,
+        as_of_timestamp=data_cutoff,
+    )
 
     raw_sector = sector_record.raw_sector if sector_record else None
     classification = sector_encoder.classify(

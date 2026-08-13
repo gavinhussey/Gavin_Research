@@ -1,0 +1,29 @@
+Filing Momentum ML Backtest Statistics
+==========================================
+
+window: 2015-03-31 through 2026-06-30
+benchmark: SPY
+state: completed
+run_identity: 27270feb8c58a0f79fb9202634904fce1ed59e83f5531420d944a9994e4fddd9
+analysis_identity: 39401cfc129aaf21d96837fec19446e97bf7afac3bdcd07ed45e500835e4a0d3
+
+
+invested (37 quarters):
+  total_return=1348.8% benchmark_total_return=247.0%
+  sharpe=1.26 sortino=2.43 information_ratio=0.96
+  max_drawdown=-30.8% (2021-06-30 -> 2021-12-31)
+  win_rate=74.3%
+
+primary-only (34 quarters):
+  total_return=852.0% benchmark_total_return=166.9%
+  sharpe=1.15 sortino=2.25 information_ratio=0.91
+  max_drawdown=-30.8% (2021-06-30 -> 2021-12-31)
+  win_rate=71.9%
+
+fallback-only (3 quarters):
+  total_return=52.2% benchmark_total_return=30.0%
+  sharpe=4.44 sortino=n/a information_ratio=3.43
+  max_drawdown=0.0% (2017-12-31 -> 2017-12-31)
+  win_rate=100.0%
+
+sharpe_confidence_interval (95%): [0.83, 1.69]

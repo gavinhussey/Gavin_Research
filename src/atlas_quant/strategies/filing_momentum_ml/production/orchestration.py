@@ -24,7 +24,7 @@ documents and uses, and the same pure
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -95,6 +95,8 @@ from atlas_quant.strategies.filing_momentum_ml.reporting.report_builder import b
 from atlas_quant.strategies.filing_momentum_ml.reporting.report_model import FilingMomentumReport, ReportOptions
 from atlas_quant.strategies.filing_momentum_ml.sector_encoding import SectorEncoder
 
+_DAILY_BAR_AVAILABLE_TIME = time(16, 0)
+
 
 class ProductionRunState(str, Enum):
     """The top-level production run's own outcome, distinct from any
@@ -112,14 +114,27 @@ class ProductionRunState(str, Enum):
 
 
 def _last_price_on_or_before(
-    prices: Sequence[DailyPriceObservation], cutoff: date
+    prices: Sequence[DailyPriceObservation],
+    cutoff: date,
+    *,
+    as_of_timestamp: datetime | None = None,
 ) -> DailyPriceObservation | None:
     """Same "last price with trading_date <= cutoff" convention
     :func:`atlas_quant.strategies.filing_momentum_ml.forward_return
     ._price_on_or_before` documents -- duplicated here (that helper is
     private to its module) rather than inventing a different convention
-    for fallback-asset trailing returns."""
-    eligible = [p for p in prices if p.trading_date <= cutoff]
+    for fallback-asset trailing returns. When ``as_of_timestamp`` is
+    supplied, daily bars are eligible only after their own 16:00 close and
+    only under strict ``available_at < as_of_timestamp`` semantics."""
+    eligible = []
+    for p in prices:
+        if p.trading_date > cutoff:
+            continue
+        if as_of_timestamp is not None:
+            available_at = datetime.combine(p.trading_date, _DAILY_BAR_AVAILABLE_TIME)
+            if available_at >= as_of_timestamp:
+                continue
+        eligible.append(p)
     if not eligible:
         return None
     return max(eligible, key=lambda p: p.trading_date)
@@ -152,8 +167,16 @@ def build_fallback_statistics_source(
             returns: list[float] = []
             last_provenance: DataProvenance | None = None
             for trailing_period in trailing:
-                entry = _last_price_on_or_before(prices, trailing_period.entry_timestamp.date())
-                exit_ = _last_price_on_or_before(prices, trailing_period.exit_timestamp.date())
+                entry = _last_price_on_or_before(
+                    prices,
+                    trailing_period.entry_timestamp.date(),
+                    as_of_timestamp=period.evaluation_timestamp,
+                )
+                exit_ = _last_price_on_or_before(
+                    prices,
+                    trailing_period.exit_timestamp.date(),
+                    as_of_timestamp=period.evaluation_timestamp,
+                )
                 if entry is None or exit_ is None or entry.close <= 0:
                     continue
                 raw_return, _ = compute_forward_return(entry.close, exit_.close)

@@ -1,5 +1,6 @@
 """Unit tests for atlas_quant.strategies.filing_momentum_ml.model_training."""
 
+import dataclasses
 from datetime import date, datetime
 
 import pytest
@@ -181,9 +182,26 @@ class TestTrainModel:
         r1 = train_model(dataset, eligibility, FilingMomentumMLConfig().model, factory,
                           strategy_id="filing_momentum_ml", strategy_version="0.1.0")
 
-        import dataclasses
-
         modified_dataset = dataclasses.replace(dataset, model_schema_identity="different" * 8)
         r2 = train_model(modified_dataset, eligibility, FilingMomentumMLConfig().model, factory,
                           strategy_id="filing_momentum_ml", strategy_version="0.1.0")
+        assert r1.model_identity.identity() != r2.model_identity.identity()
+
+    def test_identity_changes_with_training_feature_values(self):
+        dataset = _dataset()
+        eligibility = check_training_eligibility(dataset, min_train_quarters=8, n_winners=10)
+        factory, _ = _fake_factory()
+        r1 = train_model(dataset, eligibility, FilingMomentumMLConfig().model, factory,
+                          strategy_id="filing_momentum_ml", strategy_version="0.1.0")
+
+        rows = [list(row) for row in dataset.feature_matrix.rows]
+        rows[0][0] += 1.0
+        modified_matrix = dataclasses.replace(
+            dataset.feature_matrix,
+            rows=tuple(tuple(row) for row in rows),
+        )
+        modified_dataset = dataclasses.replace(dataset, feature_matrix=modified_matrix)
+        r2 = train_model(modified_dataset, eligibility, FilingMomentumMLConfig().model, factory,
+                          strategy_id="filing_momentum_ml", strategy_version="0.1.0")
+
         assert r1.model_identity.identity() != r2.model_identity.identity()

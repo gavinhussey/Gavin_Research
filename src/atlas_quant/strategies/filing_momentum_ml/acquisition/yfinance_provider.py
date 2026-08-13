@@ -34,7 +34,14 @@ class PriceHistoryProvider(Protocol):
 
 class YFinancePriceProvider:
     """The real price provider, backed by ``yfinance``. Never used to
-    acquire data from a test -- see ``tests/fixtures``' ``FakeHistoryProvider``."""
+    acquire data from a test -- see ``tests/fixtures``' ``FakeHistoryProvider``.
+
+    ``auto_adjust=True`` produces a current adjusted-price history. That
+    keeps total-return-style historical returns internally consistent, but
+    it is not a true point-in-time corporate-action vintage for model
+    features; a provider with raw bars plus point-in-time action records
+    is required to eliminate that data-vintage limitation.
+    """
 
     def fetch_daily_history(self, symbol: str):
         import yfinance as yf  # raises ImportError if not installed
@@ -51,7 +58,8 @@ def parse_price_history_to_records(
     Rows with a non-finite or non-positive close are skipped (reported
     later by :mod:`production.validation`, never silently zeroed);
     ``price_convention`` is always ``"split_dividend_adjusted"`` --
-    ``auto_adjust=True``'s own documented behavior.
+    ``auto_adjust=True``'s own documented behavior. This convention does
+    not by itself guarantee point-in-time-safe feature vintages.
     """
     records: list[RawPriceRecord] = []
     for timestamp, row in history.iterrows():

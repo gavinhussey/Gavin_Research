@@ -1,0 +1,27 @@
+{
+  "primary_feature_set": "A+B+C+D+E+F+G+H+I (full engineered set, 34 features)",
+  "test_years": [
+    2008,
+    2026
+  ],
+  "objectives": {
+    "A": "R7_BCE_CONTROL",
+    "B": "R7_RETURN_WEIGHTED_BCE",
+    "C": "R7_BCE_PLUS_RETURN_UTILITY"
+  },
+  "fixed_hyperparameters": {
+    "W_CAP": 3.0,
+    "R_CAP": 3.0,
+    "LAMBDA": 0.1
+  },
+  "pooled_auc": {
+    "NN_v1_A": 0.5693689261453967,
+    "NN_v1_B": 0.567015252685841,
+    "NN_v1_C": 0.5700532639591462,
+    "NN_v2_A": 0.5708313532784122,
+    "NN_v2_B": 0.5730653177241413,
+    "NN_v2_C": 0.5711529604470781
+  },
+  "bengio_feasibility_classification": "DIRECT_BENGIO_OBJECTIVE_DEFERRED_SOURCE_AMBIGUITY",
+  "runtime_seconds": 254.638671875
+}

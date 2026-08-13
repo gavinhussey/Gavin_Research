@@ -1,0 +1,14 @@
+{
+  "classification": "DIRECT_BENGIO_OBJECTIVE_DEFERRED_SOURCE_AMBIGUITY",
+  "recovered_criterion": "C = sum_t [ log(sum_i r[t,i]*w[t,i]) + log(1 - sum_i c_i*|w[t,i]-w'[(t-1),i]|) ], w'[(t-1),i] = w[(t-1),i]*r[(t-1),i] / sum_j w[(t-1),j]*r[(t-1),j]",
+  "unresolved_assumptions_required_simultaneously": [
+    "Differentiable mapping from 11 independent scalar model scores to a valid portfolio weight vector w[t,:] is unspecified -- softmax over scores, rank-based allocation, and top-K equal-weight are all plausible but materially different choices the source does not disambiguate.",
+    "Whether cash/unallocated capital is permitted (sum_i w[t,i] <= 1) or full investment is forced (sum_i w[t,i] == 1) is not stated.",
+    "Long-only vs. signed (short-permitting) weights is not stated; our system has never modeled shorting anywhere in R1-R6.",
+    "The per-asset transaction cost coefficients c_i are not published for this universe/paper.",
+    "How the drifted prior weight w'[(t-1),i] is initialized for the very first batch/fold (no t-1 portfolio exists yet) is unspecified.",
+    "Portfolio state (w[(t-1),:]) must persist ACROSS weekly batches for the turnover term to be computable -- this requires temporally-ordered, non-shuffled training, which is a structural change to the current per-row i.i.d. training loop (Step 5/8 of R6 already showed stateful sequencing changes are themselves a confounding variable, not something to introduce silently inside a loss-function ablation).",
+    "R7's architecture produces one independent scalar score per (week, sector) row -- there is no single forward pass that jointly emits all 11 weights for a week (that would be R4's MIMO geometry, already tested and found R4_NULL) -- so the portfolio-return log-term literally cannot be computed from the current per-row training batches without first resolving the MIMO question again."
+  ],
+  "reasoning": "Implementing the recovered Bengio criterion faithfully would require resolving at least six materially independent unknowns simultaneously (weight mapping, cash/leverage, long-only vs signed, transaction costs, prior-weight initialization, and sequential/stateful batching), and would also implicitly require re-adopting either R4's MIMO output geometry (R4_NULL) or R6's stateful sequential training (R6_NEGATIVE) -- both already tested and rejected on their own terms in this project. Bundling all of these into a single R7 loss-ablation would make any result impossible to attribute to the loss function specifically, violating R7's bounded-reconstruction mandate. Objectives B and C are the defensible, single-assumption-at-a-time reconstruction candidates that remain answerable within the current architecture; the full Bengio portfolio objective is deferred, not attempted, in this pass."
+}

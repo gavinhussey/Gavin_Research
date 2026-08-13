@@ -30,6 +30,7 @@ def _model_identity():
     return ModelIdentity(
         strategy_id="filing_momentum_ml", strategy_version="0.1.0", model_schema_identity="s" * 64,
         model_config_identity="c" * 64, training_window_identity="w" * 64,
+        training_data_identity="d" * 64,
         training_cutoff=datetime(2026, 1, 1), included_quarters=(QEND,),
         estimator_type="FakeEstimator", library="fake", library_version=None, random_state=42,
     )

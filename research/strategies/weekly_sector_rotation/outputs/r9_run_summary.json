@@ -1,0 +1,46 @@
+{
+  "mc_passes_primary": 100,
+  "mc_passes_stability": 50,
+  "confidence_mass_threshold": 0.8,
+  "confidence_std_multiplier": 1.0,
+  "underlying_auc": {
+    "NN_v1": 0.5693678469913763,
+    "NN_v2": 0.5708322204557499
+  },
+  "overall_confidence_pass_rate": {
+    "NN_v1": 0.0009372949667260286,
+    "NN_v2": 9.372949667260286e-05
+  },
+  "coverage_summary": [
+    {
+      "model": "NN_v1",
+      "K": 2,
+      "acceptance_rate": 0.0020639834881320948,
+      "mean_accepted_per_week": 0.0041279669762641896,
+      "active_week_pct": 0.0041279669762641896
+    },
+    {
+      "model": "NN_v1",
+      "K": 3,
+      "acceptance_rate": 0.0013759889920880633,
+      "mean_accepted_per_week": 0.0041279669762641896,
+      "active_week_pct": 0.0041279669762641896
+    },
+    {
+      "model": "NN_v2",
+      "K": 2,
+      "acceptance_rate": 0.0,
+      "mean_accepted_per_week": 0.0,
+      "active_week_pct": 0.0
+    },
+    {
+      "model": "NN_v2",
+      "K": 3,
+      "acceptance_rate": 0.0,
+      "mean_accepted_per_week": 0.0,
+      "active_week_pct": 0.0
+    }
+  ],
+  "rule_appears_degenerate": true,
+  "runtime_seconds": 37.4520800113678
+}

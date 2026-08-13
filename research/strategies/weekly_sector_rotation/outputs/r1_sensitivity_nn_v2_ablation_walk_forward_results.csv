@@ -1,0 +1,2 @@
+target,feature_set,n_features,accuracy,auc,n_test_rows,mean_spread_k2,hit_rate_k2,mean_spread_k3,hit_rate_k3
+sensitivity_abs_1pct_fri_fri,A+B+C+D+E+F+G+H+I,34,0.6223992502343018,0.5672190324324358,10670,0.0020290398411181476,0.5329896907216495,0.0014022195520699931,0.5278350515463918
