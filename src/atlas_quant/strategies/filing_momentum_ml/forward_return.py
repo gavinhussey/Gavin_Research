@@ -22,7 +22,8 @@ from atlas_quant.backtest.price_resolution import (
     daily_close_available_at,
     normalize_price_request_timestamp,
 )
-from atlas_quant.data.records import CANONICAL_PRICE_CONVENTION, DailyPriceObservation, PriceConvention
+from atlas_quant.backtest.corporate_actions import compute_economic_return
+from atlas_quant.data.records import CANONICAL_PRICE_CONVENTION, CorporateActionRecord, DailyPriceObservation, PriceConvention
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
 
@@ -62,6 +63,9 @@ class ForwardReturnOutcome:
     provenance: tuple[DataProvenance, ...]
     missing_reason: str | None = None
     label: int | None = None
+    split_count: int = 0
+    dividend_count: int = 0
+    dividend_cash: float = 0.0
 
 
 def _price_on_or_before(
@@ -122,6 +126,7 @@ def build_forward_return_outcome(
     sell_timestamp: date | datetime,
     prices: Sequence[DailyPriceObservation],
     data_cutoff: datetime,
+    corporate_actions: Sequence[CorporateActionRecord] = (),
 ) -> ForwardReturnOutcome:
     """Build one instrument's forward-return outcome, report §4.2/§5.5.
 
@@ -171,12 +176,19 @@ def build_forward_return_outcome(
             provenance=provenance, missing_reason="non-positive entry price",
         )
 
-    raw, clipped = compute_forward_return(entry_obs.close, exit_obs.close)
+    economic = compute_economic_return(
+        entry_obs.close, exit_obs.close, entry_obs.trading_date, exit_obs.trading_date,
+        corporate_actions, include_dividends=True,
+    )
+    raw = economic.raw_return
+    clipped = max(-LABEL_RETURN_CLIP, min(LABEL_RETURN_CLIP, raw))
     return ForwardReturnOutcome(
         instrument_id=instrument_id, quarter_end=quarter_end,
         feature_timestamp=entry_at.date(), sell_timestamp=sell_at.date(),
         entry_price=entry_obs.close, exit_price=exit_obs.close,
         raw_return=raw, clipped_return=clipped, label_available_at=label_available_at,
-        price_convention=CANONICAL_PRICE_CONVENTION, data_cutoff=data_cutoff,
+        price_convention=entry_obs.price_convention, data_cutoff=data_cutoff,
         provenance=provenance, missing_reason=None,
+        split_count=economic.split_count, dividend_count=economic.dividend_count,
+        dividend_cash=economic.dividend_cash,
     )

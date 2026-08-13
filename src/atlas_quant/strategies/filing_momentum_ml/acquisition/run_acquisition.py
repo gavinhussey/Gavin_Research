@@ -19,10 +19,11 @@ from typing import Callable
 from atlas_quant.strategies.filing_momentum_ml.acquisition.http_client import HttpClient
 from atlas_quant.strategies.filing_momentum_ml.acquisition.sec_edgar import fetch_filings_for_symbol, fetch_ticker_to_cik_map
 from atlas_quant.strategies.filing_momentum_ml.acquisition.universe import build_universe_records
-from atlas_quant.strategies.filing_momentum_ml.acquisition.yfinance_provider import PriceHistoryProvider, fetch_prices_for_symbol
+from atlas_quant.strategies.filing_momentum_ml.acquisition.yfinance_provider import PriceHistoryProvider, fetch_price_history_for_symbol
 from atlas_quant.strategies.filing_momentum_ml.production.data_provenance import DataProvenanceManifest
 from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
     RawFilingRecord,
+    RawCorporateActionRecord,
     RawPriceRecord,
     RawUniverseRecord,
 )
@@ -41,6 +42,7 @@ class AcquisitionResult:
     symbols_with_filings: int
     symbols_with_prices: int
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    corporate_actions: tuple[RawCorporateActionRecord, ...] = field(default_factory=tuple)
 
 
 def run_full_acquisition(
@@ -71,6 +73,7 @@ def run_full_acquisition(
 
     all_filings: list[RawFilingRecord] = []
     all_prices: list[RawPriceRecord] = []
+    all_corporate_actions: list[RawCorporateActionRecord] = []
     warnings: list[str] = []
     symbols_with_filings = 0
     symbols_with_prices = 0
@@ -93,18 +96,20 @@ def run_full_acquisition(
             all_filings.extend(filings)
 
         try:
-            prices = fetch_prices_for_symbol(price_provider, symbol, source="yfinance", retrieved_at=retrieved_at)
+            price_history = fetch_price_history_for_symbol(price_provider, symbol, source="yfinance", retrieved_at=retrieved_at)
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"{symbol}: yfinance fetch failed: {exc}")
         else:
+            prices = price_history.prices
             if prices:
                 symbols_with_prices += 1
             else:
                 warnings.append(f"{symbol}: no price history acquired")
             all_prices.extend(prices)
+            all_corporate_actions.extend(price_history.corporate_actions)
 
     return AcquisitionResult(
-        filings=tuple(all_filings), prices=tuple(all_prices),
+        filings=tuple(all_filings), prices=tuple(all_prices), corporate_actions=tuple(all_corporate_actions),
         universe=tuple(r for r in universe_records if r.symbol in symbol_set),
         symbols_attempted=len(symbols), symbols_with_filings=symbols_with_filings,
         symbols_with_prices=symbols_with_prices, warnings=tuple(warnings),
@@ -125,6 +130,7 @@ def write_raw_data_files(result: AcquisitionResult, raw_root: Path) -> dict[str,
     written = {}
     for name, records in (
         ("filings.json", result.filings), ("prices.json", result.prices),
+        ("corporate_actions.json", result.corporate_actions),
         ("universe.json", result.universe),
     ):
         path = raw_root / name
@@ -154,13 +160,14 @@ def build_acquisition_manifest(
         universe_construction_method="present_day_snapshot_applied_retroactively",
         survivorship_biased=True, filing_source="sec_edgar",
         filing_point_in_time_status="filed_at taken directly from SEC's own 'filed' field",
-        price_source="yfinance", price_convention="split_dividend_adjusted",
+        price_source="yfinance", price_convention="unadjusted",
         sector_source="sec_edgar_sic_header_crosswalk (acquire-sic-history, run separately)",
         sector_override_identity="none",
         trading_calendar_source="derived from acquired price trading dates",
         coverage_start=coverage_start, coverage_end=coverage_end,
         row_counts={
             "filings": len(result.filings), "prices": len(result.prices),
+            "corporate_actions": len(result.corporate_actions),
             "universe": len(result.universe),
         },
         missing_data_summary={
@@ -168,7 +175,10 @@ def build_acquisition_manifest(
             "symbols_without_prices": result.symbols_attempted - result.symbols_with_prices,
         },
         duplicate_summary={},
-        corporate_action_treatment="split_dividend_adjusted_close (yfinance auto_adjust=True)",
+        corporate_action_treatment=(
+            "raw_unadjusted_ohlc_plus_yfinance_effective_date_splits_dividends; "
+            "no announcement-vintage timestamps"
+        ),
         delisting_treatment="not handled -- present-day universe only, no delisted names included",
         data_corrections=(), source_file_hashes={},
         strategy_config_identity=strategy_config_identity,

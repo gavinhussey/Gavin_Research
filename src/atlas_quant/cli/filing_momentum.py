@@ -71,10 +71,12 @@ from atlas_quant.strategies.filing_momentum_ml.production.feature_label_build im
     build_production_labels,
 )
 from atlas_quant.strategies.filing_momentum_ml.production.normalization import (
+    RawCorporateActionRecord,
     RawFilingRecord,
     RawPriceRecord,
     RawSicHistoryRecord,
     RawUniverseRecord,
+    normalize_corporate_actions,
     normalize_filings,
     normalize_prices,
     normalize_sic_history_batch,
@@ -160,11 +162,29 @@ def _parse_raw_price(d: dict) -> RawPriceRecord:
     try:
         return RawPriceRecord(
             symbol=d["symbol"], asset_class=d["asset_class"], trading_date=date.fromisoformat(d["trading_date"]),
-            close=float(d["close"]), price_convention=d["price_convention"], source=d["source"],
+            close=float(d["close"]) if d.get("close") is not None else None, price_convention=d["price_convention"], source=d["source"],
             retrieved_at=datetime.fromisoformat(d["retrieved_at"]),
+            raw_open=float(d["raw_open"]) if d.get("raw_open") is not None else None,
+            raw_high=float(d["raw_high"]) if d.get("raw_high") is not None else None,
+            raw_low=float(d["raw_low"]) if d.get("raw_low") is not None else None,
+            raw_close=float(d["raw_close"]) if d.get("raw_close") is not None else None,
+            adjusted_close=float(d["adjusted_close"]) if d.get("adjusted_close") is not None else None,
+            price_semantics=d.get("price_semantics"),
         )
     except KeyError as exc:
         raise CLIError(f"prices.json record missing required field: {exc}") from exc
+
+
+def _parse_raw_corporate_action(d: dict) -> RawCorporateActionRecord:
+    try:
+        return RawCorporateActionRecord(
+            symbol=d["symbol"], asset_class=d["asset_class"], action_type=d["action_type"],
+            effective_date=date.fromisoformat(d["effective_date"]), value=float(d["value"]),
+            source=d["source"], retrieved_at=datetime.fromisoformat(d["retrieved_at"]),
+            announcement_at=datetime.fromisoformat(d["announcement_at"]) if d.get("announcement_at") else None,
+        )
+    except KeyError as exc:
+        raise CLIError(f"corporate_actions.json record missing required field: {exc}") from exc
 
 
 def _parse_raw_universe(d: dict) -> RawUniverseRecord:
@@ -193,9 +213,10 @@ def _parse_raw_sic_history(d: dict) -> RawSicHistoryRecord:
 class NormalizedBundle:
     """Every normalized Stage 3 record this CLI loaded from ``--raw-root``, grouped for reuse."""
 
-    def __init__(self, filings_by_instrument, prices_by_instrument, sector_by_instrument, universe_members, issues):
+    def __init__(self, filings_by_instrument, prices_by_instrument, sector_by_instrument, universe_members, issues, corporate_actions_by_instrument=None):
         self.filings_by_instrument = filings_by_instrument
         self.prices_by_instrument = prices_by_instrument
+        self.corporate_actions_by_instrument = corporate_actions_by_instrument or {}
         self.sector_by_instrument = sector_by_instrument
         self.universe_members = universe_members
         self.universe: tuple[InstrumentId, ...] = tuple(dict.fromkeys(m.instrument_id for m in universe_members))
@@ -219,11 +240,13 @@ def load_normalized_bundle(raw_root: Path) -> NormalizedBundle:
     """
     raw_filings = [_parse_raw_filing(d) for d in _read_json_list(raw_root / "filings.json")]
     raw_prices = [_parse_raw_price(d) for d in _read_json_list(raw_root / "prices.json")]
+    raw_corporate_actions = [_parse_raw_corporate_action(d) for d in _read_json_list(raw_root / "corporate_actions.json")]
     raw_universe = [_parse_raw_universe(d) for d in _read_json_list(raw_root / "universe.json")]
     raw_sic_history = [_parse_raw_sic_history(d) for d in _read_json_list(raw_root / "sic_history.json")]
 
     filings, filing_issues = normalize_filings(raw_filings)
     prices, price_issues = normalize_prices(raw_prices)
+    corporate_actions, corporate_action_issues = normalize_corporate_actions(raw_corporate_actions)
     universe_members, universe_issues = normalize_universe(raw_universe)
     sectors, sector_issues = normalize_sic_history_batch(raw_sic_history)
 
@@ -233,6 +256,12 @@ def load_normalized_bundle(raw_root: Path) -> NormalizedBundle:
     prices_by_instrument: dict[InstrumentId, list] = {}
     for p in prices:
         prices_by_instrument.setdefault(p.instrument_id, []).append(p)
+    corporate_actions_by_instrument: dict[InstrumentId, list] = {}
+    for action in corporate_actions:
+        corporate_actions_by_instrument.setdefault(action.instrument_id, []).append(action)
+    for records in corporate_actions_by_instrument.values():
+        records.sort(key=lambda r: (r.effective_date, r.action_type))
+    corporate_actions_by_instrument = {iid: tuple(records) for iid, records in corporate_actions_by_instrument.items()}
     sector_by_instrument: dict[InstrumentId, list] = {}
     for s in sectors:
         sector_by_instrument.setdefault(s.instrument_id, []).append(s)
@@ -240,8 +269,11 @@ def load_normalized_bundle(raw_root: Path) -> NormalizedBundle:
         records.sort(key=lambda r: r.as_of)
     sector_by_instrument = {iid: tuple(records) for iid, records in sector_by_instrument.items()}
 
-    issues = filing_issues + price_issues + universe_issues + sector_issues
-    return NormalizedBundle(filings_by_instrument, prices_by_instrument, sector_by_instrument, universe_members, issues)
+    issues = filing_issues + price_issues + corporate_action_issues + universe_issues + sector_issues
+    return NormalizedBundle(
+        filings_by_instrument, prices_by_instrument, sector_by_instrument, universe_members, issues,
+        corporate_actions_by_instrument,
+    )
 
 
 def _build_trading_calendar(bundle: NormalizedBundle) -> ListTradingCalendar:
@@ -301,13 +333,19 @@ def _periods_from_args(args: argparse.Namespace, *, required: bool) -> tuple[Bac
     )
 
 
-def _feature_cache_identity(config: FilingMomentumMLConfig, periods: Sequence[BacktestPeriod]) -> FeatureCacheIdentity:
+def _feature_cache_identity(config: FilingMomentumMLConfig, periods: Sequence[BacktestPeriod], bundle: NormalizedBundle | None = None) -> FeatureCacheIdentity:
+    price_conventions = sorted({
+        p.price_convention for prices in (bundle.prices_by_instrument.values() if bundle else ()) for p in prices
+    })
+    action_count = sum(len(v) for v in bundle.corporate_actions_by_instrument.values()) if bundle else 0
     return FeatureCacheIdentity(
         strategy_id=config.strategy_id, strategy_version="cli", feature_schema_version=FEATURE_SCHEMA_VERSION,
         fcf_mode=config.fcf_mode, train_years=config.ml_train_years, min_train_quarters=config.min_train_quarters,
         model_config_identity=config.identity(), universe_id="cli-universe",
         data_cutoff=max(p.quarter_end for p in periods) if periods else date.today(),
         created_at=datetime.now(),
+        price_convention="+".join(price_conventions) if price_conventions else None,
+        provider_identity=f"corporate_actions:{action_count}",
     )
 
 
@@ -536,7 +574,7 @@ def cmd_build_features(args: argparse.Namespace, stdout, stderr) -> int:
         return 2
 
     config = FilingMomentumMLConfig()
-    cache_identity = _feature_cache_identity(config, periods)
+    cache_identity = _feature_cache_identity(config, periods, bundle)
     cache_root = None
     if not args.dry_run:
         cache_root = args.cache_root or DEFAULT_CACHE_ROOT
@@ -587,7 +625,7 @@ def cmd_build_labels(args: argparse.Namespace, stdout, stderr) -> int:
         config=config, calendar=calendar, sector_encoder=SectorEncoder(), targets=targets,
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
         sector_by_instrument=bundle.sector_by_instrument,
-        cache_identity=_feature_cache_identity(config, periods), cache_root=None, mode="training",
+        cache_identity=_feature_cache_identity(config, periods, bundle), cache_root=None, mode="training",
     )
     if feature_result.blocked:
         stderr.write(f"blocked: {feature_result.blocked_reason}\n")
@@ -602,6 +640,7 @@ def cmd_build_labels(args: argparse.Namespace, stdout, stderr) -> int:
     label_result = build_production_labels(
         periods=periods, observations_by_quarter=observations_by_quarter,
         prices_by_instrument=bundle.prices_by_instrument, n_winners=config.n_winners,
+        corporate_actions_by_instrument=bundle.corporate_actions_by_instrument,
     )
     payload = {
         q.isoformat(): [{"symbol": r.observation.instrument_id.symbol, "label": r.label} for r in rows]
@@ -641,6 +680,7 @@ def _build_run_inputs(args: argparse.Namespace, bundle: NormalizedBundle, calend
         benchmark_instrument_id=benchmark, trading_calendar=calendar, sector_encoder=SectorEncoder(),
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
         sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
+        corporate_actions_by_instrument=bundle.corporate_actions_by_instrument,
         report_options=ReportOptions(include_source_comparison=source_html is not None) if with_report else None,
         source_report_html=source_html,
         checkpoint_root=checkpoint_root, run_mode="production",
@@ -692,6 +732,7 @@ def cmd_current_status(args: argparse.Namespace, stdout, stderr) -> int:
         trading_calendar=WeekdayTradingCalendar(), sector_encoder=SectorEncoder(),
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
         sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
+        corporate_actions_by_instrument=bundle.corporate_actions_by_instrument,
         checkpoint_root=None, run_mode="production",
         model_cache_root=args.model_cache_root, decision_log_root=args.decision_log_root,
     )
@@ -814,6 +855,7 @@ def cmd_paper_trade_run(args: argparse.Namespace, stdout, stderr) -> int:
         trading_calendar=WeekdayTradingCalendar(), sector_encoder=SectorEncoder(),
         filings_by_instrument=bundle.filings_by_instrument, prices_by_instrument=bundle.prices_by_instrument,
         sector_by_instrument=bundle.sector_by_instrument, manifest=manifest,
+        corporate_actions_by_instrument=bundle.corporate_actions_by_instrument,
         checkpoint_root=None, run_mode="production",
         model_cache_root=args.model_cache_root, decision_log_root=args.decision_log_root,
     )

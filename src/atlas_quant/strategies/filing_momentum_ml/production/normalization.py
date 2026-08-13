@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from atlas_quant.data.records import (
+    CorporateActionRecord,
     DailyPriceObservation,
     FilingFundamentals,
     PriceConvention,
@@ -83,17 +84,52 @@ class RawPriceRecord:
     symbol: str
     asset_class: str
     trading_date: date
-    close: float
+    close: float | None
     price_convention: str
     source: str
     retrieved_at: datetime
+    raw_open: float | None = None
+    raw_high: float | None = None
+    raw_low: float | None = None
+    raw_close: float | None = None
+    adjusted_close: float | None = None
+    price_semantics: str | None = None
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "symbol": self.symbol, "asset_class": self.asset_class, "trading_date": self.trading_date.isoformat(),
             "close": self.close, "price_convention": self.price_convention, "source": self.source,
             "retrieved_at": self.retrieved_at.isoformat(),
         }
+        for key in ("raw_open", "raw_high", "raw_low", "raw_close", "adjusted_close", "price_semantics"):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class RawCorporateActionRecord:
+    """A provider's split/dividend event payload, before normalization."""
+
+    symbol: str
+    asset_class: str
+    action_type: str
+    effective_date: date
+    value: float
+    source: str
+    retrieved_at: datetime
+    announcement_at: datetime | None = None
+
+    def to_dict(self) -> dict:
+        data = {
+            "symbol": self.symbol, "asset_class": self.asset_class,
+            "action_type": self.action_type, "effective_date": self.effective_date.isoformat(),
+            "value": self.value, "source": self.source, "retrieved_at": self.retrieved_at.isoformat(),
+        }
+        if self.announcement_at is not None:
+            data["announcement_at"] = self.announcement_at.isoformat()
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,12 +213,28 @@ def normalize_price(raw: RawPriceRecord) -> DailyPriceObservation:
     instrument_id = InstrumentId(symbol=raw.symbol, asset_class=_asset_class(raw.asset_class))
     provenance = DataProvenance(source=raw.source, as_of=raw.trading_date, retrieved_at=raw.retrieved_at)
     price_convention: PriceConvention = raw.price_convention  # type: ignore[assignment]
+    close = raw.raw_close if raw.raw_close is not None else raw.close
+    if close is None:
+        raise ValueError("price record must include close or raw_close")
     return DailyPriceObservation(
         instrument_id=instrument_id,
         trading_date=raw.trading_date,
-        close=raw.close,
+        close=close,
         price_convention=price_convention,
         provenance=provenance,
+    )
+
+
+def normalize_corporate_action(raw: RawCorporateActionRecord) -> CorporateActionRecord:
+    instrument_id = InstrumentId(symbol=raw.symbol, asset_class=_asset_class(raw.asset_class))
+    provenance = DataProvenance(source=raw.source, as_of=raw.effective_date, retrieved_at=raw.retrieved_at)
+    return CorporateActionRecord(
+        instrument_id=instrument_id,
+        action_type=raw.action_type,  # type: ignore[arg-type]
+        effective_date=raw.effective_date,
+        value=raw.value,
+        provenance=provenance,
+        announcement_at=raw.announcement_at,
     )
 
 
@@ -235,6 +287,10 @@ def normalize_filings(raws) -> tuple[tuple[FilingFundamentals, ...], tuple[DataV
 
 def normalize_prices(raws) -> tuple[tuple[DailyPriceObservation, ...], tuple[DataValidationIssue, ...]]:
     return _normalize_batch(raws, normalize_price, "price")
+
+
+def normalize_corporate_actions(raws) -> tuple[tuple[CorporateActionRecord, ...], tuple[DataValidationIssue, ...]]:
+    return _normalize_batch(raws, normalize_corporate_action, "corporate_action")
 
 
 def normalize_universe(raws) -> tuple[tuple[UniverseMembershipRecord, ...], tuple[DataValidationIssue, ...]]:

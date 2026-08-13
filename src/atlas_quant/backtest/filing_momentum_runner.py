@@ -26,7 +26,7 @@ from atlas_quant.backtest.clock import BacktestPeriod
 from atlas_quant.backtest.price_resolution import PriceResolutionPolicy
 from atlas_quant.config.identity import compute_config_identity
 from atlas_quant.data.point_in_time import TradingCalendar
-from atlas_quant.data.records import DailyPriceObservation
+from atlas_quant.data.records import CorporateActionRecord, DailyPriceObservation
 from atlas_quant.domain.audit import AuditRecord, AuditTrail
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.domain.serialization import to_jsonable
@@ -122,6 +122,7 @@ class FilingMomentumBacktestDependencies:
     trading_calendar: TradingCalendar
     universe: tuple[InstrumentId, ...]
     benchmark_instrument_id: InstrumentId
+    corporate_action_source: Mapping[InstrumentId, tuple[CorporateActionRecord, ...]] = field(default_factory=dict)
     #: When set, a fit is loaded from this model-store root instead of
     #: refitting whenever an identical ModelIdentity was already persisted
     #: there. ``None`` (the default) preserves today's behavior exactly —
@@ -290,6 +291,10 @@ def _compute_run_identity(
             "period_identities": [p.identity() for p in periods],
             "universe": sorted(str(i) for i in dependencies.universe),
             "benchmark_instrument": str(dependencies.benchmark_instrument_id),
+            "corporate_actions": {
+                str(i): [(a.action_type, a.effective_date.isoformat(), a.value) for a in actions]
+                for i, actions in sorted(dependencies.corporate_action_source.items(), key=lambda item: str(item[0]))
+            },
         }
     )
 
@@ -309,6 +314,7 @@ def _build_labeled_quarters(
                 obs.instrument_id, period.quarter_end, obs.feature_timestamp,
                 period.exit_timestamp, dependencies.price_source.get(obs.instrument_id, ()),
                 period.exit_timestamp,
+                dependencies.corporate_action_source.get(obs.instrument_id, ()),
             )
             for obs in observations
         ]
@@ -427,6 +433,7 @@ def run_filing_momentum_backtest(
                 period.entry_timestamp, period.exit_timestamp,
                 config.price_policy, period.exit_timestamp, dependencies.trading_calendar,
                 return_cap=config.instrument_return_cap,
+                corporate_actions=dependencies.corporate_action_source.get(rec.instrument_id, ()),
             )
             for rec in strategy_result.recommendations
         )
@@ -439,6 +446,7 @@ def run_filing_momentum_backtest(
             dependencies.benchmark_instrument_id, benchmark_prices,
             period.entry_timestamp, period.exit_timestamp,
             config.price_policy, period.exit_timestamp, dependencies.trading_calendar,
+            dependencies.corporate_action_source.get(dependencies.benchmark_instrument_id, ()),
         )
         benchmark_return = benchmark.raw_return
         alpha = (period_return - benchmark_return) if benchmark_return is not None else None

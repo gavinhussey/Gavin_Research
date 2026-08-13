@@ -21,8 +21,9 @@ from atlas_quant.backtest.price_resolution import (
     normalize_price_request_timestamp,
     resolve_price,
 )
+from atlas_quant.backtest.corporate_actions import compute_economic_return
 from atlas_quant.data.point_in_time import TradingCalendar
-from atlas_quant.data.records import DailyPriceObservation
+from atlas_quant.data.records import CorporateActionRecord, DailyPriceObservation
 from atlas_quant.domain.audit import AuditRecord, AuditTrail
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.domain.signal import InstrumentRecommendation
@@ -66,6 +67,9 @@ class PositionOutcome:
     lifecycle_state: PositionLifecycleState
     warnings: tuple[str, ...] = field(default_factory=tuple)
     audit_trail: AuditTrail = field(default_factory=AuditTrail)
+    split_count: int = 0
+    dividend_count: int = 0
+    dividend_cash: float = 0.0
 
 
 def resolve_position(
@@ -78,6 +82,7 @@ def resolve_position(
     calendar: TradingCalendar,
     *,
     return_cap: float = INSTRUMENT_RETURN_CAP,
+    corporate_actions: Sequence[CorporateActionRecord] = (),
 ) -> PositionOutcome:
     """Resolve one recommendation into a fully-accounted :class:`PositionOutcome`.
 
@@ -134,7 +139,11 @@ def resolve_position(
             warnings=("exit price unresolved",) + exit_resolved.warnings, audit_trail=audit,
         )
 
-    raw_return = (exit_resolved.price - entry.price) / entry.price
+    economic = compute_economic_return(
+        entry.price, exit_resolved.price, entry.resolved_timestamp, exit_resolved.resolved_timestamp,
+        corporate_actions, include_dividends=True,
+    )
+    raw_return = economic.raw_return
     capped_return = apply_return_cap(raw_return, return_cap)
     contribution = recommendation.weight * capped_return
 
@@ -154,6 +163,8 @@ def resolve_position(
         entry_resolved=entry, exit_target_timestamp=exit_resolved.requested_timestamp, exit_resolved=exit_resolved,
         raw_return=raw_return, capped_return=capped_return, contribution=contribution,
         lifecycle_state=PositionLifecycleState.CLOSED, warnings=warnings, audit_trail=audit,
+        split_count=economic.split_count, dividend_count=economic.dividend_count,
+        dividend_cash=economic.dividend_cash,
     )
 
 

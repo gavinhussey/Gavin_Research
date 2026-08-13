@@ -130,7 +130,7 @@ def test_write_raw_data_files_round_trips_through_cli_loader(tmp_path):
         _client(), _provider(), sec_user_agent="Test test@example.com", retrieved_at=_RETRIEVED_AT,
     )
     written = write_raw_data_files(result, tmp_path)
-    assert set(written) == {"filings.json", "prices.json", "universe.json"}
+    assert set(written) == {"filings.json", "prices.json", "corporate_actions.json", "universe.json"}
 
     bundle = load_normalized_bundle(tmp_path)
     assert bundle.issues == ()

@@ -73,7 +73,7 @@ class TestResolveBenchmark:
         policy = PriceResolutionPolicy(max_stale_calendar_days=5, max_stale_trading_sessions=3)
         prices = [_price(date(2026, 1, 2), 400.0), _price(date(2026, 4, 14), 420.0)]
         result = resolve_benchmark(SPY, prices, date(2026, 1, 5), date(2026, 4, 15), policy, datetime(2026, 5, 1), CAL)
-        assert result.resolved_entry.price_convention == policy.price_convention
+        assert result.resolved_entry.price_convention == prices[0].price_convention
 
     def test_fallback_spy_distinguished_from_benchmark_spy(self):
         # Same instrument, but a fallback holding and a benchmark record

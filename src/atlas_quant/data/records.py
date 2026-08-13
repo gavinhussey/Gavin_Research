@@ -18,16 +18,17 @@ from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
 from atlas_quant.domain.serialization import to_jsonable
 
-#: The only two price conventions this platform recognizes. The legacy
-#: prototype downloads via ``yfinance`` with ``auto_adjust=True``
-#: -- i.e. split- and dividend-adjusted close -- which is the convention
-#: Filing Momentum ML's
-#: price-derived features are defined against. ``unadjusted`` exists so a
-#: provider that cannot adjust is forced to say so explicitly rather than
-#: silently mixing conventions across instruments or dates.
+#: The two price conventions this platform recognizes. ``split_dividend_adjusted``
+#: is the legacy close-only yfinance ``auto_adjust=True`` convention and is
+#: retained for backwards compatibility with stored datasets. New Filing
+#: Momentum ML acquisition stores raw/unadjusted OHLC and uses ``unadjusted``
+#: model-feature closes so later corporate actions cannot restate historical
+#: feature inputs.
 PriceConvention = Literal["split_dividend_adjusted", "unadjusted"]
 
-CANONICAL_PRICE_CONVENTION: PriceConvention = "split_dividend_adjusted"
+CANONICAL_PRICE_CONVENTION: PriceConvention = "unadjusted"
+
+CorporateActionType = Literal["split", "dividend"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +190,30 @@ class DailyOHLCObservation:
                 notes=prov.get("notes"),
             ),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CorporateActionRecord:
+    """One split or cash-dividend event.
+
+    ``effective_date`` is the ex/effective date supplied by the market-data
+    source. ``announcement_at`` is optional because yfinance history exposes
+    effective-dated events, not vendor-grade announcement/vintage timestamps.
+    ``provenance.retrieved_at`` records when this repository learned the event.
+    """
+
+    instrument_id: InstrumentId
+    action_type: CorporateActionType
+    effective_date: date
+    value: float
+    provenance: DataProvenance
+    announcement_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.action_type not in ("split", "dividend"):
+            raise ValueError(f"unrecognized corporate action type {self.action_type!r}")
+        if self.value <= 0:
+            raise ValueError("CorporateActionRecord.value must be positive")
 
 
 def _parse_date_or_datetime(value: str) -> "date | datetime":

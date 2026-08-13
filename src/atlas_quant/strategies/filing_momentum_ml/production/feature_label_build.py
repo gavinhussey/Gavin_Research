@@ -26,7 +26,7 @@ from typing import Mapping, Sequence
 
 from atlas_quant.backtest.clock import BacktestPeriod
 from atlas_quant.data.point_in_time import FilingTimingMode, TradingCalendar
-from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, SectorRecord
+from atlas_quant.data.records import CorporateActionRecord, DailyPriceObservation, FilingFundamentals, SectorRecord
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.strategies.filing_momentum_ml.config import (
     FEATURE_SCHEMA_VERSION,
@@ -161,6 +161,7 @@ def build_production_labels(
     observations_by_quarter: Mapping[date, Sequence[FeatureObservation]],
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
     n_winners: int,
+    corporate_actions_by_instrument: Mapping[InstrumentId, Sequence[CorporateActionRecord]] | None = None,
 ) -> ProductionLabelBuildResult:
     """Compute each period's forward-return outcomes and quarterly labels.
 
@@ -184,6 +185,7 @@ def build_production_labels(
                 period.exit_timestamp,
                 prices_by_instrument.get(obs.instrument_id, ()),
                 period.exit_timestamp,
+                (corporate_actions_by_instrument or {}).get(obs.instrument_id, ()),
             )
             for obs in observations
         ]

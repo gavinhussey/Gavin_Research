@@ -1,6 +1,6 @@
 """Explicit, typed price-resolution policy for the backtest engine.
 
-Stage 6 adopted "last available adjusted close on or before the target
+Stage 6 adopted "last available close on or before the target
 timestamp" as an unnamed helper behavior (``forward_return
 ._price_on_or_before``). That convention can silently reuse an
 arbitrarily stale price. This module makes that choice an explicit,
@@ -133,7 +133,7 @@ def resolve_price(
             requested_timestamp=requested_at, resolved_timestamp=latest.trading_date,
             price=latest.close, calendar_days_stale=(requested_date - latest.trading_date).days,
             trading_sessions_stale=None, status=PriceResolutionStatus.INVALID,
-            price_convention=policy.price_convention, provenance=latest.provenance,
+            price_convention=latest.price_convention, provenance=latest.provenance,
             warnings=("resolved price is non-positive",),
         )
 
@@ -141,7 +141,7 @@ def resolve_price(
         return ResolvedPrice(
             requested_timestamp=requested_at, resolved_timestamp=latest.trading_date,
             price=latest.close, calendar_days_stale=0, trading_sessions_stale=0,
-            status=PriceResolutionStatus.EXACT_SESSION, price_convention=policy.price_convention,
+            status=PriceResolutionStatus.EXACT_SESSION, price_convention=latest.price_convention,
             provenance=latest.provenance, warnings=(),
         )
 
@@ -160,7 +160,7 @@ def resolve_price(
             requested_timestamp=requested_at, resolved_timestamp=latest.trading_date,
             price=latest.close, calendar_days_stale=calendar_days_stale,
             trading_sessions_stale=trading_sessions_stale, status=PriceResolutionStatus.MISSING,
-            price_convention=policy.price_convention, provenance=latest.provenance,
+            price_convention=latest.price_convention, provenance=latest.provenance,
             warnings=(f"nearest price is {calendar_days_stale} calendar day(s) / "
                       f"{trading_sessions_stale} session(s) stale, exceeding policy bounds",),
         )
@@ -173,7 +173,7 @@ def resolve_price(
         requested_timestamp=requested_at, resolved_timestamp=latest.trading_date,
         price=latest.close, calendar_days_stale=calendar_days_stale,
         trading_sessions_stale=trading_sessions_stale, status=status,
-        price_convention=policy.price_convention, provenance=latest.provenance, warnings=warnings,
+        price_convention=latest.price_convention, provenance=latest.provenance, warnings=warnings,
     )
 
 

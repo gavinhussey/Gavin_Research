@@ -10,6 +10,7 @@ import pandas as pd
 
 from atlas_quant.strategies.filing_momentum_ml.acquisition.yfinance_provider import (
     fetch_prices_for_symbol,
+    parse_price_history,
     parse_price_history_to_records,
 )
 
@@ -30,7 +31,28 @@ def test_parse_price_history_to_records_basic():
     assert records[0].symbol == "AAPL"
     assert records[0].trading_date.isoformat() == "2024-01-02"
     assert records[0].close == 100.0
-    assert records[0].price_convention == "split_dividend_adjusted"
+    assert records[0].price_convention == "unadjusted"
+    assert records[0].raw_close == 100.0
+
+
+def test_parse_price_history_keeps_adjusted_close_audit_and_actions_separate():
+    index = pd.DatetimeIndex(["2024-01-02", "2024-01-03"], name="Date")
+    history = pd.DataFrame(
+        {
+            "Open": [99.0, 50.0], "High": [101.0, 51.0], "Low": [98.0, 49.0],
+            "Close": [100.0, 50.5], "Adj Close": [95.0, 50.5],
+            "Dividends": [0.0, 0.25], "Stock Splits": [0.0, 2.0],
+        },
+        index=index,
+    )
+    parsed = parse_price_history("AAPL", history, source="yfinance", retrieved_at=_RETRIEVED_AT)
+    assert parsed.prices[0].raw_open == 99.0
+    assert parsed.prices[0].adjusted_close == 95.0
+    assert parsed.prices[0].price_semantics == "raw_unadjusted_ohlc; adjusted_close_audit_only"
+    assert [(a.action_type, a.effective_date.isoformat(), a.value) for a in parsed.corporate_actions] == [
+        ("split", "2024-01-03", 2.0),
+        ("dividend", "2024-01-03", 0.25),
+    ]
 
 
 def test_parse_price_history_skips_non_positive_and_nan_closes():

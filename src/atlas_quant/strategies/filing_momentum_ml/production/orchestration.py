@@ -39,7 +39,8 @@ from atlas_quant.backtest.filing_momentum_runner import (
 )
 from atlas_quant.config.identity import compute_config_identity
 from atlas_quant.data.point_in_time import TradingCalendar
-from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, SectorRecord
+from atlas_quant.backtest.corporate_actions import compute_economic_return
+from atlas_quant.data.records import CorporateActionRecord, DailyPriceObservation, FilingFundamentals, SectorRecord
 from atlas_quant.dependency_status import (
     DependencyStatus,
     build_environment_report,
@@ -51,7 +52,6 @@ from atlas_quant.domain.status import SignalKind
 from atlas_quant.reporting.domain import ReproducibilityStatus
 from atlas_quant.strategies.filing_momentum_ml.estimator import build_hgbc_estimator
 from atlas_quant.strategies.filing_momentum_ml.fallback_domain import FallbackAssetStatistics
-from atlas_quant.strategies.filing_momentum_ml.forward_return import compute_forward_return
 from atlas_quant.strategies.filing_momentum_ml.performance_analysis import analyze_backtest_result
 from atlas_quant.strategies.filing_momentum_ml.performance_domain import PerformanceAnalysisConfig, PerformanceAnalysisResult
 from atlas_quant.strategies.filing_momentum_ml.production.checkpoint import (
@@ -147,14 +147,15 @@ def build_fallback_statistics_source(
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
     ordered_periods: Sequence[BacktestPeriod],
     lookback_quarters: int,
+    corporate_actions_by_instrument: Mapping[InstrumentId, Sequence[CorporateActionRecord]] | None = None,
 ) -> Callable[[BacktestPeriod], tuple[FallbackAssetStatistics, ...]]:
     """Build the ``fallback_statistics_source`` callable Stage 7's runner needs.
 
     Report §5.4: fallback weighting is based on each ticker's trailing
     ``lookback_quarters`` quarterly returns as of the current period. Each
-    quarterly return is computed with the existing, pure
-    :func:`compute_forward_return` over that quarter's own
-    entry/exit-timestamp prices -- never a newly invented return formula.
+    quarterly return uses the same corporate-action-aware economic return
+    arithmetic as labels, positions, and benchmark accounting over that
+    quarter's own entry/exit-timestamp prices.
     """
     sorted_periods = tuple(sorted(ordered_periods, key=lambda p: p.quarter_end))
 
@@ -164,6 +165,7 @@ def build_fallback_statistics_source(
         for symbol in fallback_tickers:
             instrument_id = InstrumentId(symbol=symbol, asset_class=asset_class)
             prices = prices_by_instrument.get(instrument_id, ())
+            actions = (corporate_actions_by_instrument or {}).get(instrument_id, ())
             returns: list[float] = []
             last_provenance: DataProvenance | None = None
             for trailing_period in trailing:
@@ -179,8 +181,12 @@ def build_fallback_statistics_source(
                 )
                 if entry is None or exit_ is None or entry.close <= 0:
                     continue
-                raw_return, _ = compute_forward_return(entry.close, exit_.close)
-                returns.append(raw_return)
+                returns.append(
+                    compute_economic_return(
+                        entry.close, exit_.close, entry.trading_date, exit_.trading_date,
+                        actions, include_dividends=True,
+                    ).raw_return
+                )
                 last_provenance = exit_.provenance
             warnings = ()
             if len(returns) < len(trailing):
@@ -217,6 +223,7 @@ class ProductionRunInputs:
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]]
     sector_by_instrument: Mapping[InstrumentId, Sequence[SectorRecord]]
     manifest: DataProvenanceManifest
+    corporate_actions_by_instrument: Mapping[InstrumentId, Sequence[CorporateActionRecord]] = field(default_factory=dict)
     performance_config: PerformanceAnalysisConfig | None = None
     report_options: ReportOptions | None = None
     source_report_html: str | None = None
@@ -259,6 +266,10 @@ def _run_identity(inputs: ProductionRunInputs, manifest_identity: str) -> str:
             "universe": sorted(str(i) for i in inputs.universe),
             "benchmark_instrument": str(inputs.benchmark_instrument_id),
             "period_identities": [p.identity() for p in inputs.periods],
+            "corporate_actions": {
+                str(i): [(a.action_type, a.effective_date.isoformat(), a.value) for a in actions]
+                for i, actions in sorted(inputs.corporate_actions_by_instrument.items(), key=lambda item: str(item[0]))
+            },
         }
     )
 
@@ -493,11 +504,13 @@ def run_filing_momentum_production_backtest(inputs: ProductionRunInputs) -> Prod
         prices_by_instrument=inputs.prices_by_instrument,
         ordered_periods=inputs.periods,
         lookback_quarters=config.strategy_config.fallback_lookback_quarters,
+        corporate_actions_by_instrument=inputs.corporate_actions_by_instrument,
     )
 
     dependencies = FilingMomentumBacktestDependencies(
         feature_observation_source=_feature_observation_source,
         price_source={k: tuple(v) for k, v in inputs.prices_by_instrument.items()},
+        corporate_action_source={k: tuple(v) for k, v in inputs.corporate_actions_by_instrument.items()},
         fallback_statistics_source=fallback_source,
         estimator_factory=build_hgbc_estimator,
         trading_calendar=inputs.trading_calendar,

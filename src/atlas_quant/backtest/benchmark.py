@@ -19,8 +19,9 @@ from atlas_quant.backtest.price_resolution import (
     ResolvedPrice,
     resolve_price,
 )
+from atlas_quant.backtest.corporate_actions import compute_economic_return
 from atlas_quant.data.point_in_time import TradingCalendar
-from atlas_quant.data.records import DailyPriceObservation
+from atlas_quant.data.records import CorporateActionRecord, DailyPriceObservation
 from atlas_quant.domain.identifiers import InstrumentId
 
 
@@ -35,6 +36,9 @@ class BenchmarkResult:
     resolved_exit: ResolvedPrice
     raw_return: float | None
     warnings: tuple[str, ...]
+    split_count: int = 0
+    dividend_count: int = 0
+    dividend_cash: float = 0.0
 
 
 def resolve_benchmark(
@@ -45,6 +49,7 @@ def resolve_benchmark(
     policy: PriceResolutionPolicy,
     data_cutoff: datetime,
     calendar: TradingCalendar,
+    corporate_actions: Sequence[CorporateActionRecord] = (),
 ) -> BenchmarkResult:
     """Resolve SPY's return over ``(entry_target, exit_target)`` — the same interval
     and the same :class:`~atlas_quant.backtest.price_resolution.PriceResolutionPolicy`
@@ -74,9 +79,14 @@ def resolve_benchmark(
             warnings=warnings,
         )
 
-    raw_return = (exit_resolved.price - entry.price) / entry.price
+    economic = compute_economic_return(
+        entry.price, exit_resolved.price, entry.resolved_timestamp, exit_resolved.resolved_timestamp,
+        corporate_actions, include_dividends=True,
+    )
+    raw_return = economic.raw_return
     return BenchmarkResult(
         instrument_id=instrument_id, requested_entry_timestamp=entry.requested_timestamp, resolved_entry=entry,
         requested_exit_timestamp=exit_resolved.requested_timestamp, resolved_exit=exit_resolved, raw_return=raw_return,
-        warnings=warnings,
+        warnings=warnings, split_count=economic.split_count, dividend_count=economic.dividend_count,
+        dividend_cash=economic.dividend_cash,
     )
