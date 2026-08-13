@@ -35,3 +35,9 @@ data/orders/filing_momentum_ml/
 
 # Scheduled-job output (nightly data-refresh check, daily paper-trade run).
 data/logs/filing_momentum_ml/
+
+# Weekly Sector Rotation research data -- same convention as filing_momentum_ml
+# above: raw pulled prices and derived feature panels are regenerable from the
+# research notebooks, never committed.
+data/raw/weekly_sector_rotation/
+data/processed/weekly_sector_rotation/

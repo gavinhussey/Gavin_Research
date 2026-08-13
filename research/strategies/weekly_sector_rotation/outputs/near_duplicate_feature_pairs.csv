@@ -1,0 +1,11 @@
+feature_1,feature_2,spearman_corr
+vti_return_1w,average_sector_return_1w,0.9631648703911291
+trend_dist_from_ma_8w,trend_dist_from_ma_12w,0.9247580278118995
+abs_return_2w,trend_dist_from_ma_4w,0.9197224933358372
+abs_return_8w,trend_dist_from_ma_12w,0.912645302701854
+excess_return_vs_vti_4w,cross_sectional_rank_4w,-0.9112821591802176
+realized_vol_8w,realized_vol_12w,0.9085368140686148
+excess_return_vs_vti_8w,cross_sectional_rank_8w,-0.9080081865515086
+abs_return_4w,trend_dist_from_ma_8w,0.9069740940910828
+excess_return_vs_vti_1w,cross_sectional_rank_1w,-0.9063452695691179
+excess_return_vs_vti_12w,cross_sectional_rank_12w,-0.9061780912947023
