@@ -42,8 +42,8 @@ BENCHMARK = "SPY"
 JSON_OUTPUT = True
 # ------------------------------------------
 
-RAW_ROOT = REPO_ROOT / "data" / "raw" / "filing_momentum_ml"
-MANIFEST = REPO_ROOT / "data" / "manifests" / "filing_momentum_ml" / "data_manifest.json"
+RAW_ROOT = REPO_ROOT / "data" / "raw" / "filing_momentum_ml_split_adj_div_unadj_20260813"
+MANIFEST = REPO_ROOT / "data" / "manifests" / "filing_momentum_ml" / "data_manifest_split_adj_div_unadj_20260813.json"
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 STATS_OUTPUT = OUTPUT_DIR / "strategy_statistics.txt"
 EQUITY_CURVE_OUTPUT = OUTPUT_DIR / "equity_curve.jpg"

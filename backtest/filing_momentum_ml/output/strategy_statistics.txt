@@ -4,26 +4,26 @@ Filing Momentum ML Backtest Statistics
 window: 2015-03-31 through 2026-06-30
 benchmark: SPY
 state: completed
-run_identity: 27270feb8c58a0f79fb9202634904fce1ed59e83f5531420d944a9994e4fddd9
-analysis_identity: 39401cfc129aaf21d96837fec19446e97bf7afac3bdcd07ed45e500835e4a0d3
+run_identity: 4dcfb5d18c379ce9700f160270cf2e82f6b71871bde4962d673dd28cbe1904e7
+analysis_identity: 7a124a862bb7484e5b829446c534eeb7744318172b77313f6e4427565272a403
 
 
 invested (37 quarters):
-  total_return=1294.2% benchmark_total_return=248.1%
-  sharpe=1.14 sortino=2.27 information_ratio=0.83
-  max_drawdown=-36.8% (2021-06-30 -> 2021-12-31)
-  win_rate=74.3%
+  total_return=1577.1% benchmark_total_return=263.1%
+  sharpe=1.31 sortino=2.46 information_ratio=0.99
+  max_drawdown=-33.2% (2021-06-30 -> 2021-12-31)
+  win_rate=75.0%
 
 primary-only (34 quarters):
-  total_return=992.3% benchmark_total_return=181.2%
-  sharpe=1.10 sortino=2.26 information_ratio=0.86
-  max_drawdown=-36.8% (2021-06-30 -> 2021-12-31)
-  win_rate=71.9%
+  total_return=1192.1% benchmark_total_return=193.5%
+  sharpe=1.26 sortino=2.45 information_ratio=1.01
+  max_drawdown=-33.2% (2021-06-30 -> 2021-12-31)
+  win_rate=72.7%
 
 fallback-only (3 quarters):
-  total_return=27.6% benchmark_total_return=23.8%
-  sharpe=2.52 sortino=n/a information_ratio=1.26
+  total_return=29.8% benchmark_total_return=23.7%
+  sharpe=2.39 sortino=n/a information_ratio=1.31
   max_drawdown=0.0% (2017-06-30 -> 2017-06-30)
   win_rate=100.0%
 
-sharpe_confidence_interval (95%): [0.72, 1.55]
+sharpe_confidence_interval (95%): [0.87, 1.74]

@@ -73,7 +73,7 @@ def parse_price_history_to_records(
 def parse_price_history(
     symbol: str, history, *, source: str, retrieved_at: datetime,
 ) -> ParsedPriceHistory:
-    """Convert one yfinance history frame into raw bars plus action events."""
+    """Convert one yfinance history frame into split-adjusted bars plus actions."""
     records: list[RawPriceRecord] = []
     actions: list[RawCorporateActionRecord] = []
     for timestamp, row in history.iterrows():
@@ -83,13 +83,16 @@ def parse_price_history(
         else:
             raw_record = RawPriceRecord(
                 symbol=symbol, asset_class="equity", trading_date=timestamp.date(), close=float(close),
-                price_convention="unadjusted", source=source, retrieved_at=retrieved_at,
+                price_convention="split_adjusted_dividend_unadjusted", source=source, retrieved_at=retrieved_at,
                 raw_open=_finite_positive_or_none(row.get("Open")),
                 raw_high=_finite_positive_or_none(row.get("High")),
                 raw_low=_finite_positive_or_none(row.get("Low")),
                 raw_close=float(close),
                 adjusted_close=_finite_positive_or_none(row.get("Adj Close")),
-                price_semantics="raw_unadjusted_ohlc; adjusted_close_audit_only",
+                price_semantics=(
+                    "split_adjusted_dividend_unadjusted_ohlc; adjusted_close_audit_only; "
+                    "actions_separate_effective_date"
+                ),
             )
             records.append(raw_record)
 

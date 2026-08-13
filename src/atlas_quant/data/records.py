@@ -18,15 +18,19 @@ from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
 from atlas_quant.domain.serialization import to_jsonable
 
-#: The two price conventions this platform recognizes. ``split_dividend_adjusted``
+#: Price conventions this platform recognizes. ``split_dividend_adjusted``
 #: is the legacy close-only yfinance ``auto_adjust=True`` convention and is
-#: retained for backwards compatibility with stored datasets. New Filing
-#: Momentum ML acquisition stores raw/unadjusted OHLC and uses ``unadjusted``
-#: model-feature closes so later corporate actions cannot restate historical
-#: feature inputs.
-PriceConvention = Literal["split_dividend_adjusted", "unadjusted"]
+#: retained for backwards compatibility with stored datasets.
+#: ``split_adjusted_dividend_unadjusted`` is yfinance ``auto_adjust=False``:
+#: OHLC/Close are normalized for splits but not dividend-back-adjusted;
+#: ``Adj Close`` remains audit-only and actions are stored separately.
+PriceConvention = Literal[
+    "split_dividend_adjusted",
+    "unadjusted",
+    "split_adjusted_dividend_unadjusted",
+]
 
-CANONICAL_PRICE_CONVENTION: PriceConvention = "unadjusted"
+CANONICAL_PRICE_CONVENTION: PriceConvention = "split_adjusted_dividend_unadjusted"
 
 CorporateActionType = Literal["split", "dividend"]
 
@@ -93,10 +97,15 @@ class DailyPriceObservation:
     def __post_init__(self) -> None:
         if self.close < 0:
             raise ValueError("DailyPriceObservation.close cannot be negative")
-        if self.price_convention not in ("split_dividend_adjusted", "unadjusted"):
+        if self.price_convention not in (
+            "split_dividend_adjusted",
+            "unadjusted",
+            "split_adjusted_dividend_unadjusted",
+        ):
             raise ValueError(
                 "DailyPriceObservation.price_convention must be "
-                f"'split_dividend_adjusted' or 'unadjusted', got "
+                f"'split_dividend_adjusted', 'unadjusted', or "
+                f"'split_adjusted_dividend_unadjusted', got "
                 f"{self.price_convention!r}"
             )
 
@@ -155,10 +164,15 @@ class DailyOHLCObservation:
                 f"DailyOHLCObservation.close ({self.close!r}) must be within "
                 f"[low, high] = [{self.low!r}, {self.high!r}]"
             )
-        if self.price_convention not in ("split_dividend_adjusted", "unadjusted"):
+        if self.price_convention not in (
+            "split_dividend_adjusted",
+            "unadjusted",
+            "split_adjusted_dividend_unadjusted",
+        ):
             raise ValueError(
                 "DailyOHLCObservation.price_convention must be "
-                f"'split_dividend_adjusted' or 'unadjusted', got "
+                f"'split_dividend_adjusted', 'unadjusted', or "
+                f"'split_adjusted_dividend_unadjusted', got "
                 f"{self.price_convention!r}"
             )
 

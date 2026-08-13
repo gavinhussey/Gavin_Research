@@ -160,7 +160,7 @@ def build_acquisition_manifest(
         universe_construction_method="present_day_snapshot_applied_retroactively",
         survivorship_biased=True, filing_source="sec_edgar",
         filing_point_in_time_status="filed_at taken directly from SEC's own 'filed' field",
-        price_source="yfinance", price_convention="unadjusted",
+        price_source="yfinance", price_convention="split_adjusted_dividend_unadjusted",
         sector_source="sec_edgar_sic_header_crosswalk (acquire-sic-history, run separately)",
         sector_override_identity="none",
         trading_calendar_source="derived from acquired price trading dates",
@@ -176,7 +176,7 @@ def build_acquisition_manifest(
         },
         duplicate_summary={},
         corporate_action_treatment=(
-            "raw_unadjusted_ohlc_plus_yfinance_effective_date_splits_dividends; "
+            "split_adjusted_dividend_unadjusted_ohlc_plus_yfinance_effective_date_splits_dividends; "
             "no announcement-vintage timestamps"
         ),
         delisting_treatment="not handled -- present-day universe only, no delisted names included",

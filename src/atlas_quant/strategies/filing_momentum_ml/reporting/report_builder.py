@@ -312,7 +312,7 @@ def build_filing_momentum_report(
     provenance = ProvenanceSection(
         source_report_sha256=source_report_sha256(source_report_html) if source_report_html else None,
         data_provider_identity="synthetic/injected fixtures (this stage)",
-        price_convention="source-declared close convention (new acquisition: unadjusted raw close)",
+        price_convention="source-declared close convention (new yfinance acquisition: split-adjusted, dividend-unadjusted close)",
         universe_methodology="present-day snapshot (survivorship-biased)",
         survivorship_bias_warning="Universe membership is a present-day snapshot applied retroactively; "
                                    "this is a known, documented bias, not corrected in this stage.",

@@ -185,6 +185,7 @@ def build_fallback_statistics_source(
                     compute_economic_return(
                         entry.close, exit_.close, entry.trading_date, exit_.trading_date,
                         actions, include_dividends=True,
+                        apply_split_factor=entry.price_convention == "unadjusted",
                     ).raw_return
                 )
                 last_provenance = exit_.provenance

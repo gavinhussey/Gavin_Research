@@ -31,7 +31,7 @@ def test_parse_price_history_to_records_basic():
     assert records[0].symbol == "AAPL"
     assert records[0].trading_date.isoformat() == "2024-01-02"
     assert records[0].close == 100.0
-    assert records[0].price_convention == "unadjusted"
+    assert records[0].price_convention == "split_adjusted_dividend_unadjusted"
     assert records[0].raw_close == 100.0
 
 
@@ -48,7 +48,10 @@ def test_parse_price_history_keeps_adjusted_close_audit_and_actions_separate():
     parsed = parse_price_history("AAPL", history, source="yfinance", retrieved_at=_RETRIEVED_AT)
     assert parsed.prices[0].raw_open == 99.0
     assert parsed.prices[0].adjusted_close == 95.0
-    assert parsed.prices[0].price_semantics == "raw_unadjusted_ohlc; adjusted_close_audit_only"
+    assert parsed.prices[0].price_semantics == (
+        "split_adjusted_dividend_unadjusted_ohlc; adjusted_close_audit_only; "
+        "actions_separate_effective_date"
+    )
     assert [(a.action_type, a.effective_date.isoformat(), a.value) for a in parsed.corporate_actions] == [
         ("split", "2024-01-03", 2.0),
         ("dividend", "2024-01-03", 0.25),

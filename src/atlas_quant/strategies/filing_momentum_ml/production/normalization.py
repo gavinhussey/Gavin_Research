@@ -32,7 +32,11 @@ from atlas_quant.domain.provenance import DataProvenance
 from atlas_quant.strategies.filing_momentum_ml.production.validation import DataValidationIssue, ValidationSeverity
 
 _ASSET_CLASS_BY_RAW_VALUE = {ac.value: ac for ac in AssetClass}
-_VALID_PRICE_CONVENTIONS = ("split_dividend_adjusted", "unadjusted")
+_VALID_PRICE_CONVENTIONS = (
+    "split_dividend_adjusted",
+    "unadjusted",
+    "split_adjusted_dividend_unadjusted",
+)
 
 
 def _asset_class(raw_value: str) -> AssetClass:

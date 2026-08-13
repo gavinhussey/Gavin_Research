@@ -106,6 +106,39 @@ def test_in_holding_period_split_and_dividend_affect_realized_return_once():
     assert position.dividend_cash == pytest.approx(2.0)
 
 
+def test_split_adjusted_prices_do_not_count_split_as_profit():
+    def _split_adjusted_price(day: date, close: float) -> DailyPriceObservation:
+        return DailyPriceObservation(
+            instrument_id=IID,
+            trading_date=day,
+            close=close,
+            price_convention="split_adjusted_dividend_unadjusted",
+            provenance=provenance(datetime(day.year, day.month, day.day)),
+        )
+
+    prices = [
+        _split_adjusted_price(date(2026, 1, 5), 50.0),
+        _split_adjusted_price(date(2026, 4, 15), 55.0),
+    ]
+    actions = [_action("split", date(2026, 2, 2), 2.0)]
+    entry = _after_close(date(2026, 1, 5))
+    exit_ = _after_close(date(2026, 4, 15))
+
+    label = build_forward_return_outcome(IID, date(2025, 12, 31), entry, exit_, prices, datetime(2026, 5, 1), actions)
+    position = resolve_position(
+        InstrumentRecommendation(IID, SignalKind.PRIMARY, weight=1.0, score=0.9),
+        prices, entry, exit_, PriceResolutionPolicy(), datetime(2026, 5, 1), CAL,
+        corporate_actions=actions,
+    )
+    benchmark = resolve_benchmark(IID, prices, entry, exit_, PriceResolutionPolicy(), datetime(2026, 5, 1), CAL, actions)
+
+    assert label.raw_return == pytest.approx(0.10)
+    assert position.raw_return == pytest.approx(0.10)
+    assert benchmark.raw_return == pytest.approx(0.10)
+    assert position.split_count == 1
+    assert benchmark.split_count == 1
+
+
 def test_post_exit_corporate_action_mutation_does_not_change_label_pnl_or_benchmark():
     prices = [_price(date(2026, 1, 5), 100.0), _price(date(2026, 4, 15), 110.0)]
     base_actions = [_action("dividend", date(2026, 3, 1), 1.0)]

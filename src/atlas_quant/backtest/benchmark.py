@@ -82,6 +82,7 @@ def resolve_benchmark(
     economic = compute_economic_return(
         entry.price, exit_resolved.price, entry.resolved_timestamp, exit_resolved.resolved_timestamp,
         corporate_actions, include_dividends=True,
+        apply_split_factor=entry.price_convention == "unadjusted",
     )
     raw_return = economic.raw_return
     return BenchmarkResult(

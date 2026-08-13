@@ -43,12 +43,16 @@ def compute_economic_return(
     actions: Sequence[CorporateActionRecord] = (),
     *,
     include_dividends: bool = True,
+    apply_split_factor: bool = False,
 ) -> EconomicReturnBreakdown:
     """Return one-share economic performance over a holding interval.
 
-    Split events multiply the share count from their effective date forward.
-    Cash dividends are paid once, on the shares held at that event date. No
-    event after ``exit_date`` can affect the return.
+    For split-normalized close series, split events are audit/count events
+    only; applying them again would double-count the split. For genuinely
+    split-discontinuous raw prices, callers can set ``apply_split_factor``
+    so split events multiply the share count from their effective date
+    forward. Cash dividends are paid once, on the shares held at that event
+    date. No event after ``exit_date`` can affect the return.
     """
     shares = 1.0
     dividend_cash = 0.0
@@ -56,7 +60,8 @@ def compute_economic_return(
     dividend_count = 0
     for action in actions_in_interval(actions, entry_date, exit_date):
         if action.action_type == "split":
-            shares *= action.value
+            if apply_split_factor:
+                shares *= action.value
             split_count += 1
         elif action.action_type == "dividend" and include_dividends:
             dividend_cash += shares * action.value

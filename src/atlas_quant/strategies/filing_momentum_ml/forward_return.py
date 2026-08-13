@@ -179,6 +179,7 @@ def build_forward_return_outcome(
     economic = compute_economic_return(
         entry_obs.close, exit_obs.close, entry_obs.trading_date, exit_obs.trading_date,
         corporate_actions, include_dividends=True,
+        apply_split_factor=entry_obs.price_convention == "unadjusted",
     )
     raw = economic.raw_return
     clipped = max(-LABEL_RETURN_CLIP, min(LABEL_RETURN_CLIP, raw))
