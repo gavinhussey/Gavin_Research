@@ -18,6 +18,8 @@ dev = ["pytest>=8.0.0"]
 # must keep importing without them (verified by tests/_safety.py-adjacent
 # import-smoke tests). Install only the group(s) a given task needs.
 model = ["scikit-learn>=1.3.0,<2.0.0", "joblib>=1.3.0"]
+# Weekly Sector Rotation neural-network research (research/strategies/weekly_sector_rotation).
+deep-learning = ["torch>=2.0.0"]
 production-data = ["requests>=2.31.0", "pyarrow>=14.0.0", "yfinance>=0.2.40", "lxml>=5.0.0"]
 notebooks = ["jupyter>=1.0.0", "nbformat>=5.9.0"]
 # Stage 14: Alpaca paper-trading execution (atlas_quant.execution.alpaca_broker).
