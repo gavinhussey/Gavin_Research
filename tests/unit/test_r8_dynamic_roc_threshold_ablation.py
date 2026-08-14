@@ -118,7 +118,7 @@ def test_nn_v1_bce_reproduces_r1_saved_auc_if_data_available():
 
     oof = pd.concat(oof_frames, ignore_index=True)
     actual_auc = roc_auc_score(oof.label_binary, oof.predicted_proba)
-    assert abs(actual_auc - 0.5694) < 1e-3
+    assert abs(actual_auc - 0.569113) < 1e-3
 
 
 # ---------------------------------------------------------------------------
@@ -297,14 +297,14 @@ def test_weekly_basket_requires_full_11_sector_cross_section(r8):
         "predicted_proba": np.linspace(0.9, 0.1, 11), "threshold": [0.5] * 11,
         "label_binary": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
         "next_week_open_to_close_return": np.linspace(0.03, -0.02, 11),
-        "next_week_vti_return": [0.005] * 11,
+        "next_week_spy_return": [0.005] * 11,
     })
     partial_week = pd.DataFrame({
         "date": ["2020-01-10"] * 5, "symbol": r8.SECTOR_ETFS[:5],
         "predicted_proba": [0.9, 0.9, 0.9, 0.9, 0.9], "threshold": [0.5] * 5,
         "label_binary": [1, 0, 1, 0, 1],
         "next_week_open_to_close_return": [0.01, -0.01, 0.02, -0.02, 0.0],
-        "next_week_vti_return": [0.004] * 5,
+        "next_week_spy_return": [0.004] * 5,
     })
     oof = pd.concat([full_week, partial_week], ignore_index=True)
     signal = r8.apply_threshold_selection(oof)
@@ -324,7 +324,7 @@ def test_no_trade_weeks_are_retained_not_dropped(r8):
         "predicted_proba": [0.1] * 11, "threshold": [0.9] * 11,
         "label_binary": [0] * 11,
         "next_week_open_to_close_return": np.linspace(0.03, -0.02, 11),
-        "next_week_vti_return": [0.005] * 11,
+        "next_week_spy_return": [0.005] * 11,
     })
     signal = r8.apply_threshold_selection(week)
     basket = r8.weekly_basket_metrics(signal)
@@ -340,7 +340,7 @@ def test_classification_metrics_selection_rate_and_precision(r8):
         "predicted_proba": [0.9, 0.9, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
         "threshold": [0.5] * 11,
         "label_binary": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        "next_week_open_to_close_return": [0.0] * 11, "next_week_vti_return": [0.0] * 11,
+        "next_week_open_to_close_return": [0.0] * 11, "next_week_spy_return": [0.0] * 11,
     })
     signal = r8.apply_threshold_selection(week)
     m = r8.classification_metrics_for_selection(signal, base_rate=1 / 11)

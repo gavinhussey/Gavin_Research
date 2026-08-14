@@ -6,17 +6,17 @@
     26,
     52
   ],
-  "r3_best_lr_auc": 0.5313014982897336,
-  "r3_best_nn_v1_auc": 0.5446355831767596,
-  "r3_best_nn_v2_auc": 0.5374043455219927,
+  "r3_best_lr_auc": 0.5313449419173871,
+  "r3_best_nn_v1_auc": 0.5446183031927729,
+  "r3_best_nn_v2_auc": 0.5368587457337194,
   "r1_engineered_baselines": {
-    "LR_best_of_9_sets_auc": 0.5604441489617961,
-    "NN_v1_best_of_9_sets_auc": 0.5711147853736089,
-    "NN_v2_best_of_9_sets_auc": 0.5744853302500361,
-    "LR_full_feature_set_auc": 0.5397839379486438,
-    "NN_v1_full_feature_set_auc": 0.5693678469913763,
-    "NN_v2_full_feature_set_auc": 0.5708322204557499
+    "LR_best_of_9_sets_auc": 0.5615520548476269,
+    "NN_v1_best_of_9_sets_auc": 0.5721381689562363,
+    "NN_v2_best_of_9_sets_auc": 0.5750523190924745,
+    "LR_full_feature_set_auc": 0.5460421501553522,
+    "NN_v1_full_feature_set_auc": 0.5680100994943317,
+    "NN_v2_full_feature_set_auc": 0.5735730758971164
   },
   "vde_gap_sequence_samples_invalidated": 0,
-  "runtime_seconds": 725.5328998565674
+  "runtime_seconds": 746.7676868438721
 }

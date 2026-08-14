@@ -126,7 +126,7 @@ def test_nn_v1_deterministic_auc_reproduces_accepted_value_if_data_available():
 
     oof = pd.concat(oof_frames, ignore_index=True)
     actual_auc = roc_auc_score(oof.label_binary, oof.predicted_proba)
-    assert abs(actual_auc - 0.569368) < 1e-3
+    assert abs(actual_auc - 0.569113) < 1e-3
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +366,7 @@ _R10B_ARTIFACT_NAMES = [
     "r10b_filter_trigger_log.csv", "r10b_weekly_positions.csv", "r10b_trade_ledger.csv",
     "r10b_weekly_portfolio_returns.csv", "r10b_equity_curves.csv", "r10b_performance_summary.csv",
     "r10b_yearly_performance.csv", "r10b_drawdown_metrics.csv", "r10b_turnover_cost_metrics.csv",
-    "r10b_vs_vti_metrics.csv", "r10b_equal_vs_paper_comparison.csv", "r10b_top2_vs_top3_descriptive.csv",
+    "r10b_vs_spy_metrics.csv", "r10b_equal_vs_paper_comparison.csv", "r10b_top2_vs_top3_descriptive.csv",
     "r10b_rule_trigger_counts.csv", "r10b_stress_period_metrics.csv", "r10b_bootstrap_ci.csv",
     "r10b_alpha_status.csv", "r10b_sample_audit.csv", "r10b_run_summary.json",
 ]

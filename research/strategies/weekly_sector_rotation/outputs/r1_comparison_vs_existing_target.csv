@@ -1,18 +1,18 @@
-metric,existing_vti_relative,primary_abs_1pct
-positive_class_rate,0.4952668516402807,0.3497886593827259
-LR_AUC_best_of_9_sets,0.5034370227870251,0.5604441489617961
-NNv1_AUC_best_of_9_sets,0.5149426346429351,0.5711147853736089
-NNv2_AUC_best_of_9_sets,0.5100043764435869,0.5744853302500361
-best_AUC_any_model,0.5149426346429351,0.5744853302500361
-NNv1_AUC_fold_std_across_9_sets,0.005429607282028128,0.023124515965312037
-NNv2_AUC_fold_std_across_9_sets,0.005713826491042333,0.025528757329412947
-NNv2_bootstrap_topK_minus_bottomK_K2_point,0.0007056155905765,0.0019731701952858216
-NNv2_bootstrap_topK_minus_bottomK_K2_CI,"[-0.000725, 0.002069]","[0.000437, 0.003405]"
-NNv2_bootstrap_topK_minus_bottomK_K3_point,0.0006509342959509,0.0014369521710382964
-NNv2_bootstrap_topK_minus_bottomK_K3_CI,"[-0.000602, 0.001806]","[0.000284, 0.002503]"
-LR_precision@2_minus_base_primary_target,n/a (not computed for existing target in this pass),0.029885969436477144
-NNv1_precision@2_minus_base_primary_target,n/a (not computed for existing target in this pass),0.03246328902410606
-NNv2_precision@2_minus_base_primary_target,n/a (not computed for existing target in this pass),0.04534988696225034
-LR_precision@3_minus_base_primary_target,n/a (not computed for existing target in this pass),0.024387687649535528
-NNv1_precision@3_minus_base_primary_target,n/a (not computed for existing target in this pass),0.02060761892101326
-NNv2_precision@3_minus_base_primary_target,n/a (not computed for existing target in this pass),0.03572789383510255
+metric,existing_spy_relative,primary_abs_1pct
+positive_class_rate,0.5004896360372123,0.34986841055905576
+LR_AUC_best_of_9_sets,0.5034370227870251,0.5615520548476269
+NNv1_AUC_best_of_9_sets,0.5149426346429351,0.5721381689562363
+NNv2_AUC_best_of_9_sets,0.5100043764435869,0.5750523190924745
+best_AUC_any_model,0.5149426346429351,0.5750523190924745
+NNv1_AUC_fold_std_across_9_sets,0.005429607282028128,0.022614592248092653
+NNv2_AUC_fold_std_across_9_sets,0.005713826491042333,0.025298643875081142
+NNv2_bootstrap_topK_minus_bottomK_K2_point,0.0007056155905765,0.0022081131629758375
+NNv2_bootstrap_topK_minus_bottomK_K2_CI,"[-0.000725, 0.002069]","[0.000713, 0.003704]"
+NNv2_bootstrap_topK_minus_bottomK_K3_point,0.0006509342959509,0.0013117462286656746
+NNv2_bootstrap_topK_minus_bottomK_K3_CI,"[-0.000602, 0.001806]","[0.000204, 0.002352]"
+LR_precision@2_minus_base_primary_target,n/a (not computed for existing target in this pass),0.026196109347510932
+NNv1_precision@2_minus_base_primary_target,n/a (not computed for existing target in this pass),0.028257965017614017
+NNv2_precision@2_minus_base_primary_target,n/a (not computed for existing target in this pass),0.04320641862586144
+LR_precision@3_minus_base_primary_target,n/a (not computed for existing target in this pass),0.02568064542998516
+NNv1_precision@3_minus_base_primary_target,n/a (not computed for existing target in this pass),0.020526006254727447
+NNv2_precision@3_minus_base_primary_target,n/a (not computed for existing target in this pass),0.031178927216926666

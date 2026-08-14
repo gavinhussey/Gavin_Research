@@ -1,0 +1,43 @@
+{
+  "starting_capital": 100000.0,
+  "round_trip_cost_bps": 10.0,
+  "spy_cagr": 0.0851223169512898,
+  "spy_max_drawdown": -0.5571317216698326,
+  "spy_sharpe": 0.5759769589721822,
+  "underlying_auc": {
+    "NN_v1": 0.5680100994943317,
+    "NN_v2": 0.5735730758971164
+  },
+  "risk_none_reproduces_r10a": true,
+  "risk_full_reproduces_r10b_abcde": true,
+  "n_final_candidates": 24,
+  "risk_configs_tested": [
+    "RISK_NONE",
+    "RISK_FULL_A_B_C_D_E",
+    "RISK_A_C_D_E"
+  ],
+  "final_verdict": {
+    "final_strategy_unresolved": false,
+    "recommended_candidate": {
+      "model": "NN_v2",
+      "K": 2,
+      "allocation_method": "EQUAL_WEIGHT",
+      "risk_config": "RISK_A_C_D_E"
+    },
+    "recommended_candidate_net_sharpe": 0.4061408051432178,
+    "recommended_candidate_gross_cagr": 0.11714594607333684,
+    "recommended_candidate_net_cagr": 0.06270612836738709,
+    "recommended_candidate_gross_max_drawdown": -0.49287252963274153,
+    "spy_cagr": 0.0851223169512898,
+    "spy_max_drawdown": -0.5571317216698326,
+    "weekly_excess_return_point_estimate": 0.0005591903678565867,
+    "weekly_excess_return_ci_lower": -0.0003398477362156797,
+    "weekly_excess_return_ci_upper": 0.0013849314214584775,
+    "weekly_excess_return_significant": false,
+    "loyo_cagr_range": 0.041836271916650514,
+    "break_even_round_trip_bps_vs_spy": 5.580902099609375,
+    "alpha_classification": "ALPHA_POSITIVE_BUT_FRAGILE",
+    "deployability_classification": "LIMITED_CAPITAL_PILOT_CANDIDATE"
+  },
+  "runtime_seconds": 42.37102007865906
+}

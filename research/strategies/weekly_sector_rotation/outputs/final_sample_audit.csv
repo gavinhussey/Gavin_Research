@@ -1,0 +1,3 @@
+model,n_oos_rows,n_weeks,first_date,last_date,underlying_auc,starting_capital,round_trip_cost_bps,n_final_candidates
+NN_v1,10669,970,2008-01-04,2026-07-31,0.5680100994943317,100000.0,10.0,24
+NN_v2,10669,970,2008-01-04,2026-07-31,0.5735730758971164,100000.0,10.0,24

@@ -119,7 +119,7 @@ def test_nn_v1_deterministic_auc_reproduces_r1_r7_r8_if_data_available():
 
     oof = pd.concat(oof_frames, ignore_index=True)
     actual_auc = roc_auc_score(oof.label_binary, oof.predicted_proba)
-    assert abs(actual_auc - 0.569368) < 1e-3
+    assert abs(actual_auc - 0.569113) < 1e-3
 
 
 # ---------------------------------------------------------------------------

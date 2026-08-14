@@ -1,4 +1,4 @@
 target,column,n_total_rows,n_valid_labels,n_missing_labels,n_positive,n_negative,positive_pct
-existing_vti_relative,target_outperform_vti,12551,12540,11,6217,6323,0.49577352472089314
-primary_abs_1pct_open_close,target_abs_1pct_next_week,12551,12539,12,4386,8153,0.3497886593827259
+existing_spy_relative,target_outperform_spy,12551,12540,11,6287,6253,0.5013556618819777
+primary_abs_1pct_open_close,target_abs_1pct_next_week,12551,12539,12,4387,8152,0.34986841055905576
 sensitivity_abs_1pct_fri_fri,target_abs_1pct_fri_to_fri,12551,12540,11,4659,7881,0.3715311004784689

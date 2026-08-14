@@ -8,21 +8,21 @@
     2008,
     2026
   ],
-  "nn_v1_r6_pooled_auc_full_period": 0.5508415216841229,
-  "nn_v1_r6_pooled_auc_common_period": 0.549099060557884,
-  "nn_v2_r6_pooled_auc_full_period": 0.5528363275049839,
-  "nn_v2_r6_pooled_auc_common_period": 0.5507479115479115,
-  "r1_baseline_nn_v1_auc_full_feature_set": 0.5693678469913763,
-  "r1_baseline_nn_v2_auc_full_feature_set": 0.5708322204557499,
-  "max_auc_drop_forgetting": 0.0579230393183881,
+  "nn_v1_r6_pooled_auc_full_period": 0.550844244691832,
+  "nn_v1_r6_pooled_auc_common_period": 0.549156324045495,
+  "nn_v2_r6_pooled_auc_full_period": 0.5539274473543327,
+  "nn_v2_r6_pooled_auc_common_period": 0.5519189678936152,
+  "r1_baseline_nn_v1_auc_full_feature_set": 0.5680100994943317,
+  "r1_baseline_nn_v2_auc_full_feature_set": 0.5735730758971164,
+  "max_auc_drop_forgetting": 0.045785320203924895,
   "forgetting_classification_overall": "material",
   "replay_sensitivity_triggered": true,
-  "runtime_seconds": 113.73952794075012,
+  "runtime_seconds": 115.44614100456238,
   "replay_sensitivity": {
     "replay_window_weeks": 12,
-    "nn_v2_primary_auc_common_period": 0.5507479115479115,
-    "nn_v2_replay_auc_common_period": 0.5552467890350243,
-    "nn_v2_primary_mean_auc_drop": -0.0009856227647626454,
-    "nn_v2_replay_mean_auc_drop": -0.018533441816894505
+    "nn_v2_primary_auc_common_period": 0.5519189678936152,
+    "nn_v2_replay_auc_common_period": 0.5552835905606823,
+    "nn_v2_primary_mean_auc_drop": -0.002292079630774917,
+    "nn_v2_replay_mean_auc_drop": -0.020018720103284166
   }
 }

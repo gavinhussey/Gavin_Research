@@ -1,5 +1,18 @@
 # Weekly Sector Rotation — R9: Monte Carlo Dropout Confidence / Abstention Test
 
+> **Benchmark changed 2026-08-13, per explicit user request:** the passive
+> benchmark for this project was switched from `VTI` to `SPY` (full
+> pipeline swap — raw data, all VTI-derived features renamed and
+> recomputed, feature panel rebuilt). This stage's notebook and artifacts
+> were re-executed end to end against the SPY-rebuilt panel; the
+> notebook/CSVs on disk are the authoritative current numbers. Some figures
+> quoted in the prose below may reflect the original VTI-benchmarked run
+> and were not individually re-transcribed — treat the regenerated
+> notebook and `outputs/*.csv` as the source of truth for exact values.
+> See `weekly_sector_rotation_final_performance.md` for the full-scope
+> writeup of this change.
+
+
 **Scope**: confidence/abstention ablation only. The underlying predictive
 model — Vanguard universe, `target_abs_1pct_next_week`, the 34-feature
 engineered representation, the R1 cold-restart cadence, standard BCE

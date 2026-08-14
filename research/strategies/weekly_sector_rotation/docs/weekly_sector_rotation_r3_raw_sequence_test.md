@@ -1,5 +1,18 @@
 # Weekly Sector Rotation — R3: Raw Sequential Price Representation Test
 
+> **Benchmark changed 2026-08-13, per explicit user request:** the passive
+> benchmark for this project was switched from `VTI` to `SPY` (full
+> pipeline swap — raw data, all VTI-derived features renamed and
+> recomputed, feature panel rebuilt). This stage's notebook and artifacts
+> were re-executed end to end against the SPY-rebuilt panel; the
+> notebook/CSVs on disk are the authoritative current numbers. Some figures
+> quoted in the prose below may reflect the original VTI-benchmarked run
+> and were not individually re-transcribed — treat the regenerated
+> notebook and `outputs/*.csv` as the source of truth for exact values.
+> See `weekly_sector_rotation_final_performance.md` for the full-scope
+> writeup of this change.
+
+
 **Scope**: input-representation ablation only. Universe (11 Vanguard sector
 ETFs + VTI benchmark), the R1 primary target (`target_abs_1pct_next_week`),
 model definitions (LR, `SmallMLP` = NN v1, `WideSingleLayerMLP` 5-seed

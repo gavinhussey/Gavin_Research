@@ -1,13 +1,13 @@
 {
-  "primary_positive_rate": 0.3497886593827259,
-  "existing_positive_rate": 0.4952668516402807,
+  "primary_positive_rate": 0.34986841055905576,
+  "existing_positive_rate": 0.5004896360372123,
   "sensitivity_positive_rate": 0.3715311004784689,
-  "primary_lr_best_auc": 0.5604441489617961,
-  "primary_nn1_best_auc": 0.5711147853736089,
-  "primary_nn2_best_auc": 0.5744853302500361,
+  "primary_lr_best_auc": 0.5615520548476269,
+  "primary_nn1_best_auc": 0.5721381689562363,
+  "primary_nn2_best_auc": 0.5750523190924745,
   "existing_lr_best_auc": 0.5034370227870251,
   "existing_nn1_best_auc": 0.5149426346429351,
   "existing_nn2_best_auc": 0.5100043764435869,
   "data_quality_gap_rows": 1,
-  "runtime_seconds": 295.9770839214325
+  "runtime_seconds": 297.3818209171295
 }

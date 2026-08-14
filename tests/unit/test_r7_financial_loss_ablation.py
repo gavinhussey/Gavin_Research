@@ -69,7 +69,7 @@ def test_sector_universe_is_fixed_and_ordered(r7):
     assert r7.SECTOR_ETFS == [
         "VGT", "VHT", "VCR", "VOX", "VFH", "VIS", "VDC", "VPU", "VAW", "VNQ", "VDE",
     ]
-    assert r7.BENCHMARK_ETF == "VTI"
+    assert r7.BENCHMARK_ETF == "SPY"
     assert r7.BENCHMARK_ETF not in r7.SECTOR_ETFS
 
 
@@ -233,7 +233,7 @@ def test_topk_skips_weeks_without_full_11_sector_cross_section(r7):
         "predicted_proba": np.linspace(0.9, 0.1, 11),
         "label_binary": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
         "next_week_open_to_close_return": np.linspace(0.03, -0.02, 11),
-        "next_week_vti_return": [0.005] * 11,
+        "next_week_spy_return": [0.005] * 11,
     })
     partial_week = pd.DataFrame({
         "date": ["2020-01-10"] * 5,  # only 5 of 11 sectors this week
@@ -241,7 +241,7 @@ def test_topk_skips_weeks_without_full_11_sector_cross_section(r7):
         "predicted_proba": np.linspace(0.8, 0.2, 5),
         "label_binary": [1, 0, 1, 0, 1],
         "next_week_open_to_close_return": [0.01, -0.01, 0.02, -0.02, 0.0],
-        "next_week_vti_return": [0.004] * 5,
+        "next_week_spy_return": [0.004] * 5,
     })
     oof = pd.concat([full_week, partial_week], ignore_index=True)
     row, series = r7.topk_metrics_and_series(oof, base_rate=0.35, k=2)

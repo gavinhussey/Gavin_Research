@@ -27,19 +27,19 @@ import torch
 import torch.nn.functional as F
 
 SECTOR_ETFS = ["VGT", "VHT", "VCR", "VOX", "VFH", "VIS", "VDC", "VPU", "VAW", "VNQ", "VDE"]
-BENCHMARK_ETF = "VTI"
+BENCHMARK_ETF = "SPY"
 
 FEATURE_GROUPS = {
     "A": ["abs_return_1w", "abs_return_2w", "abs_return_4w", "abs_return_8w", "abs_return_12w", "abs_return_26w"],
-    "B": ["excess_return_vs_vti_1w", "excess_return_vs_vti_2w", "excess_return_vs_vti_4w",
-          "excess_return_vs_vti_8w", "excess_return_vs_vti_12w", "excess_return_vs_vti_26w"],
+    "B": ["excess_return_vs_spy_1w", "excess_return_vs_spy_2w", "excess_return_vs_spy_4w",
+          "excess_return_vs_spy_8w", "excess_return_vs_spy_12w", "excess_return_vs_spy_26w"],
     "C": ["cross_sectional_rank_1w", "cross_sectional_rank_4w", "cross_sectional_rank_8w", "cross_sectional_rank_12w"],
     "D": ["realized_vol_4w", "realized_vol_12w", "realized_vol_26w"],
     "E": ["trend_dist_from_ma_4w", "trend_dist_from_ma_12w", "trend_dist_from_ma_26w"],
     "F": ["drawdown_dist_from_high_13w", "drawdown_dist_from_high_26w"],
     "G": ["volume_change_1w", "volume_vs_avg_4w", "volume_vs_avg_12w"],
-    "H": ["vti_return_1w", "vti_return_4w", "vti_return_12w", "vti_volatility_4w"],
-    "I": ["sector_return_dispersion_1w", "average_sector_return_1w", "sectors_outperforming_vti_1w"],
+    "H": ["spy_return_1w", "spy_return_4w", "spy_return_12w", "spy_volatility_4w"],
+    "I": ["sector_return_dispersion_1w", "average_sector_return_1w", "sectors_outperforming_spy_1w"],
 }
 FULL_FEATURE_COLS = [c for g in "ABCDEFGHI" for c in FEATURE_GROUPS[g]]
 assert len(FULL_FEATURE_COLS) == 34
@@ -143,7 +143,7 @@ def topk_metrics_and_series(oof: pd.DataFrame, base_rate: float, k: int):
     """Ranks all sectors within each week; SKIPS any week that doesn't have the
     full 11-sector cross-section (Step 13's required invariant)."""
     weekly_precision, weekly_any_pos, weekly_all_pos = [], [], []
-    weekly_mean_ret, weekly_all_sector_mean, weekly_vti_ret, weekly_bottomk_mean = [], [], [], []
+    weekly_mean_ret, weekly_all_sector_mean, weekly_spy_ret, weekly_bottomk_mean = [], [], [], []
     dates_used = []
     for date, g in oof.groupby("date"):
         if len(g) < 11:
@@ -159,12 +159,12 @@ def topk_metrics_and_series(oof: pd.DataFrame, base_rate: float, k: int):
         weekly_all_pos.append(float((top["label_binary"] == 1).all()))
         weekly_mean_ret.append(top["next_week_open_to_close_return"].mean())
         weekly_all_sector_mean.append(g["next_week_open_to_close_return"].mean())
-        weekly_vti_ret.append(g["next_week_vti_return"].iloc[0])
+        weekly_spy_ret.append(g["next_week_spy_return"].iloc[0])
         weekly_bottomk_mean.append(bottom["next_week_open_to_close_return"].mean())
         dates_used.append(date)
     series = {
         "date": dates_used, "precision": pd.Series(weekly_precision), "selected_ret": pd.Series(weekly_mean_ret),
-        "all_sector_mean": pd.Series(weekly_all_sector_mean), "vti_ret": pd.Series(weekly_vti_ret),
+        "all_sector_mean": pd.Series(weekly_all_sector_mean), "spy_ret": pd.Series(weekly_spy_ret),
         "bottomk_mean": pd.Series(weekly_bottomk_mean),
     }
     row = {
@@ -174,9 +174,9 @@ def topk_metrics_and_series(oof: pd.DataFrame, base_rate: float, k: int):
         "pct_weeks_all_positive": pd.Series(weekly_all_pos).mean(),
         "mean_selected_return": series["selected_ret"].mean(), "median_selected_return": series["selected_ret"].median(),
         "selected_minus_all_sector_mean": (series["selected_ret"] - series["all_sector_mean"]).mean(),
-        "selected_minus_vti": (series["selected_ret"] - series["vti_ret"]).mean(),
+        "selected_minus_spy": (series["selected_ret"] - series["spy_ret"]).mean(),
         "topk_minus_bottomk_spread": (series["selected_ret"] - series["bottomk_mean"]).mean(),
-        "win_rate_vs_vti": (series["selected_ret"] > series["vti_ret"]).mean(),
+        "win_rate_vs_spy": (series["selected_ret"] > series["spy_ret"]).mean(),
     }
     return row, series
 

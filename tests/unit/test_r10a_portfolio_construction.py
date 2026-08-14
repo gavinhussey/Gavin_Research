@@ -119,7 +119,7 @@ def test_nn_v1_deterministic_auc_reproduces_accepted_value_if_data_available():
 
     oof = pd.concat(oof_frames, ignore_index=True)
     actual_auc = roc_auc_score(oof.label_binary, oof.predicted_proba)
-    assert abs(actual_auc - 0.569368) < 1e-3
+    assert abs(actual_auc - 0.569113) < 1e-3
 
 
 def test_top2_top3_selection_is_pure_rank_no_backfill_no_confidence():
@@ -305,13 +305,13 @@ def test_equity_curve_recursion(r10a):
 
 
 # ---------------------------------------------------------------------------
-# 20. VTI benchmark uses aligned open-to-close week (structural: same
-#     trade_return formula applied to VTI's own raw open/close).
+# 20. SPY benchmark uses aligned open-to-close week (structural: same
+#     trade_return formula applied to SPY's own raw open/close).
 # ---------------------------------------------------------------------------
-def test_vti_benchmark_uses_same_trade_return_convention(r10a):
-    vti_entry_open = 300.0
-    vti_exit_close = 303.0
-    assert r10a.trade_return(vti_entry_open, vti_exit_close) == pytest.approx(0.01)
+def test_spy_benchmark_uses_same_trade_return_convention(r10a):
+    spy_entry_open = 300.0
+    spy_exit_close = 303.0
+    assert r10a.trade_return(spy_entry_open, spy_exit_close) == pytest.approx(0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +405,7 @@ def test_calmar_ratio_known_case(r10a):
 _R10A_ARTIFACT_NAMES = [
     "r10a_weekly_positions.csv", "r10a_trade_ledger.csv", "r10a_allocation_state.csv",
     "r10a_weekly_portfolio_returns.csv", "r10a_equity_curves.csv", "r10a_performance_summary.csv",
-    "r10a_yearly_performance.csv", "r10a_vs_vti_metrics.csv", "r10a_equal_vs_paper_comparison.csv",
+    "r10a_yearly_performance.csv", "r10a_vs_spy_metrics.csv", "r10a_equal_vs_paper_comparison.csv",
     "r10a_weight_diagnostics.csv", "r10a_per_etf_allocation_state.csv", "r10a_cost_sensitivity.csv",
     "r10a_integer_share_sensitivity.csv", "r10a_bootstrap_ci.csv", "r10a_sample_audit.csv",
     "r10a_run_summary.json",

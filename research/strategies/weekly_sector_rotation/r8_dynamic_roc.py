@@ -177,7 +177,7 @@ def weekly_basket_metrics(oof_signal: pd.DataFrame) -> pd.DataFrame:
                 "date": date, "n_selected": 0, "status": "NO_TRADE",
                 "basket_mean_return": np.nan, "basket_median_return": np.nan,
                 "all_sector_mean_return": g["next_week_open_to_close_return"].mean(),
-                "vti_return": g["next_week_vti_return"].iloc[0],
+                "spy_return": g["next_week_spy_return"].iloc[0],
                 "basket_positive_rate_row": np.nan,
             })
         else:
@@ -186,7 +186,7 @@ def weekly_basket_metrics(oof_signal: pd.DataFrame) -> pd.DataFrame:
                 "basket_mean_return": selected["next_week_open_to_close_return"].mean(),
                 "basket_median_return": selected["next_week_open_to_close_return"].median(),
                 "all_sector_mean_return": g["next_week_open_to_close_return"].mean(),
-                "vti_return": g["next_week_vti_return"].iloc[0],
+                "spy_return": g["next_week_spy_return"].iloc[0],
                 "basket_positive_rate_row": float((selected["label_binary"] == 1).mean()),
             })
     return pd.DataFrame(rows)
