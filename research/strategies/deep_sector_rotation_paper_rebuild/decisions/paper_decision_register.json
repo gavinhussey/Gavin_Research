@@ -1,0 +1,1105 @@
+[
+  {
+    "decision_id": "DECISION_REQUIRED_LOOKBACK_N",
+    "level": 1,
+    "topic": "Input tensor history depth N",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.3 Fig.1 and text define X_t in R^(N x (l+m)) but N is never given a numeric value anywhere in body, table, or figure.",
+    "why_it_matters": "N controls tensor shape, model input size, and how much history is 'burned' before the first trainable example in each 2-year window; wrong N changes both capacity and effective sample count.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "N = 52 (one full trailing year of weekly bars)",
+        "source_support": "Common convention for 'one year lookback' in weekly sector-rotation literature; not stated in paper."
+      },
+      {
+        "option": "B",
+        "description": "N = 104 (two full trailing years, matching the annual training-window length)",
+        "source_support": "Mirrors the paper's explicit '2 years' training-history statement, but that statement describes the *training set span*, not necessarily the *tensor depth* per example."
+      },
+      {
+        "option": "C",
+        "description": "N small (e.g. 4-12 weeks), a short technical-momentum window",
+        "source_support": "No direct support; included only as the other end of the plausible range."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "B",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_PRICE_FIELD",
+    "level": 1,
+    "topic": "Which Yahoo Finance price field populates X_t",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.3 says only 'prices... recorded for the current and previous N-1 weeks' were assembled into X_t; never states raw Close vs Adjusted Close vs returns.",
+    "why_it_matters": "Determines whether corporate actions (splits, dividends) are silently embedded in the model's price history, and whether the network sees levels or returns -- both materially change learned representations.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Raw (unadjusted) Friday close",
+        "source_support": "Matches 'Friday close prices' language literally."
+      },
+      {
+        "option": "B",
+        "description": "Adjusted close (dividend + split adjusted)",
+        "source_support": "None specific; common practice for ML-on-prices work generally."
+      },
+      {
+        "option": "C",
+        "description": "Week-over-week simple returns computed from Friday closes",
+        "source_support": "Consistent with 'normalized to zero mean unit variance' framing being easier to justify for returns than for price levels, but not stated."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_ETF_DIVIDEND_TREATMENT"
+    ],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_VOLUME_INPUT",
+    "level": 1,
+    "topic": "Whether the final reported model includes ETF volume",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.3 footnote: tensor is N x (2l+m) 'if ETF volumes are used in the analysis' -- conditional, never resolved for the final Table 3 model.",
+    "why_it_matters": "Doubles the traded-asset feature block (l -> 2l) if included; changes model input width and every downstream shape.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "PRICE_ONLY (volume excluded from final model)",
+        "source_support": "The 'final results... based only on model inputs comprising the sector funds' sentence most naturally reads as price-only, though it does not explicitly disclaim volume."
+      },
+      {
+        "option": "B",
+        "description": "PRICE_PLUS_VOLUME",
+        "source_support": "Footnote explicitly allows for this configuration; Discussion section (p.6) also refers to 'a function connecting prices and volumes... with their future values', which is explicit textual support for volume being part of the *final* model, in tension with option A."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "B",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_TARGET_RETURN_INTERVAL",
+    "level": 1,
+    "topic": "Exact date range the +1% label return is measured over",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "STRONG_INFERENCE",
+    "source_evidence": "p.3: '...implicitly predict two distinct future values (Monday open and Friday close)'; p.4-5 execution timeline confirms Mon-open entry / Fri-close exit.",
+    "why_it_matters": "Changes every label in the entire dataset; a Fri-close-to-Fri-close definition captures weekend gap risk the strategy never actually trades, while Mon-open-to-Fri-close matches the tradeable P&L exactly.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "next Monday open -> next Friday close (matches realized tradeable return)",
+        "source_support": "STRONG_INFERENCE from the 'two distinct future values' sentence plus the execution timeline."
+      },
+      {
+        "option": "B",
+        "description": "current Friday close -> next Friday close",
+        "source_support": "Simpler, common convention in weekly-bar literature; contradicts the 'two distinct future values' phrasing if adopted literally, since it only involves one future value (next Friday close)."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "MEDIUM"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_NORMALIZATION_SCOPE",
+    "level": 1,
+    "topic": "Scope over which zero-mean/unit-variance normalization stats are computed",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.3: 'All non-target data were normalized to have zero mean and unit variance' -- states the transform, not its scope.",
+    "why_it_matters": "Determines whether normalization stats are refreshed weekly (expanding/rolling) or fixed per annual training window; also determines lookahead-safety implementation detail.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Fit once per trading year on the 2-year training window, held fixed through all weekly updates that year",
+        "source_support": "Consistent with 'individual models trained... for trading years' cadence, but not stated for normalization specifically."
+      },
+      {
+        "option": "B",
+        "description": "Refit weekly on an expanding window (all data through the most recent observed week)",
+        "source_support": "Consistent with 'dynamic update' framing applied to the whole pipeline, but not stated for normalization specifically."
+      },
+      {
+        "option": "C",
+        "description": "Refit weekly on a fixed-size rolling window of the most recent N weeks (same N as the tensor depth)",
+        "source_support": "No direct textual support."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_LOOKBACK_N"
+    ],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_HIDDEN_WIDTHS",
+    "level": 1,
+    "topic": "Units per hidden Dense layer (4 layers)",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.3: 'four fully connected internal layers' -- layer count given, unit counts never given.",
+    "why_it_matters": "Directly sets model capacity; needed to instantiate the Keras model at all.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Uniform moderate width, e.g. 64 units/layer",
+        "source_support": "No support; a plausible default scale for ~11-output tabular MIMO problem."
+      },
+      {
+        "option": "B",
+        "description": "Funnel/taper shape (e.g. 128-64-32-16)",
+        "source_support": "No support; common architectural convention, not stated."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_DROPOUT_RATE",
+    "level": 1,
+    "topic": "Dropout rate(s) for the 4 hidden layers",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.3: dropout named as a technique used, no rate given, and not stated whether one rate is shared across layers or each differs.",
+    "why_it_matters": "Directly affects both regularization strength during training and (critically) the MC-dropout confidence-estimation ensemble's dispersion at inference time -- this single number affects two separate paper mechanics.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Single shared rate, e.g. 0.5 (classic Srivastava et al. default, cited as ref [24] in the paper itself)",
+        "source_support": "The paper cites Srivastava et al. dropout paper [24] directly, whose own headline recommendation is 0.5 for hidden layers -- plausible but not stated as the authors' chosen value."
+      },
+      {
+        "option": "B",
+        "description": "Lower rate, e.g. 0.2-0.3, common in smaller MLPs",
+        "source_support": "No direct support."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_CUSTOM_FINANCIAL_LOSS",
+    "level": 1,
+    "topic": "Exact custom financial loss function formula",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4: 'a custom loss function incorporating recent capital gains and losses was used... The idea of directly using a financial criterion was suggested in [4]' (Bengio 1997). No equation given anywhere.",
+    "why_it_matters": "This is the single largest blocker: it is the mechanism the paper credits for connecting model optimization to trading profitability, and every subsequent training epoch (initial and weekly-update) depends on it.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Full replacement of prediction loss with a financial-return objective (minimize negative realized/expected portfolio return from the model's own selections)",
+        "source_support": "Echoes Bengio's own title framing ('a financial training criterion rather than a prediction criterion'); WEAK_INFERENCE at best."
+      },
+      {
+        "option": "B",
+        "description": "Hybrid: base classification loss (on the +1% binary label) plus an additive term scaled by recent per-asset realized P&L",
+        "source_support": "Consistent with 'incorporating... capital gains and losses' as an augmentation rather than replacement; WEAK_INFERENCE."
+      },
+      {
+        "option": "C",
+        "description": "Asymmetric/reweighted classification loss where each example's weight is scaled by the sign/magnitude of that asset's most recent realized trade P&L",
+        "source_support": "No direct textual support; included as a third plausible shape."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "NONE -- do not implement without direct user resolution or access to Bengio (1997) as a secondary source",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_OPTIMIZER",
+    "level": 1,
+    "topic": "Optimizer",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not stated anywhere in the paper body, tables, or appendix.",
+    "why_it_matters": "Required to instantiate/run TensorFlow/Keras training; task brief explicitly forbids copying prior (archived) project NN v1/v2 hyperparameter settings for this value.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Common Keras/TF default (Adam)",
+        "source_support": "No paper support -- framework default only, offered purely as the forced-choice fallback."
+      },
+      {
+        "option": "B",
+        "description": "Leave fully unresolved until user supplies a value; block training",
+        "source_support": "N/A -- this is the actual current implementation state."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (framework default) only if forced; otherwise block",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_LEARNING_RATE",
+    "level": 1,
+    "topic": "Learning rate",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not stated anywhere in the paper body, tables, or appendix.",
+    "why_it_matters": "Required to instantiate/run TensorFlow/Keras training; task brief explicitly forbids copying prior (archived) project NN v1/v2 hyperparameter settings for this value.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Common Keras/TF default (1e-3)",
+        "source_support": "No paper support -- framework default only, offered purely as the forced-choice fallback."
+      },
+      {
+        "option": "B",
+        "description": "Leave fully unresolved until user supplies a value; block training",
+        "source_support": "N/A -- this is the actual current implementation state."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (framework default) only if forced; otherwise block",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_BATCH_SIZE",
+    "level": 1,
+    "topic": "Batch size",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not stated anywhere in the paper body, tables, or appendix.",
+    "why_it_matters": "Required to instantiate/run TensorFlow/Keras training; task brief explicitly forbids copying prior (archived) project NN v1/v2 hyperparameter settings for this value.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Common Keras/TF default (32)",
+        "source_support": "No paper support -- framework default only, offered purely as the forced-choice fallback."
+      },
+      {
+        "option": "B",
+        "description": "Leave fully unresolved until user supplies a value; block training",
+        "source_support": "N/A -- this is the actual current implementation state."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (framework default) only if forced; otherwise block",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_INITIAL_EPOCHS",
+    "level": 1,
+    "topic": "Initial (annual) training epoch count",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not stated anywhere in the paper body, tables, or appendix.",
+    "why_it_matters": "Required to instantiate/run TensorFlow/Keras training; task brief explicitly forbids copying prior (archived) project NN v1/v2 hyperparameter settings for this value.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Common Keras/TF default (50-100)",
+        "source_support": "No paper support -- framework default only, offered purely as the forced-choice fallback."
+      },
+      {
+        "option": "B",
+        "description": "Leave fully unresolved until user supplies a value; block training",
+        "source_support": "N/A -- this is the actual current implementation state."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (framework default) only if forced; otherwise block",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_WEEKLY_UPDATE_EPOCHS",
+    "level": 1,
+    "topic": "Weekly incremental-update epoch count",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not stated anywhere in the paper body, tables, or appendix.",
+    "why_it_matters": "Required to instantiate/run TensorFlow/Keras training; task brief explicitly forbids copying prior (archived) project NN v1/v2 hyperparameter settings for this value.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Common Keras/TF default (1-5)",
+        "source_support": "No paper support -- framework default only, offered purely as the forced-choice fallback."
+      },
+      {
+        "option": "B",
+        "description": "Leave fully unresolved until user supplies a value; block training",
+        "source_support": "N/A -- this is the actual current implementation state."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (framework default) only if forced; otherwise block",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_EARLY_STOPPING",
+    "level": 1,
+    "topic": "Early-stopping rule (patience/monitor metric)",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not stated anywhere in the paper body, tables, or appendix.",
+    "why_it_matters": "Required to instantiate/run TensorFlow/Keras training; task brief explicitly forbids copying prior (archived) project NN v1/v2 hyperparameter settings for this value.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Common Keras/TF default (none stated)",
+        "source_support": "No paper support -- framework default only, offered purely as the forced-choice fallback."
+      },
+      {
+        "option": "B",
+        "description": "Leave fully unresolved until user supplies a value; block training",
+        "source_support": "N/A -- this is the actual current implementation state."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (framework default) only if forced; otherwise block",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_RANDOM_SEED_POLICY",
+    "level": 1,
+    "topic": "Random seed / initialization policy",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not stated anywhere in the paper body, tables, or appendix.",
+    "why_it_matters": "Required to instantiate/run TensorFlow/Keras training; task brief explicitly forbids copying prior (archived) project NN v1/v2 hyperparameter settings for this value.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Common Keras/TF default (unset/unspecified)",
+        "source_support": "No paper support -- framework default only, offered purely as the forced-choice fallback."
+      },
+      {
+        "option": "B",
+        "description": "Leave fully unresolved until user supplies a value; block training",
+        "source_support": "N/A -- this is the actual current implementation state."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (framework default) only if forced; otherwise block",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_WEEKLY_UPDATE_MECHANISM",
+    "level": 2,
+    "topic": "What 'incrementally updated' means for the weekly model refresh",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.3: 'the models were updated incrementally using the observed price data from the week just ended' -- mechanism not specified.",
+    "why_it_matters": "Different mechanisms (single gradient step on newest example vs. multi-epoch fit on an expanding/rolling window vs. full retrain) produce materially different model drift and forgetting behavior over a 52-week year.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "One (or a few) gradient step(s)/epoch(s) fit only on the single newest week's example",
+        "source_support": "Most literal reading of 'incrementally... using the observed price data from the week just ended' (singular week)."
+      },
+      {
+        "option": "B",
+        "description": "Fit continuation on an expanding window (all data seen so far this year, appended weekly)",
+        "source_support": "Also consistent with 'incrementally updated'; no way to distinguish from text alone."
+      },
+      {
+        "option": "C",
+        "description": "Fixed-size rolling-window retrain (e.g. always the most recent 2 years, sliding forward weekly)",
+        "source_support": "Would blur the 'annual model' framing since it would never fully reset; weaker support than A/B."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_WEEKLY_UPDATE_EPOCHS"
+    ],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_ROC_OBJECTIVE",
+    "level": 2,
+    "topic": "ROC operating-point / cost-function criterion for per-asset thresholds",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4: threshold 'estimated by optimizing a cost function based on receiver operating characteristic (ROC) curve analysis [8]' -- [8] (Fawcett 2006) is a general survey, not a single criterion.",
+    "why_it_matters": "The threshold directly gates every buy decision; different ROC criteria (Youden's J, cost-weighted point, fixed-FPR target, F1-optimal) produce different selectivity and different realized #buy/week.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Youden's J statistic (max TPR - FPR)",
+        "source_support": "Most common textbook ROC operating point; explicitly NOT to be defaulted-to per task brief instruction."
+      },
+      {
+        "option": "B",
+        "description": "Cost-weighted point reflecting the strategy's own asymmetric loss-aversion framing (false positives -- bad buys -- penalized more than false negatives)",
+        "source_support": "Thematically consistent with the paper's loss-aversion discussion (p.5, citing Tversky & Kahneman [25]) but not stated as the ROC criterion specifically."
+      },
+      {
+        "option": "C",
+        "description": "Fixed target false-positive rate (e.g. 10%)",
+        "source_support": "No direct textual support."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_ROC_LOOKBACK",
+      "DECISION_REQUIRED_ROC_MIN_SAMPLE"
+    ],
+    "recommended_if_forced": "NONE -- explicitly not Youden's J per task brief; needs user input",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_ROC_LOOKBACK",
+    "level": 2,
+    "topic": "ROC estimation history window ('recently observed input data')",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4 says only 'recently observed input data', without quantifying the window, minimum sample, fallback, or tie-break behavior.",
+    "why_it_matters": "Needed to make the weekly ROC-threshold re-estimation procedure fully executable and deterministic.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Use all data observed so far in the current trading year (expanding window)",
+        "source_support": "Consistent with 'recently observed', not uniquely determined by it."
+      },
+      {
+        "option": "B",
+        "description": "Use a fixed trailing window (e.g. most recent 13/26/52 weeks)",
+        "source_support": "Also consistent, not uniquely determined."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_ROC_OBJECTIVE"
+    ],
+    "recommended_if_forced": "B (fixed trailing window) if forced, exact length unresolved",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_ROC_MIN_SAMPLE",
+    "level": 2,
+    "topic": "Minimum sample size before a per-asset ROC threshold can be estimated",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4 says only 'recently observed input data', without quantifying the window, minimum sample, fallback, or tie-break behavior.",
+    "why_it_matters": "Needed to make the weekly ROC-threshold re-estimation procedure fully executable and deterministic.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Use all data observed so far in the current trading year (expanding window)",
+        "source_support": "Consistent with 'recently observed', not uniquely determined by it."
+      },
+      {
+        "option": "B",
+        "description": "Use a fixed trailing window (e.g. most recent 13/26/52 weeks)",
+        "source_support": "Also consistent, not uniquely determined."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_ROC_OBJECTIVE"
+    ],
+    "recommended_if_forced": "B (fixed trailing window) if forced, exact length unresolved",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_ROC_FALLBACK",
+    "level": 2,
+    "topic": "Fallback threshold/behavior before minimum sample size is reached",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4 says only 'recently observed input data', without quantifying the window, minimum sample, fallback, or tie-break behavior.",
+    "why_it_matters": "Needed to make the weekly ROC-threshold re-estimation procedure fully executable and deterministic.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Use all data observed so far in the current trading year (expanding window)",
+        "source_support": "Consistent with 'recently observed', not uniquely determined by it."
+      },
+      {
+        "option": "B",
+        "description": "Use a fixed trailing window (e.g. most recent 13/26/52 weeks)",
+        "source_support": "Also consistent, not uniquely determined."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_ROC_OBJECTIVE"
+    ],
+    "recommended_if_forced": "B (fixed trailing window) if forced, exact length unresolved",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_ROC_TIEBREAK",
+    "level": 2,
+    "topic": "Tie-break rule when multiple ROC operating points score equally",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4 says only 'recently observed input data', without quantifying the window, minimum sample, fallback, or tie-break behavior.",
+    "why_it_matters": "Needed to make the weekly ROC-threshold re-estimation procedure fully executable and deterministic.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Use all data observed so far in the current trading year (expanding window)",
+        "source_support": "Consistent with 'recently observed', not uniquely determined by it."
+      },
+      {
+        "option": "B",
+        "description": "Use a fixed trailing window (e.g. most recent 13/26/52 weeks)",
+        "source_support": "Also consistent, not uniquely determined."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_ROC_OBJECTIVE"
+    ],
+    "recommended_if_forced": "B (fixed trailing window) if forced, exact length unresolved",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_MC_PASSES",
+    "level": 2,
+    "topic": "Number of MC-dropout stochastic forward passes per asset per week",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4 'Confidence estimation': MC dropout, 'a large number' of passes (unquantified); 80%-mass-within-one-std-of-median rule stated but not reduced to a computable procedure; population language used loosely.",
+    "why_it_matters": "A prior archived project's literal implementation of this exact rule was found to become nearly degenerate empirically -- the task brief explicitly prohibits silently changing the rule for that reason, so this must be user-confirmed rather than reinterpreted unilaterally.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Implement the rule exactly as literally stated (population-style moments, empirical CDF mass test) and accept the degeneracy risk pending user review",
+        "source_support": "Most literal reading of the paper's own words."
+      },
+      {
+        "option": "B",
+        "description": "User supplies a refined/clarified acceptance procedure before implementation proceeds",
+        "source_support": "N/A -- current blocked state."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_DROPOUT_RATE"
+    ],
+    "recommended_if_forced": "A (literal reading), flagged for explicit user confirmation given known degeneracy risk",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_MC_POPULATION_DEFINITION",
+    "level": 2,
+    "topic": "Whether the MC ensemble is treated as sample or as the full 'population' for moment estimation",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4 'Confidence estimation': MC dropout, 'a large number' of passes (unquantified); 80%-mass-within-one-std-of-median rule stated but not reduced to a computable procedure; population language used loosely.",
+    "why_it_matters": "A prior archived project's literal implementation of this exact rule was found to become nearly degenerate empirically -- the task brief explicitly prohibits silently changing the rule for that reason, so this must be user-confirmed rather than reinterpreted unilaterally.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Implement the rule exactly as literally stated (population-style moments, empirical CDF mass test) and accept the degeneracy risk pending user review",
+        "source_support": "Most literal reading of the paper's own words."
+      },
+      {
+        "option": "B",
+        "description": "User supplies a refined/clarified acceptance procedure before implementation proceeds",
+        "source_support": "N/A -- current blocked state."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_DROPOUT_RATE"
+    ],
+    "recommended_if_forced": "A (literal reading), flagged for explicit user confirmation given known degeneracy risk",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_MC_STD_DEFINITION",
+    "level": 2,
+    "topic": "Population vs sample standard-deviation divisor (N vs N-1) for the MC ensemble",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4 'Confidence estimation': MC dropout, 'a large number' of passes (unquantified); 80%-mass-within-one-std-of-median rule stated but not reduced to a computable procedure; population language used loosely.",
+    "why_it_matters": "A prior archived project's literal implementation of this exact rule was found to become nearly degenerate empirically -- the task brief explicitly prohibits silently changing the rule for that reason, so this must be user-confirmed rather than reinterpreted unilaterally.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Implement the rule exactly as literally stated (population-style moments, empirical CDF mass test) and accept the degeneracy risk pending user review",
+        "source_support": "Most literal reading of the paper's own words."
+      },
+      {
+        "option": "B",
+        "description": "User supplies a refined/clarified acceptance procedure before implementation proceeds",
+        "source_support": "N/A -- current blocked state."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_DROPOUT_RATE"
+    ],
+    "recommended_if_forced": "A (literal reading), flagged for explicit user confirmation given known degeneracy risk",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_MC_ACCEPTANCE_RULE",
+    "level": 2,
+    "topic": "Exact numerical procedure implementing the '80% probability mass within one std of median' test",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "WEAK_INFERENCE",
+    "source_evidence": "p.4 'Confidence estimation': MC dropout, 'a large number' of passes (unquantified); 80%-mass-within-one-std-of-median rule stated but not reduced to a computable procedure; population language used loosely.",
+    "why_it_matters": "A prior archived project's literal implementation of this exact rule was found to become nearly degenerate empirically -- the task brief explicitly prohibits silently changing the rule for that reason, so this must be user-confirmed rather than reinterpreted unilaterally.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Implement the rule exactly as literally stated (population-style moments, empirical CDF mass test) and accept the degeneracy risk pending user review",
+        "source_support": "Most literal reading of the paper's own words."
+      },
+      {
+        "option": "B",
+        "description": "User supplies a refined/clarified acceptance procedure before implementation proceeds",
+        "source_support": "N/A -- current blocked state."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_DROPOUT_RATE"
+    ],
+    "recommended_if_forced": "A (literal reading), flagged for explicit user confirmation given known degeneracy risk",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_MC_REJECTION_BEHAVIOR",
+    "level": 2,
+    "topic": "What happens to a rejected asset (dropped this week only vs. other interaction with risk rules)",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4 'Confidence estimation': MC dropout, 'a large number' of passes (unquantified); 80%-mass-within-one-std-of-median rule stated but not reduced to a computable procedure; population language used loosely.",
+    "why_it_matters": "A prior archived project's literal implementation of this exact rule was found to become nearly degenerate empirically -- the task brief explicitly prohibits silently changing the rule for that reason, so this must be user-confirmed rather than reinterpreted unilaterally.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Implement the rule exactly as literally stated (population-style moments, empirical CDF mass test) and accept the degeneracy risk pending user review",
+        "source_support": "Most literal reading of the paper's own words."
+      },
+      {
+        "option": "B",
+        "description": "User supplies a refined/clarified acceptance procedure before implementation proceeds",
+        "source_support": "N/A -- current blocked state."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_DROPOUT_RATE"
+    ],
+    "recommended_if_forced": "A (literal reading), flagged for explicit user confirmation given known degeneracy risk",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_RANKING_CRITERION",
+    "level": 2,
+    "topic": "Criterion used to rank surviving candidate ETFs before allocation",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4-5 step 4: 'Rank funds in list, and allocate available capital' -- ranked by what value is never stated.",
+    "why_it_matters": "Determines selection order when capital constraints or count limits (if any) apply, and affects which symbols are prioritized when not all survivors can be equally funded.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Rank by raw model output score (the same real-valued score used for ROC thresholding)",
+        "source_support": "Most direct reuse of an already-computed quantity; no explicit statement."
+      },
+      {
+        "option": "B",
+        "description": "Rank by the allocation raw score w_s itself (post-hoc, using each candidate's own win/streak history)",
+        "source_support": "No explicit statement; plausible since w_s is exactly the quantity computed immediately after ranking in the paper's own step list."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_WEIGHT_NORMALIZATION"
+    ],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_BUY_COUNT_RULE",
+    "level": 2,
+    "topic": "Maximum/minimum number of ETFs bought per week, if any",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Table 3's 2.25 avg buys/week is stated as a *result* of the filter cascade (p.6), not a target; no explicit cap or floor is given anywhere.",
+    "why_it_matters": "Task brief explicitly forbids imposing a Top-2/Top-3 rule; without this decision, the buy list is simply 'everything that survives all upstream filters', which is the most literal reading but should be confirmed.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "No explicit cap/floor -- buy list is exactly the filter cascade's survivors",
+        "source_support": "Most literal reading; consistent with 2.25/wk being described as a 'result... of the procedures used for filtering' (p.6)."
+      },
+      {
+        "option": "B",
+        "description": "An implicit cap exists but is unstated (e.g. capital constraints alone limit effective buy count)",
+        "source_support": "No textual support; included only because task brief flags buy-count rule as open."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "MEDIUM"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_STARTING_CAPITAL",
+    "level": 3,
+    "topic": "Backtest starting account value",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Never stated anywhere in the paper. The only dollar figure present is the $300 Rule-B threshold (Table 2).",
+    "why_it_matters": "All dollar-denominated risk rules (Rule B) and all realistic position-sizing math require a starting capital; per task brief, must NOT default to $100,000.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "User-specified starting capital",
+        "source_support": "N/A -- no paper support for any specific figure."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_RULE_B_SCALE_CONTEXT"
+    ],
+    "recommended_if_forced": "NONE -- must come from user",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_SHARE_ROUNDING",
+    "level": 3,
+    "topic": "Integer vs fractional share handling",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not addressed anywhere in the paper.",
+    "why_it_matters": "Determines whether allocation weights translate exactly to dollar exposure or are quantized by whole-share rounding, which matters most for small starting-capital scenarios.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Fractional shares (exact dollar allocation)",
+        "source_support": "None."
+      },
+      {
+        "option": "B",
+        "description": "Integer shares with residual cash uninvested",
+        "source_support": "None; more realistic of 2012-era retail brokerage constraints, not stated."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_STARTING_CAPITAL"
+    ],
+    "recommended_if_forced": "A (simpler, matches 'preliminary results' framing)",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_CASH_HANDLING",
+    "level": 3,
+    "topic": "Treatment of uninvested residual cash between trading weeks",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not addressed anywhere in the paper.",
+    "why_it_matters": "Determines whether idle cash (e.g. in weeks with fewer buys, or Rule-B halt weeks) earns any return or sits flat, affecting realized CAGR.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Idle cash earns zero return (flat)",
+        "source_support": "None; simplest assumption."
+      },
+      {
+        "option": "B",
+        "description": "Idle cash earns the contemporaneous risk-free rate (same 90-day T-bill series used for Sharpe)",
+        "source_support": "Weak thematic consistency with the paper's own risk-free proxy choice; not stated as applying to idle cash."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_CAPITAL_DEPLOYMENT",
+    "level": 3,
+    "topic": "Whether 100% of capital is deployed each week or partial/leveraged deployment is allowed",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not addressed anywhere in the paper.",
+    "why_it_matters": "Interacts directly with the weight-normalization decision -- full deployment vs partial deployment change realized portfolio volatility and CAGR even holding the selection/allocation logic fixed.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Full deployment: normalized weights always sum to 1.0 of available capital each week",
+        "source_support": "None specific, but consistent with 'available capital is distributed' language (p.5)."
+      },
+      {
+        "option": "B",
+        "description": "Partial deployment scaled by conviction/count of survivors (fewer survivors -> less capital deployed)",
+        "source_support": "None."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_WEIGHT_NORMALIZATION"
+    ],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_WEIGHT_NORMALIZATION",
+    "level": 3,
+    "topic": "How raw allocation scores w_s convert into dollar position sizes",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.5-6 gives the exact raw-score formula w_s = 1.0 + wins_s/buys_s + streak_s/(wins_s+1) but never states how {w_s} for the week's selected set becomes actual capital weights.",
+    "why_it_matters": "Without this the exact formula produces an unbounded positive score per symbol with no defined mapping to dollars -- required for any executable backtest.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Normalize selected symbols' raw scores to sum to 1.0, multiply by deployed capital",
+        "source_support": "Most natural 'weight' interpretation of the word w_s itself, though not stated."
+      },
+      {
+        "option": "B",
+        "description": "Equal-dollar-weight all selected symbols (ignore w_s magnitude for sizing, use only for ranking)",
+        "source_support": "None; included as the simplest alternative."
+      },
+      {
+        "option": "C",
+        "description": "w_s used as a multiplier against a fixed per-position base allocation (not necessarily summing to 1)",
+        "source_support": "None; paper task brief explicitly names this as a candidate to consider."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_CAPITAL_DEPLOYMENT",
+      "DECISION_REQUIRED_RANKING_CRITERION"
+    ],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_STREAK_SEMANTICS",
+    "level": 3,
+    "topic": "Exact reset/in-progress semantics of streak_s in the allocation formula",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "WEAK_INFERENCE",
+    "source_evidence": "p.6: 'streak_s is the number of consecutive buys producing a profitable outcome (not necessarily contiguous weeks)' -- clarifies 'consecutive' means consecutive trades not consecutive calendar weeks, but does not state the reset rule on a loss or whether an in-progress streak counts at allocation time.",
+    "why_it_matters": "Directly affects the allocation raw score; a wrong reset rule changes capital weighting for symbols with mixed recent records.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "streak_s resets to 0 on any losing trade; counts the current (possibly in-progress) streak as of allocation time",
+        "source_support": "Most literal reading of 'consecutive buys producing a profitable outcome'."
+      },
+      {
+        "option": "B",
+        "description": "streak_s only counts fully completed streaks (a streak broken by a loss is 'closed' and a new one starts at 0, but the count used is always the most recently completed streak's length, not the currently-building one)",
+        "source_support": "No direct support; alternative reading of ambiguous wording."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "MEDIUM"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_HOLIDAY_EXECUTION",
+    "level": 3,
+    "topic": "Weekly-calendar handling when Friday close or Monday open falls on a market holiday",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not addressed anywhere in the paper.",
+    "why_it_matters": "Every year in 2012-2022 contains multiple holiday-shortened weeks (Good Friday, MLK/Presidents/Memorial/Labor Day Mondays, etc.); without a rule, those weeks cannot be executed.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Substitute nearest prior trading day for a missing Friday, nearest following trading day for a missing Monday",
+        "source_support": "None; simplest generalization of 'Friday close'/'Monday open'."
+      },
+      {
+        "option": "B",
+        "description": "Skip (no trade) any week where either boundary day is a holiday",
+        "source_support": "None."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_ETF_DIVIDEND_TREATMENT",
+    "level": 3,
+    "topic": "Whether ETF entry/exit execution prices reflect dividend adjustment",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Not addressed for the traded ETFs anywhere in the paper (only the benchmark's dividend treatment is explicit).",
+    "why_it_matters": "Ex-dividend price drops that fall inside a one-week hold could be misread as trading losses if unadjusted close is used naively across an ex-div date; the choice interacts with DECISION_REQUIRED_PRICE_FIELD.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Use unadjusted close for both entry and exit -- dividends simply are not captured as strategy return (matches a literal 'buy/sell at close' reading)",
+        "source_support": "None specific."
+      },
+      {
+        "option": "B",
+        "description": "Use adjusted close throughout, so dividend effects are embedded consistently",
+        "source_support": "None specific."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_PRICE_FIELD"
+    ],
+    "recommended_if_forced": "A",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_BENCHMARK_RETURN_TREATMENT",
+    "level": 3,
+    "topic": "Exact reproducible series used for the SPX total-return benchmark",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "p.4: 'benchmark strategy of full investment in the S&P 500 (SPX)... CAGR_SPX includes reinvestment of dividends' (footnote points to an external, non-machine-readable source: https://bit.ly/3iavw0u).",
+    "why_it_matters": "CAGR_SPX is the direct subtrahend of alpha (the paper's headline metric); an imprecise proxy changes every reported alpha figure this rebuild would eventually try to compare against.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "PAPER_REPORTING_BENCHMARK proxy: SPY total return (dividends reinvested), computed from SPY adjusted close",
+        "source_support": "SPY is the standard tradeable SPX proxy; 'total return via adjusted close' approximates but does not exactly equal a true SPX-TR index (expense ratio/tracking difference)."
+      },
+      {
+        "option": "B",
+        "description": "EXECUTABLE_PROXY_IF_NEEDED: raw ^GSPC price index with a separately sourced dividend-yield add-back",
+        "source_support": "Closer to a literal SPX-TR reconstruction but requires an external dividend-yield series not present in this repo."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (SPY total return) as the practical EXECUTABLE_PROXY, clearly labeled as a proxy, not claimed equal to PAPER_REPORTING_BENCHMARK",
+    "recommendation_confidence": "MEDIUM"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_RULE_A_STATE",
+    "level": 3,
+    "topic": "Rule A (5%/week symbol loss) \u2014 % of entry price vs % of portfolio equity",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Table 2 (p.5) states the exact numeric threshold (5%) and evaluation cadence, but not the underlying state-machine semantics -- see `docs/paper_risk_rule_audit.md` for the full per-rule treatment.",
+    "why_it_matters": "Table 2's five rules are part of the EXPLICIT loss-mitigation mechanism, but cannot be executed deterministically without resolving the state variable each depends on.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "See docs/paper_risk_rule_audit.md for this rule's specific candidate readings",
+        "source_support": "Full detail recorded there rather than duplicated here."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "See docs/paper_risk_rule_audit.md",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_RULE_B_SCALE_CONTEXT",
+    "level": 3,
+    "topic": "Rule B ($300/week loss) \u2014 measured against what P&L figure, and halt-timing",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Table 2 (p.5) states the exact numeric threshold ($300) and evaluation cadence, but not the underlying state-machine semantics -- see `docs/paper_risk_rule_audit.md` for the full per-rule treatment.",
+    "why_it_matters": "Table 2's five rules are part of the EXPLICIT loss-mitigation mechanism, but cannot be executed deterministically without resolving the state variable each depends on.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "See docs/paper_risk_rule_audit.md for this rule's specific candidate readings",
+        "source_support": "Full detail recorded there rather than duplicated here."
+      }
+    ],
+    "dependencies": [
+      "DECISION_REQUIRED_STARTING_CAPITAL"
+    ],
+    "recommended_if_forced": "See docs/paper_risk_rule_audit.md",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_RULE_C_REFERENCE",
+    "level": 3,
+    "topic": "Rule C (5% Q4 underwater) \u2014 reference point for 'underwater'",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Table 2 (p.5) states the exact numeric threshold (5%) and evaluation cadence, but not the underlying state-machine semantics -- see `docs/paper_risk_rule_audit.md` for the full per-rule treatment.",
+    "why_it_matters": "Table 2's five rules are part of the EXPLICIT loss-mitigation mechanism, but cannot be executed deterministically without resolving the state variable each depends on.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "See docs/paper_risk_rule_audit.md for this rule's specific candidate readings",
+        "source_support": "Full detail recorded there rather than duplicated here."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "See docs/paper_risk_rule_audit.md",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_RULE_D_RESET",
+    "level": 3,
+    "topic": "Rule D (27.5% max symbol loss, Q1-Q4) \u2014 cumulative definition and year-reset",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Table 2 (p.5) states the exact numeric threshold (27.5%) and evaluation cadence, but not the underlying state-machine semantics -- see `docs/paper_risk_rule_audit.md` for the full per-rule treatment.",
+    "why_it_matters": "Table 2's five rules are part of the EXPLICIT loss-mitigation mechanism, but cannot be executed deterministically without resolving the state variable each depends on.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "See docs/paper_risk_rule_audit.md for this rule's specific candidate readings",
+        "source_support": "Full detail recorded there rather than duplicated here."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "See docs/paper_risk_rule_audit.md",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_RULE_E_MIN_SAMPLE",
+    "level": 3,
+    "topic": "Rule E (45% min win rate, Q4) \u2014 trade-history scope and minimum sample size",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "MISSING",
+    "source_evidence": "Table 2 (p.5) states the exact numeric threshold (45%) and evaluation cadence, but not the underlying state-machine semantics -- see `docs/paper_risk_rule_audit.md` for the full per-rule treatment.",
+    "why_it_matters": "Table 2's five rules are part of the EXPLICIT loss-mitigation mechanism, but cannot be executed deterministically without resolving the state variable each depends on.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "See docs/paper_risk_rule_audit.md for this rule's specific candidate readings",
+        "source_support": "Full detail recorded there rather than duplicated here."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "See docs/paper_risk_rule_audit.md",
+    "recommendation_confidence": "LOW"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_TICKER_ORDERING",
+    "level": 0,
+    "topic": "Canonical 11-ticker ordering convention (Table 1 order vs Figure 1 alphabetical order)",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "WEAK_INFERENCE",
+    "source_evidence": "Table 1 (p.3) lists sectors in one order; Figure 1 (p.4) draws columns in a different (alphabetical-by-symbol) order.",
+    "why_it_matters": "Non-blocking: any single fixed ordering, used consistently everywhere (tensors, labels, model outputs, ROC/MC/allocation/risk state), is mechanically equivalent. Recorded only in case the user prefers to match Figure 1's convention instead of the adopted Table 1 order.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Table 1 order (adopted default in this rebuild)",
+        "source_support": "Canonical 'sectors and their symbols' listing."
+      },
+      {
+        "option": "B",
+        "description": "Figure 1 alphabetical-by-symbol order",
+        "source_support": "Matches the one schematic figure in the paper."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (already implemented; non-blocking)",
+    "recommendation_confidence": "HIGH"
+  },
+  {
+    "decision_id": "DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION",
+    "level": 1,
+    "topic": "Contingency: substitute framework if TensorFlow/Keras is unavailable at training time",
+    "status": "USER_DECISION_REQUIRED",
+    "source_classification": "EXPLICIT (paper) / environment-triggered contingency",
+    "source_evidence": "p.4: 'Models were developed used the TensorFlow platform [1] and the Keras deep learning API [6].'",
+    "why_it_matters": "Not a hypothetical contingency: this environment's Python (3.14) has no available TensorFlow wheel (`pip index versions tensorflow` returns no matching distribution as of 2026-08-13), so TF/Keras -- the paper's explicitly stated framework -- cannot currently be installed here. Model training is blocked on either (a) provisioning a Python environment with TF/Keras support, or (b) an explicit, acknowledged framework substitution (e.g. PyTorch) accepted as a deviation from source fidelity for this environment only.",
+    "candidate_options": [
+      {
+        "option": "A",
+        "description": "Provision a separate Python 3.11/3.12 environment with TensorFlow/Keras installed, used only for this rebuild's training/inference",
+        "source_support": "Preserves exact framework fidelity per paper (EXPLICIT, p.4)."
+      },
+      {
+        "option": "B",
+        "description": "Accept an explicit PyTorch substitution for this rebuild, clearly labeled as a fidelity deviation",
+        "source_support": "None -- paper explicitly states TF/Keras; this would be a deliberate, disclosed departure, not a silent one."
+      }
+    ],
+    "dependencies": [],
+    "recommended_if_forced": "A (provision TF-compatible environment) -- avoid substituting framework silently",
+    "recommendation_confidence": "MEDIUM"
+  }
+]

@@ -1,0 +1,33 @@
+component,source_section,source_page,source_table_or_figure,classification,decision_id_if_any,implementation_module,test_reference
+ETF universe,2.1 Data preparation,3,Table 1,EXPLICIT,,src/data.py,tests/test_data.py
+Canonical ticker ordering,2.1 / Figure 1,3-4,Table 1 vs Figure 1,WEAK_INFERENCE,DECISION_REQUIRED_TICKER_ORDERING,src/data.py,tests/test_ticker_ordering.py
+Sample period 2012-2022,2.2 Model optimization,3,,EXPLICIT,,src/training_schedule.py,tests/test_training_schedule.py
+Data source (Yahoo Finance),2.1 Data preparation,3,,EXPLICIT,,src/data.py,tests/test_data.py
+Weekly calendar / Friday close,2.1 Data preparation,3,,EXPLICIT,DECISION_REQUIRED_HOLIDAY_EXECUTION,src/calendar.py,tests/test_calendar.py
+Input tensor shape N x (l+m),2.1 Data preparation,3-4,Figure 1,EXPLICIT,DECISION_REQUIRED_LOOKBACK_N,src/tensors.py,tests/test_tensors.py
+Auxiliary variables excluded from final model,2.1 Data preparation,3,,EXPLICIT,,src/tensors.py,tests/test_tensors.py
+Target threshold +100bps,2.1 / Discussion,"3, 6",,EXPLICIT,,src/labels.py,tests/test_labels.py
+Target return interval,2.1 Data preparation,3,,STRONG_INFERENCE,DECISION_REQUIRED_TARGET_RETURN_INTERVAL,src/labels.py,tests/test_labels.py
+"Normalization (zero mean, unit variance)",2.1 Data preparation,3,,EXPLICIT,DECISION_REQUIRED_NORMALIZATION_SCOPE,src/normalization.py,tests/test_normalization.py
+MIMO geometry (11 simultaneous outputs),2.2 Deep learning model / Discussion,"3, 6",,EXPLICIT,,src/model.py,tests/test_model_architecture.py
+"4 Dense+ReLU+Dropout hidden layers, linear output",2.2 Deep learning model,3,,EXPLICIT,DECISION_REQUIRED_HIDDEN_WIDTHS; DECISION_REQUIRED_DROPOUT_RATE,src/model.py,tests/test_model_architecture.py
+Output semantics (continuous score),2.3 Generation of 'buy' signal,4,,STRONG_INFERENCE,,src/roc.py,tests/test_roc.py
+Custom financial loss,2.2 Model optimization,4,,MISSING,DECISION_REQUIRED_CUSTOM_FINANCIAL_LOSS,src/model.py,tests/test_model_architecture.py
+Framework (TensorFlow/Keras),2.2 Model optimization,4,,EXPLICIT,DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION,src/model.py,tests/test_model_architecture.py
+"Annual training cadence, 2yr window",2.2 Model optimization,3,,EXPLICIT,,src/training_schedule.py,tests/test_training_schedule.py
+Weekly incremental update timing,2.3 Swing trading,5,,EXPLICIT,,src/training_schedule.py,tests/test_training_schedule.py
+Weekly incremental update mechanism,2.2 Model optimization,3,,MISSING,DECISION_REQUIRED_WEEKLY_UPDATE_MECHANISM,src/training_schedule.py,tests/test_training_schedule.py
+Training hyperparameters (optimizer/LR/batch/epochs/early-stop/seed),2.2 Model optimization,3-4,,MISSING,DECISION_REQUIRED_OPTIMIZER etc. (7 items),src/training_schedule.py,tests/test_training_schedule.py
+Dynamic per-ETF ROC thresholds,2.3 Generation of 'buy' signal,4,,EXPLICIT,DECISION_REQUIRED_ROC_OBJECTIVE etc. (5 items),src/roc.py,tests/test_roc.py
+Monte Carlo dropout confidence filter,2.3 Confidence estimation,4,,EXPLICIT,DECISION_REQUIRED_MC_PASSES etc. (5 items),src/mc_dropout.py,tests/test_mc_dropout.py
+Buy-list pipeline ordering,2.3 Swing trading,4-5,,EXPLICIT,DECISION_REQUIRED_RANKING_CRITERION; DECISION_REQUIRED_BUY_COUNT_RULE,src/backtest.py,tests/test_backtest.py
+Execution timeline (Mon open / Fri close),2.3 Swing trading / Intro,"1, 4-5",,EXPLICIT,DECISION_REQUIRED_HOLIDAY_EXECUTION,src/execution.py,tests/test_execution.py
+"Transaction costs (zero, PAPER_PARITY_GROSS)",3 Discussion,7,,EXPLICIT,,src/execution.py,tests/test_execution.py
+ETF dividend treatment,2.1 Data preparation,3,,MISSING,DECISION_REQUIRED_ETF_DIVIDEND_TREATMENT,src/execution.py,tests/test_execution.py
+Benchmark (SPX total return),2.2 Evaluation of trading performance,4,,EXPLICIT / MISSING (series),DECISION_REQUIRED_BENCHMARK_RETURN_TREATMENT,src/backtest.py,tests/test_backtest.py
+Starting capital,(not stated),,,MISSING,DECISION_REQUIRED_STARTING_CAPITAL,src/execution.py,tests/test_execution.py
+Share rounding / cash / deployment,(not stated),,,MISSING,DECISION_REQUIRED_SHARE_ROUNDING etc. (3 items),src/execution.py,tests/test_execution.py
+"Risk rules Table 2 (5 conditions, exact values)",2.3 Loss reduction heuristics,5,Table 2,EXPLICIT,DECISION_REQUIRED_RULE_A_STATE etc. (5 items),src/risk.py,tests/test_risk_rules.py
+Allocation raw-score formula,2.3 Dynamic allocation of capital,5-6,,EXPLICIT,DECISION_REQUIRED_STREAK_SEMANTICS,src/allocation.py,tests/test_allocation.py
+Raw score -> dollar weight conversion,2.3 Dynamic allocation of capital,5-6,,MISSING,DECISION_REQUIRED_WEIGHT_NORMALIZATION,src/allocation.py,tests/test_allocation.py
+Performance metric definitions (CAGR/Sharpe/MaxDD/alpha),2.2 Evaluation of trading performance,4,,EXPLICIT,,src/backtest.py,tests/test_backtest.py

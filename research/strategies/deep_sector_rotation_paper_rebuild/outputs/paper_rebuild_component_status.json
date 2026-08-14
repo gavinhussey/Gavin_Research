@@ -1,0 +1,329 @@
+{
+  "components": [
+    {
+      "component": "ETF universe",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "Table 1",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/data.py",
+      "test_reference": "tests/test_data.py"
+    },
+    {
+      "component": "Canonical ticker ordering",
+      "source_section": "2.1 / Figure 1",
+      "source_page": "3-4",
+      "source_table_or_figure": "Table 1 vs Figure 1",
+      "classification": "WEAK_INFERENCE",
+      "decision_id_if_any": "DECISION_REQUIRED_TICKER_ORDERING",
+      "implementation_module": "src/data.py",
+      "test_reference": "tests/test_ticker_ordering.py"
+    },
+    {
+      "component": "Sample period 2012-2022",
+      "source_section": "2.2 Model optimization",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/training_schedule.py",
+      "test_reference": "tests/test_training_schedule.py"
+    },
+    {
+      "component": "Data source (Yahoo Finance)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/data.py",
+      "test_reference": "tests/test_data.py"
+    },
+    {
+      "component": "Weekly calendar / Friday close",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_HOLIDAY_EXECUTION",
+      "implementation_module": "src/calendar.py",
+      "test_reference": "tests/test_calendar.py"
+    },
+    {
+      "component": "Input tensor shape N x (l+m)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3-4",
+      "source_table_or_figure": "Figure 1",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_LOOKBACK_N",
+      "implementation_module": "src/tensors.py",
+      "test_reference": "tests/test_tensors.py"
+    },
+    {
+      "component": "Auxiliary variables excluded from final model",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/tensors.py",
+      "test_reference": "tests/test_tensors.py"
+    },
+    {
+      "component": "Target threshold +100bps",
+      "source_section": "2.1 / Discussion",
+      "source_page": "3, 6",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/labels.py",
+      "test_reference": "tests/test_labels.py"
+    },
+    {
+      "component": "Target return interval",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "STRONG_INFERENCE",
+      "decision_id_if_any": "DECISION_REQUIRED_TARGET_RETURN_INTERVAL",
+      "implementation_module": "src/labels.py",
+      "test_reference": "tests/test_labels.py"
+    },
+    {
+      "component": "Normalization (zero mean, unit variance)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_NORMALIZATION_SCOPE",
+      "implementation_module": "src/normalization.py",
+      "test_reference": "tests/test_normalization.py"
+    },
+    {
+      "component": "MIMO geometry (11 simultaneous outputs)",
+      "source_section": "2.2 Deep learning model / Discussion",
+      "source_page": "3, 6",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/model.py",
+      "test_reference": "tests/test_model_architecture.py"
+    },
+    {
+      "component": "4 Dense+ReLU+Dropout hidden layers, linear output",
+      "source_section": "2.2 Deep learning model",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_HIDDEN_WIDTHS; DECISION_REQUIRED_DROPOUT_RATE",
+      "implementation_module": "src/model.py",
+      "test_reference": "tests/test_model_architecture.py"
+    },
+    {
+      "component": "Output semantics (continuous score)",
+      "source_section": "2.3 Generation of 'buy' signal",
+      "source_page": "4",
+      "source_table_or_figure": "",
+      "classification": "STRONG_INFERENCE",
+      "decision_id_if_any": "",
+      "implementation_module": "src/roc.py",
+      "test_reference": "tests/test_roc.py"
+    },
+    {
+      "component": "Custom financial loss",
+      "source_section": "2.2 Model optimization",
+      "source_page": "4",
+      "source_table_or_figure": "",
+      "classification": "MISSING",
+      "decision_id_if_any": "DECISION_REQUIRED_CUSTOM_FINANCIAL_LOSS",
+      "implementation_module": "src/model.py",
+      "test_reference": "tests/test_model_architecture.py"
+    },
+    {
+      "component": "Framework (TensorFlow/Keras)",
+      "source_section": "2.2 Model optimization",
+      "source_page": "4",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION",
+      "implementation_module": "src/model.py",
+      "test_reference": "tests/test_model_architecture.py"
+    },
+    {
+      "component": "Annual training cadence, 2yr window",
+      "source_section": "2.2 Model optimization",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/training_schedule.py",
+      "test_reference": "tests/test_training_schedule.py"
+    },
+    {
+      "component": "Weekly incremental update timing",
+      "source_section": "2.3 Swing trading",
+      "source_page": "5",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/training_schedule.py",
+      "test_reference": "tests/test_training_schedule.py"
+    },
+    {
+      "component": "Weekly incremental update mechanism",
+      "source_section": "2.2 Model optimization",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "MISSING",
+      "decision_id_if_any": "DECISION_REQUIRED_WEEKLY_UPDATE_MECHANISM",
+      "implementation_module": "src/training_schedule.py",
+      "test_reference": "tests/test_training_schedule.py"
+    },
+    {
+      "component": "Training hyperparameters (optimizer/LR/batch/epochs/early-stop/seed)",
+      "source_section": "2.2 Model optimization",
+      "source_page": "3-4",
+      "source_table_or_figure": "",
+      "classification": "MISSING",
+      "decision_id_if_any": "DECISION_REQUIRED_OPTIMIZER etc. (7 items)",
+      "implementation_module": "src/training_schedule.py",
+      "test_reference": "tests/test_training_schedule.py"
+    },
+    {
+      "component": "Dynamic per-ETF ROC thresholds",
+      "source_section": "2.3 Generation of 'buy' signal",
+      "source_page": "4",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_ROC_OBJECTIVE etc. (5 items)",
+      "implementation_module": "src/roc.py",
+      "test_reference": "tests/test_roc.py"
+    },
+    {
+      "component": "Monte Carlo dropout confidence filter",
+      "source_section": "2.3 Confidence estimation",
+      "source_page": "4",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_MC_PASSES etc. (5 items)",
+      "implementation_module": "src/mc_dropout.py",
+      "test_reference": "tests/test_mc_dropout.py"
+    },
+    {
+      "component": "Buy-list pipeline ordering",
+      "source_section": "2.3 Swing trading",
+      "source_page": "4-5",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_RANKING_CRITERION; DECISION_REQUIRED_BUY_COUNT_RULE",
+      "implementation_module": "src/backtest.py",
+      "test_reference": "tests/test_backtest.py"
+    },
+    {
+      "component": "Execution timeline (Mon open / Fri close)",
+      "source_section": "2.3 Swing trading / Intro",
+      "source_page": "1, 4-5",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_HOLIDAY_EXECUTION",
+      "implementation_module": "src/execution.py",
+      "test_reference": "tests/test_execution.py"
+    },
+    {
+      "component": "Transaction costs (zero, PAPER_PARITY_GROSS)",
+      "source_section": "3 Discussion",
+      "source_page": "7",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/execution.py",
+      "test_reference": "tests/test_execution.py"
+    },
+    {
+      "component": "ETF dividend treatment",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "MISSING",
+      "decision_id_if_any": "DECISION_REQUIRED_ETF_DIVIDEND_TREATMENT",
+      "implementation_module": "src/execution.py",
+      "test_reference": "tests/test_execution.py"
+    },
+    {
+      "component": "Benchmark (SPX total return)",
+      "source_section": "2.2 Evaluation of trading performance",
+      "source_page": "4",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT / MISSING (series)",
+      "decision_id_if_any": "DECISION_REQUIRED_BENCHMARK_RETURN_TREATMENT",
+      "implementation_module": "src/backtest.py",
+      "test_reference": "tests/test_backtest.py"
+    },
+    {
+      "component": "Starting capital",
+      "source_section": "(not stated)",
+      "source_page": "",
+      "source_table_or_figure": "",
+      "classification": "MISSING",
+      "decision_id_if_any": "DECISION_REQUIRED_STARTING_CAPITAL",
+      "implementation_module": "src/execution.py",
+      "test_reference": "tests/test_execution.py"
+    },
+    {
+      "component": "Share rounding / cash / deployment",
+      "source_section": "(not stated)",
+      "source_page": "",
+      "source_table_or_figure": "",
+      "classification": "MISSING",
+      "decision_id_if_any": "DECISION_REQUIRED_SHARE_ROUNDING etc. (3 items)",
+      "implementation_module": "src/execution.py",
+      "test_reference": "tests/test_execution.py"
+    },
+    {
+      "component": "Risk rules Table 2 (5 conditions, exact values)",
+      "source_section": "2.3 Loss reduction heuristics",
+      "source_page": "5",
+      "source_table_or_figure": "Table 2",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_RULE_A_STATE etc. (5 items)",
+      "implementation_module": "src/risk.py",
+      "test_reference": "tests/test_risk_rules.py"
+    },
+    {
+      "component": "Allocation raw-score formula",
+      "source_section": "2.3 Dynamic allocation of capital",
+      "source_page": "5-6",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_STREAK_SEMANTICS",
+      "implementation_module": "src/allocation.py",
+      "test_reference": "tests/test_allocation.py"
+    },
+    {
+      "component": "Raw score -> dollar weight conversion",
+      "source_section": "2.3 Dynamic allocation of capital",
+      "source_page": "5-6",
+      "source_table_or_figure": "",
+      "classification": "MISSING",
+      "decision_id_if_any": "DECISION_REQUIRED_WEIGHT_NORMALIZATION",
+      "implementation_module": "src/allocation.py",
+      "test_reference": "tests/test_allocation.py"
+    },
+    {
+      "component": "Performance metric definitions (CAGR/Sharpe/MaxDD/alpha)",
+      "source_section": "2.2 Evaluation of trading performance",
+      "source_page": "4",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/backtest.py",
+      "test_reference": "tests/test_backtest.py"
+    }
+  ],
+  "summary": {
+    "total_components": 32,
+    "explicit_or_fully_resolved": 10,
+    "blocked_on_decision": 21
+  }
+}

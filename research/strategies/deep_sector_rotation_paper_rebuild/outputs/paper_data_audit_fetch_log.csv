@@ -1,0 +1,14 @@
+symbol,status,rows,first_date,last_date,out_path
+XLK,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLK.csv
+XLV,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLV.csv
+XLY,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLY.csv
+VOX,OK,5503,2004-09-29,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/VOX.csv
+XLF,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLF.csv
+XLI,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLI.csv
+XLP,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLP.csv
+XLU,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLU.csv
+XLB,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLB.csv
+IYR,OK,6577,2000-06-19,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/IYR.csv
+XLE,OK,6952,1998-12-22,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/XLE.csv
+SPY,OK,8442,1993-01-29,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/SPY.csv
+^GSPC,OK,24771,1927-12-30,2026-08-13,research/strategies/deep_sector_rotation_paper_rebuild/data/raw/prices/GSPC.csv
