@@ -18,7 +18,12 @@ component was found to be genuinely `CONTRADICTORY`.
   (`src/calendar.py`, `tests/test_calendar.py`).
 - Tensor construction mechanics: chronological ordering, shape
   parameterization, no-lookahead guarantee (`src/tensors.py`,
-  `tests/test_tensors.py`).
+  `tests/test_tensors.py`). `DECISION_REQUIRED_PRICE_FIELD` RESOLVED
+  (Yahoo Adjusted Close LEVELS, sampled at each week's final actual
+  trading session — `src/tensors.py::build_weekly_price_matrix`); tensor
+  construction itself (`build_paper_tensor`) remains blocked on
+  `DECISION_REQUIRED_LOOKBACK_N` and `DECISION_REQUIRED_VOLUME_INPUT`,
+  neither of which is resolved by this.
 - Target label construction — `DECISION_REQUIRED_TARGET_RETURN_INTERVAL`
   RESOLVED (first-actual-trading-day open → last-actual-trading-day close
   of the target week, +1% threshold; see decision register), including
@@ -26,8 +31,14 @@ component was found to be genuinely `CONTRADICTORY`.
   resolution) — `src/labels.py`, `src/calendar.py`, `tests/test_labels.py`,
   `tests/test_calendar.py`. `DECISION_REQUIRED_PRICE_FIELD` (model tensor
   input field) is untouched by this and remains open.
-- Normalization mechanics with a structural lookahead guard
-  (`src/normalization.py`, `tests/test_normalization.py`).
+- Normalization: `DECISION_REQUIRED_NORMALIZATION_SCOPE` RESOLVED
+  (per-ETF z-score, fit once on the annual model's initial two-year
+  training history, frozen for the trading year —
+  `src/normalization.py::AnnualPriceScaler` /
+  `fit_annual_price_scaler`), plus the pre-existing generic lookahead
+  guard (`src/normalization.py`, `tests/test_normalization.py`). Audit
+  trail: `outputs/paper_annual_scaler_audit.csv` (real Yahoo data, all 11
+  trading years).
 - MIMO architecture shape (11 outputs, 4 hidden Dense+ReLU+Dropout blocks,
   linear output) — `src/model.py`, `tests/test_model_architecture.py`.
 - Annual scheduler shape (2012-2022, 2-year training window) —
@@ -85,13 +96,14 @@ Resolve Level-1 decisions first (see decision register), in this order of
 practical urgency:
 1. `DECISION_REQUIRED_CUSTOM_FINANCIAL_LOSS` (blocks all training)
 2. `DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION` — **RESOLVED**
-3. `DECISION_REQUIRED_LOOKBACK_N`, `_PRICE_FIELD`, `_VOLUME_INPUT` (block
-   tensor construction)
+3. `DECISION_REQUIRED_LOOKBACK_N`, `_VOLUME_INPUT` (block tensor
+   construction); `_PRICE_FIELD` — **RESOLVED** (Adjusted Close levels,
+   final-actual-trading-session sampling)
 4. `DECISION_REQUIRED_TARGET_RETURN_INTERVAL` — **RESOLVED** (also resolved
    `DECISION_REQUIRED_HOLIDAY_EXECUTION` for weekly session selection)
-5. `DECISION_REQUIRED_NORMALIZATION_SCOPE`, `_HIDDEN_WIDTHS`,
-   `_DROPOUT_RATE`, and the 7 training-hyperparameter items (block actual
-   training runs)
+5. `DECISION_REQUIRED_NORMALIZATION_SCOPE` — **RESOLVED** (per-ETF, 2-year
+   annual fit, frozen); `_HIDDEN_WIDTHS`, `_DROPOUT_RATE`, and the 7
+   training-hyperparameter items remain open (block actual training runs)
 
 Then Level 2 (weekly update mechanism, ROC criterion/window, MC-dropout
 parameters, ranking/buy-count rules) to enable weekly signal generation,

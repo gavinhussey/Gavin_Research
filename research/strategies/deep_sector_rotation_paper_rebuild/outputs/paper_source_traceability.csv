@@ -6,9 +6,14 @@ Data source (Yahoo Finance),2.1 Data preparation,3,,EXPLICIT,,src/data.py,tests/
 Weekly calendar / Friday close,2.1 Data preparation,3,,EXPLICIT,DECISION_REQUIRED_HOLIDAY_EXECUTION,src/calendar.py,tests/test_calendar.py
 Input tensor shape N x (l+m),2.1 Data preparation,3-4,Figure 1,EXPLICIT,DECISION_REQUIRED_LOOKBACK_N,src/tensors.py,tests/test_tensors.py
 Auxiliary variables excluded from final model,2.1 Data preparation,3,,EXPLICIT,,src/tensors.py,tests/test_tensors.py
+"MODEL_PRICE_FIELD (Adjusted Close, LEVELS not returns)",2.1 Data preparation,3,,MISSING (USER_RESOLVED),DECISION_REQUIRED_PRICE_FIELD,src/tensors.py,tests/test_tensors.py
+MODEL_PRICE_SAMPLING (final actual trading-day of week t),2.1 Data preparation,3,,EXPLICIT,DECISION_REQUIRED_PRICE_FIELD; DECISION_REQUIRED_HOLIDAY_EXECUTION,src/tensors.py,tests/test_tensors.py
 Target threshold +100bps,2.1 / Discussion,"3, 6",,EXPLICIT,,src/labels.py,tests/test_labels.py
 Target return interval,2.1 Data preparation,3,,STRONG_INFERENCE (USER_RESOLVED),DECISION_REQUIRED_TARGET_RETURN_INTERVAL,src/labels.py,tests/test_labels.py
-"Normalization (zero mean, unit variance)",2.1 Data preparation,3,,EXPLICIT,DECISION_REQUIRED_NORMALIZATION_SCOPE,src/normalization.py,tests/test_normalization.py
+"NORMALIZATION_METHOD (z-score, zero mean unit variance)",2.1 Data preparation,3,,EXPLICIT,,src/normalization.py,tests/test_normalization.py
+NORMALIZATION_AXIS_SCOPE (per-ETF / column-wise),2.1 Data preparation,3,,MISSING (USER_RESOLVED),DECISION_REQUIRED_NORMALIZATION_SCOPE,src/normalization.py,tests/test_normalization.py
+NORMALIZATION_FIT_WINDOW (initial two-year annual training history),2.1 Data preparation,3,,MISSING (USER_RESOLVED),DECISION_REQUIRED_NORMALIZATION_SCOPE,src/normalization.py,tests/test_normalization.py
+NORMALIZATION_UPDATE_POLICY (frozen throughout trading year),2.1 Data preparation,3,,MISSING (USER_RESOLVED),DECISION_REQUIRED_NORMALIZATION_SCOPE,src/normalization.py,tests/test_normalization.py
 MIMO geometry (11 simultaneous outputs),2.2 Deep learning model / Discussion,"3, 6",,EXPLICIT,,src/model.py,tests/test_model_architecture.py
 "4 Dense+ReLU+Dropout hidden layers, linear output",2.2 Deep learning model,3,,EXPLICIT,DECISION_REQUIRED_HIDDEN_WIDTHS; DECISION_REQUIRED_DROPOUT_RATE,src/model.py,tests/test_model_architecture.py
 Output semantics (continuous score),2.3 Generation of 'buy' signal,4,,STRONG_INFERENCE,,src/roc.py,tests/test_roc.py

@@ -32,7 +32,7 @@
     "decision_id": "DECISION_REQUIRED_PRICE_FIELD",
     "level": 1,
     "topic": "Which Yahoo Finance price field populates X_t",
-    "status": "USER_DECISION_REQUIRED",
+    "status": "RESOLVED_ADJUSTED_CLOSE_LEVELS",
     "source_classification": "MISSING",
     "source_evidence": "p.3 says only 'prices... recorded for the current and previous N-1 weeks' were assembled into X_t; never states raw Close vs Adjusted Close vs returns.",
     "why_it_matters": "Determines whether corporate actions (splits, dividends) are silently embedded in the model's price history, and whether the network sees levels or returns -- both materially change learned representations.",
@@ -57,7 +57,13 @@
       "DECISION_REQUIRED_ETF_DIVIDEND_TREATMENT"
     ],
     "recommended_if_forced": "A",
-    "recommendation_confidence": "LOW"
+    "recommendation_confidence": "LOW",
+    "resolution": {
+      "date": "2026-08-15",
+      "option_chosen": "B, restated exactly as levels (not returns)",
+      "outcome": "RESOLVED by explicit user instruction, not by inference upgrade -- source_classification stays MISSING (the paper never states this field). model_price[s,t] = AdjustedClose[s, final_actual_trading_day_of_week_t], a price LEVEL -- not a return, percent-change, log-return, or window-rebased quantity. User rationale (recorded for provenance): Adjusted Close incorporates dividends/distributions into the historical economic price path and avoids treating stock splits/corporate actions or mechanical ex-dividend drops as artificial price shocks in a sector-ETF universe where distributions are material. Weekly sampling reuses the already-resolved holiday-aware calendar machinery (src/calendar.py's `model_cutoff` = the week's final *actual* trading session, e.g. Thursday Adjusted Close on a Good-Friday week) -- no literal-Friday assumption. Implemented in src/tensors.py::build_weekly_price_matrix. Applies ONLY to the model input tensor.",
+      "note": "Does NOT alter the already-resolved target/execution interval (DECISION_REQUIRED_TARGET_RETURN_INTERVAL), which continues to use RAW executable Open (entry) and Close (exit) -- Adjusted Close is never used as an executable trade price. DECISION_REQUIRED_ETF_DIVIDEND_TREATMENT (whether *execution* prices reflect dividend adjustment) is a separate, still-open decision, untouched by this resolution. DECISION_REQUIRED_LOOKBACK_N and DECISION_REQUIRED_VOLUME_INPUT remain open and continue to block src/tensors.py::build_paper_tensor."
+    }
   },
   {
     "decision_id": "DECISION_REQUIRED_VOLUME_INPUT",
@@ -117,7 +123,7 @@
     "decision_id": "DECISION_REQUIRED_NORMALIZATION_SCOPE",
     "level": 1,
     "topic": "Scope over which zero-mean/unit-variance normalization stats are computed",
-    "status": "USER_DECISION_REQUIRED",
+    "status": "RESOLVED_PER_ETF_TWO_YEAR_ANNUAL_ZSCORE_FROZEN",
     "source_classification": "MISSING",
     "source_evidence": "p.3: 'All non-target data were normalized to have zero mean and unit variance' -- states the transform, not its scope.",
     "why_it_matters": "Determines whether normalization stats are refreshed weekly (expanding/rolling) or fixed per annual training window; also determines lookahead-safety implementation detail.",
@@ -142,7 +148,13 @@
       "DECISION_REQUIRED_LOOKBACK_N"
     ],
     "recommended_if_forced": "A",
-    "recommendation_confidence": "LOW"
+    "recommendation_confidence": "LOW",
+    "resolution": {
+      "date": "2026-08-15",
+      "option_chosen": "A, restated exactly, with explicit per-ETF (column-wise) axis",
+      "outcome": "RESOLVED by explicit user instruction, not by inference upgrade -- source_classification stays MISSING (the paper states the z-score transform generally but never its scope/axis/cadence). Column-wise / per-ETF z-score: mu[s,Y] and sigma[s,Y] are each ETF's own mean/std over that annual model's initial two-year training history only (11 means + 11 stds for the price-only case, never one pooled statistic across ETFs). Z[s,t,Y] = (AdjustedClose[s,t] - mu[s,Y]) / sigma[s,Y]. Fit window = the SAME initial 2-year window ([Y-2, Y)) the annual model itself trains on (reusing src/training_schedule.py::AnnualScheduler.training_window_for_year, already EXPLICIT p.3 'previous 2 years' -- not re-derived). Frozen for the entire trading year Y: no weekly refit, no expanding/rolling update during weekly predictions or weekly incremental model updates; a new trading year Y+1 gets an entirely new scaler fit from its own preceding 2-year window. ddof=0 (population variance, matching the project's pre-existing generic fit_normalization() convention -- not a new, separate convention). Zero/negligible training-window variance for a ticker raises ZeroVarianceTrainingWindowError (identifying year/ticker/sigma) rather than silently defaulting sigma=1. Implemented in src/normalization.py::AnnualPriceScaler / fit_annual_price_scaler.",
+      "note": "User rationale (recorded for provenance, not paper-explicit): weekly scaler updates would change the coordinate system underneath model weights already trained in the previous normalized space; the frozen-annual approach instead preserves stable feature coordinates, strict no-lookahead, annual-model consistency, and compatibility with weekly continuation/update of the same model weights. DECISION_REQUIRED_LOOKBACK_N (tensor depth N) remains open -- the scaler operates on the weekly price panel directly and does not require N to be resolved; the normalized tensor builder remains parameterized by N. DECISION_REQUIRED_VOLUME_INPUT remains open; if later approved, volume gets its own independent mean/std, never shared with price statistics. DECISION_REQUIRED_WEEKLY_UPDATE_MECHANISM remains open; any weekly sample fed into the annual model during year Y must be transformed with this same frozen scaler, regardless of the eventual update mechanism."
+    }
   },
   {
     "decision_id": "DECISION_REQUIRED_HIDDEN_WIDTHS",

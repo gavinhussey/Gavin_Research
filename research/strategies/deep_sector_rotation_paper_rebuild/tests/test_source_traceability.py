@@ -10,7 +10,7 @@ def test_every_component_has_a_page_or_explicit_not_stated_marker():
         assert trace.component
         assert trace.classification in {
             "EXPLICIT", "STRONG_INFERENCE", "WEAK_INFERENCE", "MISSING", "CONTRADICTORY",
-            "EXPLICIT / MISSING (series)", "STRONG_INFERENCE (USER_RESOLVED)",
+            "EXPLICIT / MISSING (series)", "STRONG_INFERENCE (USER_RESOLVED)", "MISSING (USER_RESOLVED)",
         }
         assert trace.implementation_module.startswith("src/")
         assert trace.test_reference.startswith("tests/")

@@ -249,7 +249,23 @@ whether the traded-asset columns are raw `Close`, `Adjusted Close`, or
 returns. Classification: **MISSING**. Note this interacts with §5 (Friday-
 close sampling: the *sampling day* is explicit, but the *price field* on
 that day is not) and with dividend/corporate-action handling (§30 in the
-decision register). `DECISION_REQUIRED_PRICE_FIELD` created.
+decision register).
+
+**RESOLVED (2026-08-15) by explicit user decision, not by source
+inference:** `DECISION_REQUIRED_PRICE_FIELD` = Yahoo **Adjusted Close**,
+as a price **LEVEL** (not a return/percent-change/log-return/rebased
+transform) — `model_price[s,t] = AdjustedClose[s, final_actual_trading_day_of_week_t]`.
+`source_classification` stays `MISSING` (this is a clearly labeled
+**USER-RESOLVED reconstruction decision**, never claimed paper-explicit).
+User rationale: Adjusted Close incorporates dividends/distributions into
+the historical economic price path and prevents splits/corporate actions
+or mechanical ex-dividend drops from reading as artificial price shocks.
+Weekly sampling reuses the already-resolved holiday-aware calendar (§5,
+`DECISION_REQUIRED_HOLIDAY_EXECUTION`) — `model_cutoff`, the week's final
+*actual* trading session, not a literal Friday. Applies **only** to the
+model input tensor; the already-resolved target/execution interval (§8)
+continues to use RAW Open/Close and is untouched. Implemented in
+`src/tensors.py::build_weekly_price_matrix`.
 
 ## 12. Normalization
 
@@ -264,11 +280,30 @@ non-trivial: if normalization stats are computed once per trading year from
 the prior 2-year training window and then held fixed through weekly updates,
 that's a different (and lookahead-safe) procedure than recomputing them
 every week from an expanding window. Both are plausible readings.
-`DECISION_REQUIRED_NORMALIZATION_SCOPE` created. Hard constraint carried
-forward regardless of which option is chosen: normalization statistics may
-never be computed using data from at or after the point being normalized/
-predicted (no lookahead) — enforced structurally in `src/normalization.py`
-via a `fit_on` cutoff parameter with an assertion.
+
+**RESOLVED (2026-08-15) by explicit user decision, not by source
+inference:** `DECISION_REQUIRED_NORMALIZATION_SCOPE` = **per-ETF
+(column-wise)** z-score, fit **once** per annual trading model on that
+model's **initial two-year training history** `[Y-2, Y)`, then **frozen**
+for the entire trading year (no weekly refit/expansion/rolling update; a
+new trading year gets an entirely new scaler). `source_classification`
+stays `MISSING` (USER-RESOLVED, not paper-explicit). `ddof=0` (population
+variance), matching the pre-existing generic `fit_normalization()`
+convention already in this module — not a new, separate convention. A
+zero/negligible-variance training window for a ticker raises
+`ZeroVarianceTrainingWindowError` (identifying year/ticker/sigma) rather
+than silently defaulting `sigma=1`. User rationale: weekly scaler updates
+would change the coordinate system underneath model weights already
+trained in the previous normalized space; freezing instead preserves
+stable feature coordinates, strict no-lookahead, annual-model consistency,
+and compatibility with weekly continuation/update of the same model
+weights. Implemented in `src/normalization.py::AnnualPriceScaler` /
+`fit_annual_price_scaler`. Hard constraint carried forward: normalization
+statistics may never be computed using data from at or after the point
+being normalized/predicted (no lookahead) — enforced via hard assertions
+in `fit_annual_price_scaler` (in addition to the pre-existing generic
+`fit_on` cutoff mechanism below, retained for its own lookahead-guard
+demonstration).
 
 ## 13. ETF volume as model input
 
@@ -752,8 +787,8 @@ be compared against, never optimized toward.
 | 8 | Target/label | EXPLICIT (threshold) / STRONG_INFERENCE (interval) | Level 1 |
 | 9 | Canonical ordering | WEAK_INFERENCE | No (implemented, non-blocking) |
 | 10 | Lookback N | MISSING | Level 1 |
-| 11 | Price field | MISSING | Level 1 |
-| 12 | Normalization scope | EXPLICIT (z-score) / MISSING (scope) | Level 1 |
+| 11 | Price field | MISSING (USER_RESOLVED: Adjusted Close levels) | No (resolved) |
+| 12 | Normalization scope | EXPLICIT (z-score) / MISSING (USER_RESOLVED: per-ETF, 2yr annual, frozen) | No (resolved) |
 | 13 | Volume input | MISSING | Level 1 |
 | 14 | MIMO geometry | EXPLICIT | No |
 | 15 | Architecture shape | EXPLICIT | Level 1 (widths/dropout) |

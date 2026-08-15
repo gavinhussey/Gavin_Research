@@ -3,6 +3,17 @@
 Source: paper p.3, §2.1 and Figure 1. X_t in R^{N x (l+m)}, or
 R^{N x (2l+m)} if volume is included. See ../docs/paper_source_audit.md #6,
 #10, #11, #13.
+
+DECISION_REQUIRED_PRICE_FIELD is RESOLVED (see
+../decisions/paper_decision_register.json): the model's weekly price
+input is the Yahoo Finance **Adjusted Close LEVEL** (not raw Close, not a
+returns/log-returns/rebased transform), sampled at each week's *final
+actual trading session* (holiday-aware, via ../src/calendar.py's
+`model_cutoff` column -- consistent with the already-resolved target
+interval's holiday handling). This resolves what the price COLUMNS
+contain; it does not resolve DECISION_REQUIRED_LOOKBACK_N (tensor depth N)
+or DECISION_REQUIRED_VOLUME_INPUT, both of which remain open and continue
+to block `build_paper_tensor` below.
 """
 from __future__ import annotations
 
@@ -11,6 +22,37 @@ import pandas as pd
 
 from .data import PAPER_UNIVERSE, assert_canonical_order
 from .decisions import require_resolved
+
+
+def build_weekly_price_matrix(
+    price_data: dict[str, pd.DataFrame],
+    calendar_df: pd.DataFrame,
+    price_field: str = "adjusted_close",
+) -> pd.DataFrame:
+    """Weekly model-input price matrix: RESOLVED DECISION_REQUIRED_PRICE_FIELD.
+
+    For each week in ``calendar_df``, samples ``price_field`` (default:
+    Adjusted Close) as of that week's ``model_cutoff`` (the final *actual*
+    trading session of the week -- Thursday on a Good-Friday week, etc.,
+    never a literal-Friday assumption). Returns the price LEVEL directly;
+    no return / percent-change / log-return / rebasing transform is
+    applied -- that is a separate, later, explicitly-labeled experiment if
+    ever pursued, not part of this reconstruction.
+
+    ``price_data`` must be a dict of per-symbol raw daily OHLC(+adjusted)
+    frames (as returned by ``data.load_universe_prices()``), keyed by
+    PAPER_UNIVERSE ticker. Output is a date-indexed (by ``model_cutoff``)
+    DataFrame, columns in PAPER_UNIVERSE canonical order, rows in
+    chronological week order (matching ``calendar_df``'s own order).
+    """
+    assert_canonical_order(tuple(price_data.keys()))
+    daily_columns = {symbol: price_data[symbol].set_index("date")[price_field] for symbol in PAPER_UNIVERSE}
+    daily_panel = pd.DataFrame(daily_columns)
+
+    sample_dates = pd.DatetimeIndex(calendar_df["model_cutoff"])
+    weekly_panel = daily_panel.loc[sample_dates, list(PAPER_UNIVERSE)]
+    weekly_panel.index = sample_dates
+    return weekly_panel
 
 
 def build_tensor(
@@ -61,8 +103,11 @@ def build_tensor(
 def build_paper_tensor(price_panel: pd.DataFrame, t_index: int) -> np.ndarray:
     """Decision-gated entry point for constructing the *paper-faithful* X_t.
 
-    Blocked until DECISION_REQUIRED_LOOKBACK_N, DECISION_REQUIRED_PRICE_FIELD,
-    and DECISION_REQUIRED_VOLUME_INPUT are all resolved.
+    DECISION_REQUIRED_PRICE_FIELD is RESOLVED (see
+    build_weekly_price_matrix above). Still blocked on
+    DECISION_REQUIRED_LOOKBACK_N (tensor depth N) and
+    DECISION_REQUIRED_VOLUME_INPUT (whether volume columns are appended),
+    neither of which is resolved by this decision.
     """
     require_resolved(
         "DECISION_REQUIRED_LOOKBACK_N",

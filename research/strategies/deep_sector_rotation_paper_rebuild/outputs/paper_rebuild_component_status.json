@@ -71,6 +71,26 @@
       "test_reference": "tests/test_tensors.py"
     },
     {
+      "component": "MODEL_PRICE_FIELD (Adjusted Close, LEVELS not returns)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "MISSING (USER_RESOLVED)",
+      "decision_id_if_any": "DECISION_REQUIRED_PRICE_FIELD",
+      "implementation_module": "src/tensors.py",
+      "test_reference": "tests/test_tensors.py"
+    },
+    {
+      "component": "MODEL_PRICE_SAMPLING (final actual trading-day of week t)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_PRICE_FIELD; DECISION_REQUIRED_HOLIDAY_EXECUTION",
+      "implementation_module": "src/tensors.py",
+      "test_reference": "tests/test_tensors.py"
+    },
+    {
       "component": "Target threshold +100bps",
       "source_section": "2.1 / Discussion",
       "source_page": "3, 6",
@@ -91,11 +111,41 @@
       "test_reference": "tests/test_labels.py"
     },
     {
-      "component": "Normalization (zero mean, unit variance)",
+      "component": "NORMALIZATION_METHOD (z-score, zero mean unit variance)",
       "source_section": "2.1 Data preparation",
       "source_page": "3",
       "source_table_or_figure": "",
       "classification": "EXPLICIT",
+      "decision_id_if_any": "",
+      "implementation_module": "src/normalization.py",
+      "test_reference": "tests/test_normalization.py"
+    },
+    {
+      "component": "NORMALIZATION_AXIS_SCOPE (per-ETF / column-wise)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "MISSING (USER_RESOLVED)",
+      "decision_id_if_any": "DECISION_REQUIRED_NORMALIZATION_SCOPE",
+      "implementation_module": "src/normalization.py",
+      "test_reference": "tests/test_normalization.py"
+    },
+    {
+      "component": "NORMALIZATION_FIT_WINDOW (initial two-year annual training history)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "MISSING (USER_RESOLVED)",
+      "decision_id_if_any": "DECISION_REQUIRED_NORMALIZATION_SCOPE",
+      "implementation_module": "src/normalization.py",
+      "test_reference": "tests/test_normalization.py"
+    },
+    {
+      "component": "NORMALIZATION_UPDATE_POLICY (frozen throughout trading year)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "MISSING (USER_RESOLVED)",
       "decision_id_if_any": "DECISION_REQUIRED_NORMALIZATION_SCOPE",
       "implementation_module": "src/normalization.py",
       "test_reference": "tests/test_normalization.py"
@@ -322,8 +372,8 @@
     }
   ],
   "summary": {
-    "total_components": 32,
-    "explicit_or_fully_resolved": 10,
-    "blocked_on_decision": 21
+    "total_components": 37,
+    "explicit_or_fully_resolved": 11,
+    "blocked_on_decision": 25
   }
 }

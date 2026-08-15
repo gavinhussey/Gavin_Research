@@ -34,9 +34,14 @@ COMPONENT_TRACES: list[ComponentTrace] = [
     ComponentTrace("Weekly calendar / Friday close", "2.1 Data preparation", "3", "", "EXPLICIT", "DECISION_REQUIRED_HOLIDAY_EXECUTION", "src/calendar.py", "tests/test_calendar.py"),
     ComponentTrace("Input tensor shape N x (l+m)", "2.1 Data preparation", "3-4", "Figure 1", "EXPLICIT", "DECISION_REQUIRED_LOOKBACK_N", "src/tensors.py", "tests/test_tensors.py"),
     ComponentTrace("Auxiliary variables excluded from final model", "2.1 Data preparation", "3", "", "EXPLICIT", "", "src/tensors.py", "tests/test_tensors.py"),
+    ComponentTrace("MODEL_PRICE_FIELD (Adjusted Close, LEVELS not returns)", "2.1 Data preparation", "3", "", "MISSING (USER_RESOLVED)", "DECISION_REQUIRED_PRICE_FIELD", "src/tensors.py", "tests/test_tensors.py"),
+    ComponentTrace("MODEL_PRICE_SAMPLING (final actual trading-day of week t)", "2.1 Data preparation", "3", "", "EXPLICIT", "DECISION_REQUIRED_PRICE_FIELD; DECISION_REQUIRED_HOLIDAY_EXECUTION", "src/tensors.py", "tests/test_tensors.py"),
     ComponentTrace("Target threshold +100bps", "2.1 / Discussion", "3, 6", "", "EXPLICIT", "", "src/labels.py", "tests/test_labels.py"),
     ComponentTrace("Target return interval", "2.1 Data preparation", "3", "", "STRONG_INFERENCE (USER_RESOLVED)", "DECISION_REQUIRED_TARGET_RETURN_INTERVAL", "src/labels.py", "tests/test_labels.py"),
-    ComponentTrace("Normalization (zero mean, unit variance)", "2.1 Data preparation", "3", "", "EXPLICIT", "DECISION_REQUIRED_NORMALIZATION_SCOPE", "src/normalization.py", "tests/test_normalization.py"),
+    ComponentTrace("NORMALIZATION_METHOD (z-score, zero mean unit variance)", "2.1 Data preparation", "3", "", "EXPLICIT", "", "src/normalization.py", "tests/test_normalization.py"),
+    ComponentTrace("NORMALIZATION_AXIS_SCOPE (per-ETF / column-wise)", "2.1 Data preparation", "3", "", "MISSING (USER_RESOLVED)", "DECISION_REQUIRED_NORMALIZATION_SCOPE", "src/normalization.py", "tests/test_normalization.py"),
+    ComponentTrace("NORMALIZATION_FIT_WINDOW (initial two-year annual training history)", "2.1 Data preparation", "3", "", "MISSING (USER_RESOLVED)", "DECISION_REQUIRED_NORMALIZATION_SCOPE", "src/normalization.py", "tests/test_normalization.py"),
+    ComponentTrace("NORMALIZATION_UPDATE_POLICY (frozen throughout trading year)", "2.1 Data preparation", "3", "", "MISSING (USER_RESOLVED)", "DECISION_REQUIRED_NORMALIZATION_SCOPE", "src/normalization.py", "tests/test_normalization.py"),
     ComponentTrace("MIMO geometry (11 simultaneous outputs)", "2.2 Deep learning model / Discussion", "3, 6", "", "EXPLICIT", "", "src/model.py", "tests/test_model_architecture.py"),
     ComponentTrace("4 Dense+ReLU+Dropout hidden layers, linear output", "2.2 Deep learning model", "3", "", "EXPLICIT", "DECISION_REQUIRED_HIDDEN_WIDTHS; DECISION_REQUIRED_DROPOUT_RATE", "src/model.py", "tests/test_model_architecture.py"),
     ComponentTrace("Output semantics (continuous score)", "2.3 Generation of 'buy' signal", "4", "", "STRONG_INFERENCE", "", "src/roc.py", "tests/test_roc.py"),
@@ -89,6 +94,45 @@ def write_component_status_json(out_path: Path | None = None) -> Path:
         },
     }
     out_path.write_text(json.dumps(status, indent=2) + "\n")
+    return out_path
+
+
+def write_annual_scaler_audit_csv(out_path: Path | None = None) -> Path:
+    """Fit the RESOLVED per-ETF AnnualPriceScaler for every paper trading
+    year (2012-2022) from real acquired Yahoo Finance data, and write one
+    audit row per (trading_year, ticker) -- see
+    DECISION_REQUIRED_NORMALIZATION_SCOPE / DECISION_REQUIRED_PRICE_FIELD
+    resolutions. This does not train any model; it only exercises and
+    records the scaler-fitting step in isolation.
+    """
+    import csv
+
+    from .calendar import build_weekly_calendar
+    from .data import load_universe_prices
+    from .normalization import fit_annual_price_scaler
+    from .tensors import build_weekly_price_matrix
+    from .training_schedule import AnnualScheduler
+
+    prices = load_universe_prices()
+    trading_days = prices["XLK"]["date"]  # shared US-equity trading-day index, see notebooks/01
+    calendar_df = build_weekly_calendar(trading_days)
+    weekly_price_matrix = build_weekly_price_matrix(prices, calendar_df, price_field="adjusted_close")
+
+    rows: list[dict] = []
+    for trading_year in AnnualScheduler().trading_years():
+        scaler = fit_annual_price_scaler(weekly_price_matrix, trading_year)
+        rows.extend(scaler.audit_rows())
+
+    out_path = out_path or PROJECT_ROOT / "outputs" / "paper_annual_scaler_audit.csv"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "trading_year", "training_start_date", "training_end_date", "ticker",
+        "mean", "std", "number_of_training_weeks", "price_field", "normalization", "frozen",
+    ]
+    with open(out_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
     return out_path
 
 

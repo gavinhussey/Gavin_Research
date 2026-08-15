@@ -19,15 +19,35 @@ model requires 2 years of prior history, so raw data must start ≥ 2010-01.
 
 ## Data
 
-Yahoo Finance, Friday-close sampled, non-trading days removed. Price field
-(raw close / adjusted close / returns) and volume inclusion:
-**DECISION_REQUIRED** (see decision register).
+Yahoo Finance, weekly-sampled at each week's final *actual* trading
+session (holiday-aware, not literal Friday), non-trading days removed.
+Volume inclusion: **DECISION_REQUIRED_VOLUME_INPUT** (open).
+
+**MODEL INPUT PRICE FIELD: RESOLVED** (`DECISION_REQUIRED_PRICE_FIELD`,
+USER-RESOLVED reconstruction decision — the paper never states this field,
+so `source_classification` stays `MISSING`, not upgraded to EXPLICIT):
+Yahoo **Adjusted Close**, as a price **LEVEL** — not raw Close, not a
+return/percent-change/log-return/rebased transform —
+
+```
+model_price[s,t] = AdjustedClose[s, final_actual_trading_day_of_week_t]
+```
+
+User rationale: Adjusted Close folds dividends/distributions into the
+historical economic price path and prevents stock splits/corporate
+actions or mechanical ex-dividend drops from appearing as artificial price
+shocks in a sector-ETF universe where distributions are material. This
+applies **only** to the model input tensor — it does not alter the
+already-resolved target/execution interval below, which continues to use
+RAW Open/Close. Implemented in `src/tensors.py::build_weekly_price_matrix`.
 
 ## Input tensor
 
 `X_t ∈ R^{N × (l+m)}` (or `R^{N × (2l+m)}` if volume included), `m = 0` for
-the final reported model (no auxiliary economic series). `N`:
-**DECISION_REQUIRED_LOOKBACK_N**.
+the final reported model (no auxiliary economic series). Price columns =
+canonical-order weekly Adjusted Close levels (resolved above). `N`:
+**DECISION_REQUIRED_LOOKBACK_N** (open — the tensor builder remains
+parameterized by `N`).
 
 ## Target
 
@@ -51,10 +71,44 @@ session selection. Does **not** resolve `DECISION_REQUIRED_PRICE_FIELD`
 
 ## Normalization
 
-Non-target inputs z-scored (zero mean, unit variance). Scope:
-**DECISION_REQUIRED_NORMALIZATION_SCOPE**. Hard constraint: never computed
-using data at/after the point being normalized (no lookahead), regardless
-of which scope option is chosen.
+Non-target inputs z-scored (zero mean, unit variance) — `NORMALIZATION_METHOD`
+is **EXPLICIT** (paper p.3). Scope/axis/fit-window/update-policy: **RESOLVED**
+(`DECISION_REQUIRED_NORMALIZATION_SCOPE`, USER-RESOLVED reconstruction
+decision — the paper states the transform but not its scope, so
+`source_classification` stays `MISSING`):
+
+- **Axis**: per-ETF (column-wise) — one `mu`/`sigma` pair per ticker, never
+  one pooled statistic across all 11 ETFs.
+- **Fit window**: the annual trading model's own initial two-year training
+  history only, `[Y-2, Y)` (reuses `AnnualScheduler.training_window_for_year`,
+  already EXPLICIT p.3 "previous 2 years").
+- **Update policy**: frozen for the entire trading year `Y` — no weekly
+  refit, no expanding/rolling update during predictions or weekly
+  incremental model updates. A new trading year gets an entirely new
+  scaler.
+
+```
+mu[s,Y]    = mean(weekly Adjusted Close[s]) over [Y-2, Y)
+sigma[s,Y] = std(weekly Adjusted Close[s]) over [Y-2, Y), ddof=0
+Z[s,t,Y]   = (AdjustedClose[s,t] - mu[s,Y]) / sigma[s,Y]
+```
+
+`ddof=0` (population variance), matching the project's pre-existing
+generic normalization convention. A zero/negligible-variance training
+window for a ticker raises `ZeroVarianceTrainingWindowError` rather than
+silently defaulting `sigma=1`. Implemented in
+`src/normalization.py::AnnualPriceScaler` / `fit_annual_price_scaler`.
+
+User rationale for the freeze: weekly scaler updates would change the
+coordinate system underneath model weights already trained in the
+previous normalized space; freezing instead preserves stable feature
+coordinates, strict no-lookahead, annual-model consistency, and
+compatibility with weekly continuation/update of the same model weights.
+
+Hard constraint (unchanged): never computed using data at/after the point
+being normalized (no lookahead) — enforced here via hard assertions that
+no training-window row falls at/after `training_end` or before
+`training_start`.
 
 ## Model
 
