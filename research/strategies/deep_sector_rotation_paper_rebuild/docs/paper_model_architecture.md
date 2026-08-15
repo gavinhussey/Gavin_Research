@@ -17,7 +17,8 @@ Source: p.3, §2.2 "Deep learning model" (full quote in
 ## Architecture diagram (as built in `src/model.py`)
 
 ```
-Input(shape=(N, l+m))      # or (N, 2l+m) if volume included — DECISION_REQUIRED_VOLUME_INPUT
+Input(shape=(N, 22))       # 2l+m, l=11, m=0 -- DECISION_REQUIRED_VOLUME_INPUT RESOLVED
+                            # (volume included: 11 price + 11 volume columns); N open (DECISION_REQUIRED_LOOKBACK_N)
   -> Flatten / reshape appropriate to Dense-only ingestion
      (the paper never states an RNN/CNN block ahead of the Dense stack —
       "four fully connected internal layers" reads as a plain MLP over the

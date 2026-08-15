@@ -9,7 +9,18 @@ import pytest
 from src.calendar import build_weekly_calendar
 from src.data import PAPER_UNIVERSE
 from src.labels import build_open_close_panels, build_paper_labels
-from src.tensors import build_paper_tensor, build_tensor, build_weekly_price_matrix
+from src.tensors import (
+    MARKET_COLUMNS,
+    PRICE_COLUMNS,
+    VOLUME_COLUMNS,
+    MissingVolumeDataError,
+    build_paper_tensor,
+    build_tensor,
+    build_tensor_from_market_matrix,
+    build_weekly_market_matrix,
+    build_weekly_price_matrix,
+    build_weekly_volume_matrix,
+)
 from src.decisions import PaperDecisionRequiredError
 
 
@@ -174,3 +185,185 @@ def test_paper_tensor_still_blocked_on_lookback_n_not_price_field():
         build_paper_tensor(panel, t_index=10)
     assert exc_info.value.decision_id == "DECISION_REQUIRED_LOOKBACK_N"
     assert exc_info.value.decision_id != "DECISION_REQUIRED_PRICE_FIELD"
+
+
+# ---------------------------------------------------------------------------
+# build_weekly_volume_matrix / build_weekly_market_matrix:
+# RESOLVED DECISION_REQUIRED_VOLUME_INPUT
+# ---------------------------------------------------------------------------
+
+
+def _daily_frame_with_volume(dates, adjusted_close_val, volume_by_date=None, default_volume=1_000.0):
+    n = len(dates)
+    volume = [default_volume] * n
+    if volume_by_date:
+        for date, vol in volume_by_date.items():
+            idx = list(dates).index(pd.Timestamp(date))
+            volume[idx] = vol
+    return pd.DataFrame(
+        {
+            "date": pd.DatetimeIndex(dates),
+            "open": adjusted_close_val,
+            "close": adjusted_close_val,
+            "adjusted_close": adjusted_close_val,
+            "volume": volume,
+        }
+    )
+
+
+def test_volume_included_in_canonical_model_input():
+    # #1: volume is included in canonical model input
+    days = pd.bdate_range("2021-03-01", "2021-03-05")
+    calendar_df = build_weekly_calendar(days)
+    price_data = {symbol: _daily_frame_with_volume(days, 100.0) for symbol in PAPER_UNIVERSE}
+    market = build_weekly_market_matrix(price_data, calendar_df)
+    assert set(VOLUME_COLUMNS) <= set(market.columns)
+
+
+def test_exactly_eleven_volume_columns():
+    # #2: exactly 11 volume columns exist
+    assert len(VOLUME_COLUMNS) == 11
+
+
+def test_total_weekly_feature_width_is_22():
+    # #3: total weekly feature width is 22
+    days = pd.bdate_range("2021-03-01", "2021-03-05")
+    calendar_df = build_weekly_calendar(days)
+    price_data = {symbol: _daily_frame_with_volume(days, 100.0) for symbol in PAPER_UNIVERSE}
+    market = build_weekly_market_matrix(price_data, calendar_df)
+    assert market.shape[1] == 22
+    assert tuple(market.columns) == MARKET_COLUMNS
+
+
+def test_volume_ticker_order_matches_price_ticker_order():
+    # #4: volume ticker order matches price ticker order
+    price_tickers = [c.removesuffix("_price") for c in PRICE_COLUMNS]
+    volume_tickers = [c.removesuffix("_volume") for c in VOLUME_COLUMNS]
+    assert price_tickers == volume_tickers == list(PAPER_UNIVERSE)
+
+
+def test_normal_week_uses_friday_daily_volume():
+    # #5: normal week uses Friday daily Volume
+    days = pd.bdate_range("2021-03-01", "2021-03-05")  # Mon-Fri
+    calendar_df = build_weekly_calendar(days)
+    price_data = {
+        symbol: _daily_frame_with_volume(days, 100.0, volume_by_date={"2021-03-05": 9999.0})
+        for symbol in PAPER_UNIVERSE
+    }
+    weekly = build_weekly_volume_matrix(price_data, calendar_df)
+    assert weekly.loc[pd.Timestamp("2021-03-05"), "XLK"] == 9999.0
+
+
+def test_friday_holiday_uses_thursday_daily_volume():
+    # #6: Friday holiday uses Thursday daily Volume
+    holiday_days = pd.DatetimeIndex(["2021-04-05", "2021-04-06", "2021-04-07", "2021-04-08"])  # Mon-Thu, no Fri
+    calendar_df = build_weekly_calendar(holiday_days)
+    price_data = {
+        symbol: _daily_frame_with_volume(holiday_days, 100.0, volume_by_date={"2021-04-08": 8888.0})
+        for symbol in PAPER_UNIVERSE
+    }
+    weekly = build_weekly_volume_matrix(price_data, calendar_df)
+    assert weekly.loc[pd.Timestamp("2021-04-08"), "XLK"] == 8888.0
+
+
+def test_other_shortened_week_uses_final_actual_session_volume():
+    # #7: other shortened week (e.g. Tue-Wed only) uses that week's final actual session
+    shortened_days = pd.DatetimeIndex(["2021-03-02", "2021-03-03"])  # Tue-Wed only
+    calendar_df = build_weekly_calendar(shortened_days)
+    price_data = {
+        symbol: _daily_frame_with_volume(shortened_days, 100.0, volume_by_date={"2021-03-03": 7777.0})
+        for symbol in PAPER_UNIVERSE
+    }
+    weekly = build_weekly_volume_matrix(price_data, calendar_df)
+    assert weekly.loc[pd.Timestamp("2021-03-03"), "XLK"] == 7777.0
+
+
+def test_weekly_volume_is_not_summed_or_averaged():
+    # #8/#9: weekly volume is NOT summed and NOT averaged -- fixture where
+    # sum(weekly daily volume) != Friday volume, assert Friday value used.
+    days = pd.bdate_range("2021-03-01", "2021-03-05")  # Mon-Fri
+    calendar_df = build_weekly_calendar(days)
+    per_day_volume = {"2021-03-01": 100.0, "2021-03-02": 200.0, "2021-03-03": 300.0, "2021-03-04": 400.0}
+    price_data = {
+        symbol: _daily_frame_with_volume(days, 100.0, volume_by_date={**per_day_volume, "2021-03-05": 500.0})
+        for symbol in PAPER_UNIVERSE
+    }
+    weekly = build_weekly_volume_matrix(price_data, calendar_df)
+    weekly_sum = sum(per_day_volume.values()) + 500.0
+    weekly_mean = weekly_sum / 5
+    assert weekly.loc[pd.Timestamp("2021-03-05"), "XLK"] == 500.0
+    assert weekly.loc[pd.Timestamp("2021-03-05"), "XLK"] != weekly_sum
+    assert weekly.loc[pd.Timestamp("2021-03-05"), "XLK"] != weekly_mean
+
+
+def test_volume_is_not_log_or_percent_change_transformed():
+    # #10/#11: raw magnitude preserved verbatim -- no log/percent-change transform
+    days = pd.bdate_range("2021-03-01", "2021-03-05")
+    calendar_df = build_weekly_calendar(days)
+    price_data = {
+        symbol: _daily_frame_with_volume(days, 100.0, volume_by_date={"2021-03-05": 1_000_000.0})
+        for symbol in PAPER_UNIVERSE
+    }
+    weekly = build_weekly_volume_matrix(price_data, calendar_df)
+    assert weekly.loc[pd.Timestamp("2021-03-05"), "XLK"] == 1_000_000.0  # not log(1e6)~=13.8, not a ratio
+
+
+def test_price_input_remains_adjusted_close_with_volume_included():
+    # #12: price input remains Adjusted Close even in the combined market matrix
+    days = pd.bdate_range("2021-03-01", "2021-03-05")
+    calendar_df = build_weekly_calendar(days)
+    price_data = {symbol: _daily_frame_with_volume(days, 97.5) for symbol in PAPER_UNIVERSE}
+    market = build_weekly_market_matrix(price_data, calendar_df)
+    assert (market["XLK_price"] == 97.5).all()
+
+
+def test_market_matrix_canonical_22_column_order():
+    # #6 (spec): first 11 columns price (PAPER_UNIVERSE order), next 11 volume (same order)
+    days = pd.bdate_range("2021-03-01", "2021-03-05")
+    calendar_df = build_weekly_calendar(days)
+    price_data = {symbol: _daily_frame_with_volume(days, 100.0) for symbol in PAPER_UNIVERSE}
+    market = build_weekly_market_matrix(price_data, calendar_df)
+    assert tuple(market.columns[:11]) == PRICE_COLUMNS
+    assert tuple(market.columns[11:]) == VOLUME_COLUMNS
+
+
+def test_missing_final_session_volume_raises_not_filled():
+    # #23: missing final-session Volume is not filled -- raises explicit error
+    days = pd.bdate_range("2021-03-01", "2021-03-05")
+    calendar_df = build_weekly_calendar(days)
+    price_data = {symbol: _daily_frame_with_volume(days, 100.0) for symbol in PAPER_UNIVERSE}
+    price_data["XLK"].loc[price_data["XLK"]["date"] == pd.Timestamp("2021-03-05"), "volume"] = float("nan")
+    with pytest.raises(MissingVolumeDataError) as exc_info:
+        build_weekly_volume_matrix(price_data, calendar_df)
+    assert ("XLK", pd.Timestamp("2021-03-05")) in exc_info.value.missing
+
+
+def test_tensor_from_market_matrix_shape_n_22():
+    # #26: resulting tensor infrastructure supports (N, 22) given a fixture N
+    rng = np.random.default_rng(3)
+    n_weeks = 20
+    market = pd.DataFrame(rng.normal(size=(n_weeks, 22)), columns=list(MARKET_COLUMNS))
+    n = 5
+    x = build_tensor_from_market_matrix(market, n=n, t_index=10)
+    assert x.shape == (n, 22)
+
+
+def test_tensor_from_market_matrix_rejects_wrong_columns():
+    rng = np.random.default_rng(4)
+    market = pd.DataFrame(rng.normal(size=(10, 22)), columns=[f"col_{i}" for i in range(22)])
+    with pytest.raises(AssertionError):
+        build_tensor_from_market_matrix(market, n=3, t_index=5)
+
+
+def test_build_tensor_include_volume_matches_market_matrix_layout():
+    # build_tensor(include_volume=True) grouped [price|volume] layout
+    # matches build_tensor_from_market_matrix's canonical column order.
+    price_panel = _panel()
+    volume_panel = _panel()
+    x_separate = build_tensor(price_panel, n=5, t_index=10, price_field="adjusted_close",
+                               include_volume=True, volume_panel=volume_panel)
+    price_renamed = price_panel.rename(columns={t: f"{t}_price" for t in PAPER_UNIVERSE})
+    volume_renamed = volume_panel.rename(columns={t: f"{t}_volume" for t in PAPER_UNIVERSE})
+    market = pd.concat([price_renamed[list(PRICE_COLUMNS)], volume_renamed[list(VOLUME_COLUMNS)]], axis=1)
+    x_market = build_tensor_from_market_matrix(market, n=5, t_index=10)
+    np.testing.assert_allclose(x_separate, x_market)

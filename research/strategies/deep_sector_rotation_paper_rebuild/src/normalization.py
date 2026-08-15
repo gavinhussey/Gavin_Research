@@ -19,6 +19,14 @@ new annual model gets its own newly fit scaler. This is a USER-RESOLVED
 reconstruction decision (the paper states the transform but not its
 scope/cadence) -- see ``AnnualPriceScaler`` / ``fit_annual_price_scaler``
 below.
+
+DECISION_REQUIRED_VOLUME_INPUT is RESOLVED (see
+../decisions/paper_decision_register.json): the final reported model
+includes ETF volume as a model input, applying this same
+per-ETF/annual-fit/frozen normalization policy independently to volume --
+its own mu/sigma per ticker per trading year, never shared with price. See
+``AnnualPriceScaler(feature_type="volume")`` / ``fit_annual_volume_scaler``
+below.
 """
 from __future__ import annotations
 
@@ -43,23 +51,24 @@ _ZERO_VARIANCE_EPS = 1e-10
 
 class ZeroVarianceTrainingWindowError(ValueError):
     """Raised when an ETF's initial two-year training window has zero or
-    numerically negligible price variance -- fitting a z-score scaler on
-    it would silently divide by (near-)zero. Real ETF price history should
-    make this extremely unlikely; if it ever fires, it indicates a genuine
-    data-integrity problem (e.g. a stale/flat price feed), not a case to
-    paper over with a default sigma.
+    numerically negligible variance for a given feature (price or volume)
+    -- fitting a z-score scaler on it would silently divide by (near-)zero.
+    Real ETF price/volume history should make this extremely unlikely; if
+    it ever fires, it indicates a genuine data-integrity problem (e.g. a
+    stale/flat feed), not a case to paper over with a default sigma.
     """
 
-    def __init__(self, trading_year: int, ticker: str, sigma: float):
+    def __init__(self, trading_year: int, ticker: str, sigma: float, feature_type: str = "price"):
         self.trading_year = trading_year
         self.ticker = ticker
         self.sigma = sigma
+        self.feature_type = feature_type
         super().__init__(
             f"Zero/negligible variance in the initial two-year training "
-            f"window for annual model {trading_year}, ticker {ticker!r}: "
-            f"sigma={sigma!r}. Refusing to divide by (near-)zero; this is "
-            f"a data-integrity problem, not a case for a silent sigma=1 "
-            f"fallback."
+            f"window for annual model {trading_year}, ticker {ticker!r}, "
+            f"feature={feature_type!r}: sigma={sigma!r}. Refusing to divide "
+            f"by (near-)zero; this is a data-integrity problem, not a case "
+            f"for a silent sigma=1 fallback."
         )
 
 
@@ -84,6 +93,12 @@ class AnnualPriceScaler:
     price_field: str
     ddof: int
     n_training_weeks: int
+    # "price" (default) or "volume" -- which of the 22 canonical model-input
+    # columns this scaler normalizes. See DECISION_REQUIRED_VOLUME_INPUT
+    # resolution: volume gets its own independently-fit per-ETF scaler,
+    # never sharing statistics with price. Defaulted for backwards
+    # compatibility with pre-existing price-only call sites.
+    feature_type: str = "price"
 
     def transform(self, weekly_price_matrix: pd.DataFrame) -> np.ndarray:
         """Z[s,t] = (AdjustedClose[s,t] - mu[s,Y]) / sigma[s,Y], per ETF.
@@ -101,18 +116,29 @@ class AnnualPriceScaler:
         return (values - self.means) / self.stds
 
     def audit_rows(self) -> list[dict]:
-        """One row per ticker, per the task brief's canonical audit schema."""
+        """One row per ticker, per the task brief's canonical audit schema:
+        trading_year, training_start_date, training_end_date, ticker,
+        feature, source_field, mean, std, number_of_training_weeks,
+        normalization, ddof, frozen. ``feature`` is "price" or "volume";
+        ``source_field`` is the raw Yahoo field name that feature was
+        sampled from (e.g. "Adjusted Close" or "Volume")."""
+        source_field_display = {
+            "adjusted_close": "Adjusted Close",
+            "volume": "Volume",
+        }.get(self.price_field, self.price_field)
         return [
             {
                 "trading_year": self.trading_year,
                 "training_start_date": self.training_start.date().isoformat(),
                 "training_end_date": self.training_end.date().isoformat(),
                 "ticker": ticker,
+                "feature": self.feature_type,
+                "source_field": source_field_display,
                 "mean": float(mean),
                 "std": float(std),
                 "number_of_training_weeks": self.n_training_weeks,
-                "price_field": "Adjusted Close" if self.price_field == "adjusted_close" else self.price_field,
                 "normalization": "zscore",
+                "ddof": self.ddof,
                 "frozen": True,
             }
             for ticker, mean, std in zip(self.ticker_order, self.means, self.stds)
@@ -125,8 +151,16 @@ def fit_annual_price_scaler(
     price_field: str = "adjusted_close",
     ddof: int = DDOF,
     scheduler: AnnualScheduler | None = None,
+    feature_type: str = "price",
 ) -> AnnualPriceScaler:
     """Fit the frozen per-ETF annual scaler for ``trading_year``.
+
+    ``feature_type`` distinguishes which of the 22 canonical model-input
+    columns this call is fitting: "price" (default, e.g. ``price_field=
+    "adjusted_close"``) or "volume" (``price_field="volume"``, raw Yahoo
+    daily Volume from each week's final actual trading session -- see
+    DECISION_REQUIRED_VOLUME_INPUT resolution). Price and volume are always
+    fit independently, per ETF, never sharing mu/sigma.
 
     Training window = the annual model's own initial two-year training
     history, i.e. calendar years [trading_year - 2, trading_year) --
@@ -174,7 +208,7 @@ def fit_annual_price_scaler(
 
     for ticker, sigma in zip(weekly_price_matrix.columns, stds):
         if not np.isfinite(sigma) or sigma <= _ZERO_VARIANCE_EPS:
-            raise ZeroVarianceTrainingWindowError(trading_year, ticker, float(sigma))
+            raise ZeroVarianceTrainingWindowError(trading_year, ticker, float(sigma), feature_type=feature_type)
 
     return AnnualPriceScaler(
         trading_year=trading_year,
@@ -186,6 +220,30 @@ def fit_annual_price_scaler(
         price_field=price_field,
         ddof=ddof,
         n_training_weeks=len(training_slice),
+        feature_type=feature_type,
+    )
+
+
+def fit_annual_volume_scaler(
+    weekly_volume_matrix: pd.DataFrame,
+    trading_year: int,
+    ddof: int = DDOF,
+    scheduler: AnnualScheduler | None = None,
+) -> AnnualPriceScaler:
+    """Convenience wrapper: fit the frozen per-ETF annual VOLUME scaler for
+    ``trading_year`` -- identical mechanics to ``fit_annual_price_scaler``
+    (same frozen [Y-2, Y) training window, same per-ETF ddof=0 z-score,
+    same zero-variance guard), just fixed to ``price_field="volume"``,
+    ``feature_type="volume"``. See DECISION_REQUIRED_VOLUME_INPUT
+    resolution in ../decisions/paper_decision_register.json.
+    """
+    return fit_annual_price_scaler(
+        weekly_volume_matrix,
+        trading_year,
+        price_field="volume",
+        ddof=ddof,
+        scheduler=scheduler,
+        feature_type="volume",
     )
 
 

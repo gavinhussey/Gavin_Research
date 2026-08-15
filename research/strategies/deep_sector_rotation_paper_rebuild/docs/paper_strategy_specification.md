@@ -21,7 +21,23 @@ model requires 2 years of prior history, so raw data must start ≥ 2010-01.
 
 Yahoo Finance, weekly-sampled at each week's final *actual* trading
 session (holiday-aware, not literal Friday), non-trading days removed.
-Volume inclusion: **DECISION_REQUIRED_VOLUME_INPUT** (open).
+
+**VOLUME INPUT: RESOLVED** (`DECISION_REQUIRED_VOLUME_INPUT`,
+USER-RESOLVED — decision's own `source_classification` stays `MISSING`):
+the final reported model **INCLUDES** ETF volume:
+
+```
+volume_input[s,t] = Yahoo daily Volume[s, final_actual_trading_day_of_week_t]
+```
+
+Sampling rule source classification: `STRONG_INFERENCE_FROM_MULTIPLE_EXPLICIT_PASSAGES`
+(never PAPER_EXPLICIT) — normal week → Friday daily Volume; Friday holiday
+→ Thursday daily Volume; other shortened week → final actual session
+Volume, same `model_cutoff` date as price. Raw value only — no weekly
+sum/mean/median, rolling/relative volume, log/percent-change/cumulative/
+dollar-volume transform, or any other aggregation. Implemented in
+`src/tensors.py::build_weekly_volume_matrix` /
+`build_weekly_market_matrix`.
 
 **MODEL INPUT PRICE FIELD: RESOLVED** (`DECISION_REQUIRED_PRICE_FIELD`,
 USER-RESOLVED reconstruction decision — the paper never states this field,
@@ -43,11 +59,15 @@ RAW Open/Close. Implemented in `src/tensors.py::build_weekly_price_matrix`.
 
 ## Input tensor
 
-`X_t ∈ R^{N × (l+m)}` (or `R^{N × (2l+m)}` if volume included), `m = 0` for
-the final reported model (no auxiliary economic series). Price columns =
-canonical-order weekly Adjusted Close levels (resolved above). `N`:
+`X_t ∈ R^{N × 22}` (`2l + m`, `l=11`, `m=0` — volume included, RESOLVED
+above; no auxiliary economic series). Per-week market vector: 11
+adjusted-close price columns followed by 11 final-session daily-volume
+columns, in that grouped order (canonical `MARKET_COLUMNS`, PAPER_UNIVERSE
+ticker order within each block — a deterministic implementation
+convention, since no paper ordering evidence exists; hard-asserted via
+`src/tensors.py::assert_canonical_market_columns`). `N`:
 **DECISION_REQUIRED_LOOKBACK_N** (open — the tensor builder remains
-parameterized by `N`).
+parameterized by `N`; `build_paper_tensor` stays blocked on it alone).
 
 ## Target
 
@@ -98,6 +118,13 @@ generic normalization convention. A zero/negligible-variance training
 window for a ticker raises `ZeroVarianceTrainingWindowError` rather than
 silently defaulting `sigma=1`. Implemented in
 `src/normalization.py::AnnualPriceScaler` / `fit_annual_price_scaler`.
+
+This policy applies identically, independently, to volume (RESOLVED
+`DECISION_REQUIRED_VOLUME_INPUT` above) — each of the 22 model-input
+columns (11 price + 11 volume) gets its own per-ETF mu/sigma, fit on the
+same frozen `[Y-2, Y)` window, never sharing statistics across price vs.
+volume, different ETFs, or different annual models:
+`src/normalization.py::fit_annual_volume_scaler`.
 
 User rationale for the freeze: weekly scaler updates would change the
 coordinate system underneath model weights already trained in the

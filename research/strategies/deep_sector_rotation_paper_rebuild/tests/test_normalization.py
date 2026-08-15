@@ -14,6 +14,7 @@ from src.normalization import (
     apply_normalization,
     assert_no_lookahead,
     fit_annual_price_scaler,
+    fit_annual_volume_scaler,
     fit_normalization,
 )
 from src.training_schedule import AnnualScheduler
@@ -210,10 +211,109 @@ def test_audit_rows_have_canonical_schema():
     assert len(rows) == len(PAPER_UNIVERSE)
     expected_fields = {
         "trading_year", "training_start_date", "training_end_date", "ticker",
-        "mean", "std", "number_of_training_weeks", "price_field", "normalization", "frozen",
+        "feature", "source_field", "mean", "std", "number_of_training_weeks",
+        "normalization", "ddof", "frozen",
     }
     for row in rows:
         assert set(row.keys()) == expected_fields
-        assert row["price_field"] == "Adjusted Close"
+        assert row["feature"] == "price"
+        assert row["source_field"] == "Adjusted Close"
         assert row["normalization"] == "zscore"
+        assert row["ddof"] == 0
         assert row["frozen"] is True
+
+
+# ---------------------------------------------------------------------------
+# fit_annual_volume_scaler: RESOLVED DECISION_REQUIRED_VOLUME_INPUT
+# ---------------------------------------------------------------------------
+
+
+def _weekly_volume_matrix(years=(2013, 2014, 2015, 2016), weeks_per_year=52, ticker_base=None):
+    """Deliberately different per-ETF volume scales so per-ETF mean/std can
+    be distinguished from a pooled/shared statistic, and distinct from the
+    price fixture's values so price/volume stats are never accidentally
+    equal."""
+    ticker_base = ticker_base or {sym: 1_000_000.0 * (i + 1) for i, sym in enumerate(PAPER_UNIVERSE)}
+    dates = []
+    for year in years:
+        start = pd.Timestamp(year=year, month=1, day=4)
+        dates += [start + pd.Timedelta(days=7 * w) for w in range(weeks_per_year)]
+    dates = pd.DatetimeIndex(sorted(dates))
+    rng = np.random.default_rng(7)
+    data = {}
+    for sym in PAPER_UNIVERSE:
+        base = ticker_base[sym]
+        noise = rng.normal(loc=0.0, scale=base * 0.01, size=len(dates))
+        data[sym] = base + noise
+    return pd.DataFrame(data, index=dates)[list(PAPER_UNIVERSE)]
+
+
+def test_volume_scaler_gets_its_own_per_etf_mean_and_std():
+    panel = _weekly_volume_matrix()
+    scaler = fit_annual_volume_scaler(panel, trading_year=2015)
+    means_by_ticker = dict(zip(scaler.ticker_order, scaler.means))
+    stds_by_ticker = dict(zip(scaler.ticker_order, scaler.stds))
+    assert not np.isclose(means_by_ticker["XLK"], means_by_ticker["XLU"])
+    assert not np.isclose(stds_by_ticker["XLK"], stds_by_ticker["XLU"])
+    assert scaler.feature_type == "volume"
+
+
+def test_price_and_volume_statistics_are_not_shared():
+    price_panel = _weekly_price_matrix()
+    volume_panel = _weekly_volume_matrix()
+    price_scaler = fit_annual_price_scaler(price_panel, trading_year=2015)
+    volume_scaler = fit_annual_volume_scaler(volume_panel, trading_year=2015)
+    assert not np.allclose(price_scaler.means, volume_scaler.means)
+    assert not np.allclose(price_scaler.stds, volume_scaler.stds)
+    assert price_scaler.feature_type == "price"
+    assert volume_scaler.feature_type == "volume"
+
+
+def test_volume_scaler_uses_only_initial_two_year_training_window():
+    panel = _weekly_volume_matrix(years=(2013, 2014, 2015, 2016))
+    scaler = fit_annual_volume_scaler(panel, trading_year=2015)
+    assert scaler.training_start == pd.Timestamp("2013-01-01")
+    assert scaler.training_end == pd.Timestamp("2015-01-01")
+    only_2013_2014 = fit_annual_volume_scaler(panel.loc[panel.index < "2015-01-01"], trading_year=2015)
+    np.testing.assert_allclose(scaler.means, only_2013_2014.means)
+    np.testing.assert_allclose(scaler.stds, only_2013_2014.stds)
+
+
+def test_volume_scaler_frozen_and_new_year_gets_new_statistics():
+    panel = _weekly_volume_matrix(years=(2013, 2014, 2015, 2016, 2017))
+    scaler_2015 = fit_annual_volume_scaler(panel, trading_year=2015)
+    scaler_2016 = fit_annual_volume_scaler(panel, trading_year=2016)
+    assert scaler_2015.training_start != scaler_2016.training_start
+    assert not np.allclose(scaler_2015.means, scaler_2016.means)
+    with pytest.raises(Exception):
+        scaler_2015.means = np.zeros_like(scaler_2015.means)
+
+
+def test_volume_scaler_ddof_zero():
+    panel = _weekly_volume_matrix()
+    scaler = fit_annual_volume_scaler(panel, trading_year=2015)
+    assert scaler.ddof == 0
+    training_slice = panel.loc[(panel.index >= "2013-01-01") & (panel.index < "2015-01-01")]
+    expected_std = training_slice["XLK"].to_numpy().std(ddof=0)
+    idx = scaler.ticker_order.index("XLK")
+    assert np.isclose(scaler.stds[idx], expected_std)
+
+
+def test_volume_zero_variance_raises_explicit_integrity_error():
+    panel = _weekly_volume_matrix().copy()
+    panel["XLK"] = 500_000.0  # perfectly flat -> zero variance
+    with pytest.raises(ZeroVarianceTrainingWindowError) as exc_info:
+        fit_annual_volume_scaler(panel, trading_year=2015)
+    assert exc_info.value.trading_year == 2015
+    assert exc_info.value.ticker == "XLK"
+    assert exc_info.value.feature_type == "volume"
+
+
+def test_volume_scaler_audit_rows_schema():
+    panel = _weekly_volume_matrix()
+    scaler = fit_annual_volume_scaler(panel, trading_year=2015)
+    rows = scaler.audit_rows()
+    assert len(rows) == len(PAPER_UNIVERSE)
+    for row in rows:
+        assert row["feature"] == "volume"
+        assert row["source_field"] == "Volume"

@@ -124,19 +124,24 @@ Classification: **EXPLICIT** for the general tensor shape/geometry (rolling
 N-week window × per-sector columns, chronologically ordered, most-recent row
 last). **MISSING**: the exact value of N (see §10). **STRONG_INFERENCE**
 (not fully explicit) on which of `(l+m)` vs `(2l+m)` is the *final reported
-model*'s dimensionality — see §14 (volume) below; §2.1 last line states
+model*'s dimensionality — see §13 (volume) below; §2.1 last line states
 "final results reported here are based only on model inputs comprising the
 sector funds of Table 1," which reads as PRICE_ONLY for the *final* model
 (auxiliary economic variables m excluded), but does not equally explicitly
 resolve whether ETF *volume* (part of the l-only, non-auxiliary side of the
 tensor) survived into the final reported model — the footnote is phrased
 conditionally ("if ETF volumes are used") without stating whether that
-condition held for Table 3's results.
+condition held for Table 3's results. **RESOLVED** by explicit user
+decision (not by inference): the final reported model INCLUDES volume, so
+`2l + m = 22` is the canonical width (`l=11`, `m=0`) — see §13 and
+`DECISION_REQUIRED_VOLUME_INPUT`'s resolution record in the decision
+register for the full rationale.
 
 Implementation status: tensor-construction scaffold implemented in
-`src/tensors.py`, parameterized by `N` and by `include_volume: bool`;
-construction is blocked (raises `PaperDecisionRequiredError`) until N and
-the volume-inclusion decision are supplied by the user.
+`src/tensors.py`, parameterized by `N` and by `include_volume: bool`.
+`DECISION_REQUIRED_VOLUME_INPUT` is RESOLVED (include volume; see §13);
+`build_paper_tensor` construction remains blocked (raises
+`PaperDecisionRequiredError`) on `DECISION_REQUIRED_LOOKBACK_N` (N) alone.
 
 ## 7. Auxiliary variables (10Y yield, USD index, oil, volatility)
 
@@ -316,6 +321,73 @@ sentence resolves *auxiliary* variables, not volume, since volume of the
 sector funds themselves is not an "auxiliary" input in the paper's own
 taxonomy — it's a property of the traded assets). `DECISION_REQUIRED_VOLUME_INPUT`
 created.
+
+**RESOLVED** by explicit user decision (2026-08-15), not by inference
+upgrade — `source_classification` for the decision itself stays `MISSING`.
+The final reported model **INCLUDES** ETF volume: `l=11`, `m=0`, so
+`2l + m = 22`. The user's decision also settled the exact weekly volume
+*sampling* rule, which is a separate, narrower question than the yes/no
+inclusion decision and is only **STRONG_INFERENCE_FROM_MULTIPLE_EXPLICIT_PASSAGES**
+(never relabeled PAPER_EXPLICIT):
+
+```
+volume_input[s,t] = Yahoo daily Volume
+                     from the FINAL ACTUAL TRADING SESSION of week t
+```
+
+Normal week → Friday daily Volume; Friday market holiday → Thursday daily
+Volume; other shortened week → Volume from that week's final actual
+trading session — the same holiday-aware `model_cutoff` date already used
+for price (§5, `src/calendar.py`). Supporting evidence for this sampling
+rule (all previously cited in this document, gathered together for
+provenance):
+
+1. "Price and volume data for each fund were acquired from Yahoo Finance"
+   (§4 above).
+2. Sector ETF data sampled at discrete points, filtered to weekly
+   Friday-close observations, non-trading days removed (§5 above).
+3. Training examples described as matrices containing "prices, volumes and
+   other data recorded for the current and previous N−1 weeks" (§6 above).
+4. Footnote: input dimensions are `N × (2l+m)` "if ETF volumes are used"
+   (§6 above).
+5. Figure 1 explicitly states volumes are omitted from the schematic *for
+   clarity*, not because they are absent from the model (§6 above).
+6. Discussion (p.6) describes the model as learning "a function connecting
+   prices and volumes in each major sector of the economy with their
+   future values" (§14 below).
+7. No source evidence was found anywhere in the paper for weekly-sum,
+   weekly-mean/median, rolling, relative, log, percent-change, cumulative,
+   dollar-volume, VWAP-related, or any other volume aggregation/transform
+   — the raw daily value on the one sampled day is used verbatim (before
+   the separate, already-resolved z-score normalization step, §12).
+
+Canonical column order (deterministic implementation convention — no
+paper evidence supports any particular arrangement, so this is not
+paper-derived): all 11 price columns first (`{TICKER}_price`,
+PAPER_UNIVERSE order), then all 11 volume columns (`{TICKER}_volume`, same
+order) — `src/tensors.py::MARKET_COLUMNS`, hard-asserted via
+`assert_canonical_market_columns`.
+
+Missing-data policy: a missing/invalid (NaN) final-session Volume for a
+ticker/week is never forward-filled, backfilled, interpolated,
+zero-substituted, or weekly-average-substituted; it raises
+`src/tensors.py::MissingVolumeDataError`, an explicit, auditable
+data-integrity error naming the ticker and date.
+
+Normalization: each of the 22 columns (11 price + 11 volume) is z-scored
+independently under the already-resolved `DECISION_REQUIRED_NORMALIZATION_SCOPE`
+policy (§12) — per ETF, fit once on the annual model's initial two-year
+training window, frozen for the trading year. Volume never shares
+mu/sigma with price, a different ETF, or a different annual model —
+`src/normalization.py::fit_annual_volume_scaler`.
+
+Implementation: `src/tensors.py::build_weekly_volume_matrix`,
+`src/tensors.py::build_weekly_market_matrix`,
+`src/normalization.py::fit_annual_volume_scaler`. Does **not** resolve
+`DECISION_REQUIRED_LOOKBACK_N` (tensor depth N), which remains open and
+continues to block `src/tensors.py::build_paper_tensor`. See the decision
+register's `DECISION_REQUIRED_VOLUME_INPUT` resolution record for the full
+detail (source evidence, forbidden transforms, canonical geometry).
 
 ## 14. MIMO output geometry
 
@@ -789,7 +861,7 @@ be compared against, never optimized toward.
 | 10 | Lookback N | MISSING | Level 1 |
 | 11 | Price field | MISSING (USER_RESOLVED: Adjusted Close levels) | No (resolved) |
 | 12 | Normalization scope | EXPLICIT (z-score) / MISSING (USER_RESOLVED: per-ETF, 2yr annual, frozen) | No (resolved) |
-| 13 | Volume input | MISSING | Level 1 |
+| 13 | Volume input | MISSING (USER_RESOLVED: INCLUDE, final-session daily Volume) | No (resolved) |
 | 14 | MIMO geometry | EXPLICIT | No |
 | 15 | Architecture shape | EXPLICIT | Level 1 (widths/dropout) |
 | 16 | Output semantics | STRONG_INFERENCE | No (resolved by inference, recorded) |

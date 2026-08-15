@@ -91,6 +91,56 @@
       "test_reference": "tests/test_tensors.py"
     },
     {
+      "component": "VOLUME_INPUT_INCLUDED (final model includes ETF volume, l=11 m=0)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "footnote",
+      "classification": "STRONG_INFERENCE_FROM_PAPER_METHODS",
+      "decision_id_if_any": "DECISION_REQUIRED_VOLUME_INPUT",
+      "implementation_module": "src/tensors.py",
+      "test_reference": "tests/test_tensors.py"
+    },
+    {
+      "component": "VOLUME_SOURCE_FIELD (raw Yahoo Volume)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "EXPLICIT",
+      "decision_id_if_any": "DECISION_REQUIRED_VOLUME_INPUT",
+      "implementation_module": "src/tensors.py",
+      "test_reference": "tests/test_tensors.py"
+    },
+    {
+      "component": "VOLUME_WEEKLY_SAMPLING (final actual trading session of week t)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "USER_RESOLVED_FROM_STRONG_INFERENCE",
+      "decision_id_if_any": "DECISION_REQUIRED_VOLUME_INPUT",
+      "implementation_module": "src/tensors.py",
+      "test_reference": "tests/test_tensors.py"
+    },
+    {
+      "component": "VOLUME_NORMALIZATION (per-ETF two-year annual z-score, frozen)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "",
+      "classification": "MISSING (USER_RESOLVED)",
+      "decision_id_if_any": "DECISION_REQUIRED_VOLUME_INPUT; DECISION_REQUIRED_NORMALIZATION_SCOPE",
+      "implementation_module": "src/normalization.py",
+      "test_reference": "tests/test_normalization.py"
+    },
+    {
+      "component": "INPUT_TENSOR_WIDTH (N x 22, 2l+m, m=0, volume included)",
+      "source_section": "2.1 Data preparation",
+      "source_page": "3",
+      "source_table_or_figure": "footnote",
+      "classification": "STRONG_INFERENCE (USER_RESOLVED)",
+      "decision_id_if_any": "DECISION_REQUIRED_VOLUME_INPUT; DECISION_REQUIRED_LOOKBACK_N",
+      "implementation_module": "src/tensors.py",
+      "test_reference": "tests/test_tensors.py"
+    },
+    {
       "component": "Target threshold +100bps",
       "source_section": "2.1 / Discussion",
       "source_page": "3, 6",
@@ -372,8 +422,8 @@
     }
   ],
   "summary": {
-    "total_components": 37,
+    "total_components": 42,
     "explicit_or_fully_resolved": 11,
-    "blocked_on_decision": 25
+    "blocked_on_decision": 30
   }
 }

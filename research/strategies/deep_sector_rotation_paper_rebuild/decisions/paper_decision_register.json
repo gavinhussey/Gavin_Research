@@ -69,7 +69,7 @@
     "decision_id": "DECISION_REQUIRED_VOLUME_INPUT",
     "level": 1,
     "topic": "Whether the final reported model includes ETF volume",
-    "status": "USER_DECISION_REQUIRED",
+    "status": "RESOLVED_INCLUDE_FINAL_SESSION_DAILY_VOLUME",
     "source_classification": "MISSING",
     "source_evidence": "p.3 footnote: tensor is N x (2l+m) 'if ETF volumes are used in the analysis' -- conditional, never resolved for the final Table 3 model.",
     "why_it_matters": "Doubles the traded-asset feature block (l -> 2l) if included; changes model input width and every downstream shape.",
@@ -87,7 +87,79 @@
     ],
     "dependencies": [],
     "recommended_if_forced": "B",
-    "recommendation_confidence": "LOW"
+    "recommendation_confidence": "LOW",
+    "resolution": {
+      "date": "2026-08-15",
+      "option_chosen": "B, PRICE_PLUS_VOLUME",
+      "outcome": "RESOLVED by explicit user instruction, not by inference upgrade -- source_classification stays MISSING (the paper never states, for the *final* Table 3 model specifically, whether the conditional 'N x (2l+m) if ETF volumes are used' footnote condition held). The final reported model INCLUDES ETF volume as a model input: l=11, m=0 (auxiliary economic variables remain excluded, unchanged), so the canonical per-week input width is 2l+m = 22 (11 price columns + 11 volume columns). User rationale (recorded for provenance): the footnote explicitly allows this configuration, and the Discussion section's 'a function connecting prices and volumes... with their future values' is explicit textual support for volume surviving into the final model, in tension with a PRICE_ONLY reading of the 'based only on model inputs comprising the sector funds of Table 1' sentence (which most naturally resolves *auxiliary* variables m, not volume of the traded assets themselves).",
+      "volume_sampling_rule": {
+        "source_forensics_conclusion": "VOLUME_SAMPLING_STRONG_INFERENCE_FRIDAY_DAILY_VOLUME",
+        "source_classification": "STRONG_INFERENCE_FROM_MULTIPLE_EXPLICIT_PASSAGES",
+        "classification_note": "Strongly supported by the paper but not literally explicit -- must NOT be relabeled PAPER_EXPLICIT.",
+        "formula": "volume_input[s,t] = Yahoo daily Volume from the FINAL ACTUAL TRADING SESSION of week t. Normal week -> Friday daily Volume. Friday market holiday -> Thursday daily Volume. Other shortened week -> Volume from that week's final actual trading session. Sampled from the exact same model_cutoff date already used for price (src/calendar.py), never a literal-Friday assumption.",
+        "forbidden_transforms": [
+          "weekly summed volume",
+          "weekly average volume",
+          "weekly median volume",
+          "rolling volume",
+          "relative volume",
+          "log volume",
+          "percent-change volume",
+          "cumulative volume",
+          "dollar volume",
+          "VWAP-related volume",
+          "any other aggregation or transformation"
+        ],
+        "supporting_paper_evidence": [
+          "Price and volume data for each ETF were acquired from Yahoo Finance (p.3, S2.1).",
+          "Sector ETF data were sampled at discrete points in time and filtered to weekly Friday-close observations (p.3, S2.1).",
+          "Training examples described as matrices containing 'prices, volumes and other data recorded for the current and previous N-1 weeks' (p.3, S2.1).",
+          "Footnote: input dimensions are N x (2l+m) 'if ETF volumes are used' (p.3, S2.1).",
+          "Figure 1 explicitly states volumes are omitted from the schematic for clarity, not absent from the model (p.4).",
+          "Discussion describes the model as learning relationships connecting prices and volumes across economic sectors with future values (p.6).",
+          "No source evidence found for weekly sum, weekly mean, weekly aggregation, cumulative volume, rolling volume, or any other volume transformation."
+        ]
+      },
+      "final_input_geometry": {
+        "l": 11,
+        "m": 0,
+        "input_width_2l_plus_m": 22,
+        "tensor_shape": "X_t in R^(N x 22), N unresolved (DECISION_REQUIRED_LOOKBACK_N)"
+      },
+      "canonical_column_order": {
+        "price_columns_1_to_11": [
+          "XLK_price",
+          "XLV_price",
+          "XLY_price",
+          "VOX_price",
+          "XLF_price",
+          "XLI_price",
+          "XLP_price",
+          "XLU_price",
+          "XLB_price",
+          "IYR_price",
+          "XLE_price"
+        ],
+        "volume_columns_12_to_22": [
+          "XLK_volume",
+          "XLV_volume",
+          "XLY_volume",
+          "VOX_volume",
+          "XLF_volume",
+          "XLI_volume",
+          "XLP_volume",
+          "XLU_volume",
+          "XLB_volume",
+          "IYR_volume",
+          "XLE_volume"
+        ],
+        "ordering_convention": "Grouped [all prices, all volumes], NOT ticker-by-ticker interleaved -- no paper evidence supports an interleaved arrangement, so this grouped order is a deterministic implementation convention, hard-asserted in src/tensors.py::assert_canonical_market_columns / MARKET_COLUMNS."
+      },
+      "normalization": "Each of the 22 columns z-scored independently using the already-resolved DECISION_REQUIRED_NORMALIZATION_SCOPE policy: per-ETF, fit once on the annual model's initial two-year training window [Y-2, Y), ddof=0, then frozen for the trading year. Volume never shares mu/sigma with price, different ETFs, or different annual models -- src/normalization.py::fit_annual_volume_scaler.",
+      "missing_data_policy": "A missing/invalid final-session Volume for a ticker/week is never forward-filled, backfilled, interpolated, zero-substituted, or weekly-average-substituted -- raises src/tensors.py::MissingVolumeDataError, an explicit auditable data-integrity error.",
+      "implementation": "src/tensors.py::build_weekly_volume_matrix, src/tensors.py::build_weekly_market_matrix, src/normalization.py::fit_annual_volume_scaler.",
+      "note": "Does NOT resolve DECISION_REQUIRED_LOOKBACK_N (tensor depth N), which remains USER_DECISION_REQUIRED and continues to block src/tensors.py::build_paper_tensor. Does NOT alter DECISION_REQUIRED_PRICE_FIELD, DECISION_REQUIRED_TARGET_RETURN_INTERVAL, DECISION_REQUIRED_HOLIDAY_EXECUTION, or DECISION_REQUIRED_NORMALIZATION_SCOPE -- all remain exactly as previously resolved. Volume is a model INPUT only, never used as an execution price and never a model output/target (MIMO output geometry remains 11)."
+    }
   },
   {
     "decision_id": "DECISION_REQUIRED_TARGET_RETURN_INTERVAL",

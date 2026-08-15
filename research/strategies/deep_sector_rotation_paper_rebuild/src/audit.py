@@ -36,6 +36,11 @@ COMPONENT_TRACES: list[ComponentTrace] = [
     ComponentTrace("Auxiliary variables excluded from final model", "2.1 Data preparation", "3", "", "EXPLICIT", "", "src/tensors.py", "tests/test_tensors.py"),
     ComponentTrace("MODEL_PRICE_FIELD (Adjusted Close, LEVELS not returns)", "2.1 Data preparation", "3", "", "MISSING (USER_RESOLVED)", "DECISION_REQUIRED_PRICE_FIELD", "src/tensors.py", "tests/test_tensors.py"),
     ComponentTrace("MODEL_PRICE_SAMPLING (final actual trading-day of week t)", "2.1 Data preparation", "3", "", "EXPLICIT", "DECISION_REQUIRED_PRICE_FIELD; DECISION_REQUIRED_HOLIDAY_EXECUTION", "src/tensors.py", "tests/test_tensors.py"),
+    ComponentTrace("VOLUME_INPUT_INCLUDED (final model includes ETF volume, l=11 m=0)", "2.1 Data preparation", "3", "footnote", "STRONG_INFERENCE_FROM_PAPER_METHODS", "DECISION_REQUIRED_VOLUME_INPUT", "src/tensors.py", "tests/test_tensors.py"),
+    ComponentTrace("VOLUME_SOURCE_FIELD (raw Yahoo Volume)", "2.1 Data preparation", "3", "", "EXPLICIT", "DECISION_REQUIRED_VOLUME_INPUT", "src/tensors.py", "tests/test_tensors.py"),
+    ComponentTrace("VOLUME_WEEKLY_SAMPLING (final actual trading session of week t)", "2.1 Data preparation", "3", "", "USER_RESOLVED_FROM_STRONG_INFERENCE", "DECISION_REQUIRED_VOLUME_INPUT", "src/tensors.py", "tests/test_tensors.py"),
+    ComponentTrace("VOLUME_NORMALIZATION (per-ETF two-year annual z-score, frozen)", "2.1 Data preparation", "3", "", "MISSING (USER_RESOLVED)", "DECISION_REQUIRED_VOLUME_INPUT; DECISION_REQUIRED_NORMALIZATION_SCOPE", "src/normalization.py", "tests/test_normalization.py"),
+    ComponentTrace("INPUT_TENSOR_WIDTH (N x 22, 2l+m, m=0, volume included)", "2.1 Data preparation", "3", "footnote", "STRONG_INFERENCE (USER_RESOLVED)", "DECISION_REQUIRED_VOLUME_INPUT; DECISION_REQUIRED_LOOKBACK_N", "src/tensors.py", "tests/test_tensors.py"),
     ComponentTrace("Target threshold +100bps", "2.1 / Discussion", "3, 6", "", "EXPLICIT", "", "src/labels.py", "tests/test_labels.py"),
     ComponentTrace("Target return interval", "2.1 Data preparation", "3", "", "STRONG_INFERENCE (USER_RESOLVED)", "DECISION_REQUIRED_TARGET_RETURN_INTERVAL", "src/labels.py", "tests/test_labels.py"),
     ComponentTrace("NORMALIZATION_METHOD (z-score, zero mean unit variance)", "2.1 Data preparation", "3", "", "EXPLICIT", "", "src/normalization.py", "tests/test_normalization.py"),
@@ -98,36 +103,67 @@ def write_component_status_json(out_path: Path | None = None) -> Path:
 
 
 def write_annual_scaler_audit_csv(out_path: Path | None = None) -> Path:
-    """Fit the RESOLVED per-ETF AnnualPriceScaler for every paper trading
-    year (2012-2022) from real acquired Yahoo Finance data, and write one
-    audit row per (trading_year, ticker) -- see
-    DECISION_REQUIRED_NORMALIZATION_SCOPE / DECISION_REQUIRED_PRICE_FIELD
-    resolutions. This does not train any model; it only exercises and
-    records the scaler-fitting step in isolation.
+    """Fit the RESOLVED per-ETF AnnualPriceScaler (price) AND
+    AnnualVolumeScaler (volume) for every paper trading year (2012-2022)
+    from real acquired Yahoo Finance data, and write one audit row per
+    (trading_year, ticker, feature) -- see
+    DECISION_REQUIRED_NORMALIZATION_SCOPE / DECISION_REQUIRED_PRICE_FIELD /
+    DECISION_REQUIRED_VOLUME_INPUT resolutions. Expected row count: 11
+    trading years x 11 ETFs x 2 features = 242, if all years/tickers have
+    eligible training data for both features (verified, not assumed -- see
+    the row-count check at the bottom of this function). This does not
+    train any model; it only exercises and records the scaler-fitting step
+    in isolation.
     """
     import csv
 
     from .calendar import build_weekly_calendar
     from .data import load_universe_prices
-    from .normalization import fit_annual_price_scaler
-    from .tensors import build_weekly_price_matrix
+    from .normalization import fit_annual_price_scaler, fit_annual_volume_scaler
+    from .tensors import build_weekly_price_matrix, build_weekly_volume_matrix
     from .training_schedule import AnnualScheduler
+
+    import pandas as pd
 
     prices = load_universe_prices()
     trading_days = prices["XLK"]["date"]  # shared US-equity trading-day index, see notebooks/01
+    # Earliest annual-model training window starts 2010 (see
+    # AnnualScheduler.training_window_for_year(2012) == (2010, 2012)); every
+    # one of the 11 tickers has real, genuine trading history well before
+    # that (latest to launch: VOX, 2004-09-29). Restricting calendar
+    # construction to >= 2008 avoids raising MissingVolumeDataError on
+    # weeks from 1998-2007 that predate some tickers' real inception and
+    # that no trading-year scaler window ever reads -- not a data-integrity
+    # workaround, since those weeks are outside every used training window.
+    trading_days = trading_days[trading_days >= pd.Timestamp("2008-01-01")]
     calendar_df = build_weekly_calendar(trading_days)
     weekly_price_matrix = build_weekly_price_matrix(prices, calendar_df, price_field="adjusted_close")
+    weekly_volume_matrix = build_weekly_volume_matrix(prices, calendar_df, volume_field="volume")
 
+    trading_years = AnnualScheduler().trading_years()
     rows: list[dict] = []
-    for trading_year in AnnualScheduler().trading_years():
-        scaler = fit_annual_price_scaler(weekly_price_matrix, trading_year)
-        rows.extend(scaler.audit_rows())
+    for trading_year in trading_years:
+        price_scaler = fit_annual_price_scaler(weekly_price_matrix, trading_year)
+        rows.extend(price_scaler.audit_rows())
+        volume_scaler = fit_annual_volume_scaler(weekly_volume_matrix, trading_year)
+        rows.extend(volume_scaler.audit_rows())
+
+    expected_rows = len(trading_years) * 11 * 2  # trading_years x ETFs x {price, volume}
+    if len(rows) != expected_rows:
+        raise AssertionError(
+            f"Annual scaler audit produced {len(rows)} rows, expected "
+            f"{expected_rows} ({len(trading_years)} trading years x 11 ETFs "
+            f"x 2 features) -- missing-data eligibility must have excluded "
+            f"some (year, ticker, feature) combination; investigate rather "
+            f"than silently accepting a different count."
+        )
 
     out_path = out_path or PROJECT_ROOT / "outputs" / "paper_annual_scaler_audit.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "trading_year", "training_start_date", "training_end_date", "ticker",
-        "mean", "std", "number_of_training_weeks", "price_field", "normalization", "frozen",
+        "feature", "source_field", "mean", "std", "number_of_training_weeks",
+        "normalization", "ddof", "frozen",
     ]
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)

@@ -20,10 +20,14 @@ component was found to be genuinely `CONTRADICTORY`.
   parameterization, no-lookahead guarantee (`src/tensors.py`,
   `tests/test_tensors.py`). `DECISION_REQUIRED_PRICE_FIELD` RESOLVED
   (Yahoo Adjusted Close LEVELS, sampled at each week's final actual
-  trading session — `src/tensors.py::build_weekly_price_matrix`); tensor
-  construction itself (`build_paper_tensor`) remains blocked on
-  `DECISION_REQUIRED_LOOKBACK_N` and `DECISION_REQUIRED_VOLUME_INPUT`,
-  neither of which is resolved by this.
+  trading session — `src/tensors.py::build_weekly_price_matrix`).
+  `DECISION_REQUIRED_VOLUME_INPUT` RESOLVED (final model INCLUDES ETF
+  volume — raw Yahoo daily Volume, same final-actual-trading-session
+  sampling as price; canonical 22-column width `2l+m`, `l=11`, `m=0` —
+  `src/tensors.py::build_weekly_volume_matrix` /
+  `build_weekly_market_matrix`); tensor construction itself
+  (`build_paper_tensor`) remains blocked on
+  `DECISION_REQUIRED_LOOKBACK_N` alone.
 - Target label construction — `DECISION_REQUIRED_TARGET_RETURN_INTERVAL`
   RESOLVED (first-actual-trading-day open → last-actual-trading-day close
   of the target week, +1% threshold; see decision register), including
@@ -35,10 +39,12 @@ component was found to be genuinely `CONTRADICTORY`.
   (per-ETF z-score, fit once on the annual model's initial two-year
   training history, frozen for the trading year —
   `src/normalization.py::AnnualPriceScaler` /
-  `fit_annual_price_scaler`), plus the pre-existing generic lookahead
-  guard (`src/normalization.py`, `tests/test_normalization.py`). Audit
-  trail: `outputs/paper_annual_scaler_audit.csv` (real Yahoo data, all 11
-  trading years).
+  `fit_annual_price_scaler`), applied identically to volume via
+  `fit_annual_volume_scaler` per the `DECISION_REQUIRED_VOLUME_INPUT`
+  resolution, plus the pre-existing generic lookahead guard
+  (`src/normalization.py`, `tests/test_normalization.py`). Audit trail:
+  `outputs/paper_annual_scaler_audit.csv` (real Yahoo data, all 11 trading
+  years x 11 ETFs x 2 features = 242 rows).
 - MIMO architecture shape (11 outputs, 4 hidden Dense+ReLU+Dropout blocks,
   linear output) — `src/model.py`, `tests/test_model_architecture.py`.
 - Annual scheduler shape (2012-2022, 2-year training window) —
@@ -96,9 +102,11 @@ Resolve Level-1 decisions first (see decision register), in this order of
 practical urgency:
 1. `DECISION_REQUIRED_CUSTOM_FINANCIAL_LOSS` (blocks all training)
 2. `DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION` — **RESOLVED**
-3. `DECISION_REQUIRED_LOOKBACK_N`, `_VOLUME_INPUT` (block tensor
-   construction); `_PRICE_FIELD` — **RESOLVED** (Adjusted Close levels,
-   final-actual-trading-session sampling)
+3. `DECISION_REQUIRED_LOOKBACK_N` (blocks tensor construction, open);
+   `_PRICE_FIELD` — **RESOLVED** (Adjusted Close levels,
+   final-actual-trading-session sampling); `_VOLUME_INPUT` — **RESOLVED**
+   (include, raw Yahoo daily Volume, final-actual-trading-session
+   sampling, 22-column tensor width)
 4. `DECISION_REQUIRED_TARGET_RETURN_INTERVAL` — **RESOLVED** (also resolved
    `DECISION_REQUIRED_HOLIDAY_EXECUTION` for weekly session selection)
 5. `DECISION_REQUIRED_NORMALIZATION_SCOPE` — **RESOLVED** (per-ETF, 2-year

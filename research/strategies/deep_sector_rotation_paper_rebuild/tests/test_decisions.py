@@ -57,12 +57,13 @@ def test_unknown_decision_id_still_raises_with_placeholder_topic():
 
 
 def test_only_expected_decisions_are_resolved():
-    """#21: no unrelated Level-1/2/3 decision changed state as a side
-    effect of resolving DECISION_REQUIRED_PRICE_FIELD and
-    DECISION_REQUIRED_NORMALIZATION_SCOPE (this task) on top of the
-    already-resolved DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION,
-    DECISION_REQUIRED_TARGET_RETURN_INTERVAL, and
-    DECISION_REQUIRED_HOLIDAY_EXECUTION (prior task)."""
+    """#21/#29: no unrelated Level-1/2/3 decision changed state as a side
+    effect of resolving DECISION_REQUIRED_VOLUME_INPUT (this task) on top
+    of the already-resolved DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION,
+    DECISION_REQUIRED_TARGET_RETURN_INTERVAL, DECISION_REQUIRED_HOLIDAY_EXECUTION,
+    DECISION_REQUIRED_PRICE_FIELD, and DECISION_REQUIRED_NORMALIZATION_SCOPE
+    (prior tasks). DECISION_REQUIRED_LOOKBACK_N and every other decision
+    must remain USER_DECISION_REQUIRED."""
     data = json.loads(REGISTER_JSON.read_text())
     expected_resolved = {
         "DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION",
@@ -70,6 +71,7 @@ def test_only_expected_decisions_are_resolved():
         "DECISION_REQUIRED_HOLIDAY_EXECUTION",
         "DECISION_REQUIRED_PRICE_FIELD",
         "DECISION_REQUIRED_NORMALIZATION_SCOPE",
+        "DECISION_REQUIRED_VOLUME_INPUT",
     }
     actually_resolved = {
         item["decision_id"] for item in data if item["status"] != "USER_DECISION_REQUIRED"
@@ -112,9 +114,29 @@ def test_normalization_scope_resolved_status():
     assert record["source_classification"] == "MISSING"
 
 
-def test_volume_input_and_lookback_n_remain_unresolved():
-    # #16/#17: LOOKBACK_N and VOLUME_INPUT are explicitly not resolved by this task
+def test_lookback_n_remains_unresolved():
+    # #19/#25: LOOKBACK_N is explicitly not resolved by this task
     data = json.loads(REGISTER_JSON.read_text())
-    for decision_id in ("DECISION_REQUIRED_LOOKBACK_N", "DECISION_REQUIRED_VOLUME_INPUT"):
-        record = next(item for item in data if item["decision_id"] == decision_id)
-        assert record["status"] == "USER_DECISION_REQUIRED"
+    record = next(item for item in data if item["decision_id"] == "DECISION_REQUIRED_LOOKBACK_N")
+    assert record["status"] == "USER_DECISION_REQUIRED"
+
+
+def test_volume_input_resolved_status():
+    # VOLUME_INPUT is resolved exactly as intended: INCLUDE, final-session
+    # daily volume, source_classification stays MISSING (not upgraded to
+    # paper-explicit for the final-model case).
+    data = json.loads(REGISTER_JSON.read_text())
+    record = next(item for item in data if item["decision_id"] == "DECISION_REQUIRED_VOLUME_INPUT")
+    assert record["status"] == "RESOLVED_INCLUDE_FINAL_SESSION_DAILY_VOLUME"
+    assert record["source_classification"] == "MISSING"
+    assert "resolution" in record
+    resolution = record["resolution"]
+    sampling = resolution["volume_sampling_rule"]
+    assert sampling["source_forensics_conclusion"] == "VOLUME_SAMPLING_STRONG_INFERENCE_FRIDAY_DAILY_VOLUME"
+    assert sampling["source_classification"] == "STRONG_INFERENCE_FROM_MULTIPLE_EXPLICIT_PASSAGES"
+    assert resolution["final_input_geometry"] == {
+        "l": 11,
+        "m": 0,
+        "input_width_2l_plus_m": 22,
+        "tensor_shape": "X_t in R^(N x 22), N unresolved (DECISION_REQUIRED_LOOKBACK_N)",
+    }
