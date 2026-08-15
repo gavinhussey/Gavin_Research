@@ -1082,10 +1082,16 @@
     "decision_id": "DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION",
     "level": 1,
     "topic": "Contingency: substitute framework if TensorFlow/Keras is unavailable at training time",
-    "status": "USER_DECISION_REQUIRED",
+    "status": "RESOLVED_USE_TENSORFLOW_KERAS",
     "source_classification": "EXPLICIT (paper) / environment-triggered contingency",
     "source_evidence": "p.4: 'Models were developed used the TensorFlow platform [1] and the Keras deep learning API [6].'",
-    "why_it_matters": "Not a hypothetical contingency: this environment's Python (3.14) has no available TensorFlow wheel (`pip index versions tensorflow` returns no matching distribution as of 2026-08-13), so TF/Keras -- the paper's explicitly stated framework -- cannot currently be installed here. Model training is blocked on either (a) provisioning a Python environment with TF/Keras support, or (b) an explicit, acknowledged framework substitution (e.g. PyTorch) accepted as a deviation from source fidelity for this environment only.",
+    "why_it_matters": "Not a hypothetical contingency: this repo's root Python (3.14) has no available TensorFlow wheel, so TF/Keras -- the paper's explicitly stated framework -- could not be installed in the shared root .venv. Model training was blocked on either (a) provisioning a Python environment with TF/Keras support, or (b) an explicit, acknowledged framework substitution (e.g. PyTorch) accepted as a deviation from source fidelity for this environment only.",
+    "resolution": {
+      "date": "2026-08-14",
+      "option_chosen": "A",
+      "outcome": "FRAMEWORK_SUBSTITUTION_NOT_REQUIRED -- a dedicated Python 3.13.13 environment (.venvs/deep_sector_rotation/, see research/strategies/deep_sector_rotation_paper_rebuild/requirements.txt) was provisioned with TensorFlow 2.21.0 and Keras 3.15.1 installed and verified importable. tests/test_model_architecture.py::test_build_model_produces_correct_layer_sequence_and_output_shape now runs and passes (previously skipped for lack of TensorFlow). PyTorch (option B) was never used.",
+      "note": "This resolves only the framework/environment decision. All other Level 1/2/3 decisions in this register remain USER_DECISION_REQUIRED; the rebuild remains PAPER_REBUILD_BLOCKED_ON_USER_DECISIONS overall."
+    },
     "candidate_options": [
       {
         "option": "A",
@@ -1099,7 +1105,7 @@
       }
     ],
     "dependencies": [],
-    "recommended_if_forced": "A (provision TF-compatible environment) -- avoid substituting framework silently",
+    "recommended_if_forced": "A (provision TF-compatible environment) -- avoid substituting framework silently -- CHOSEN",
     "recommendation_confidence": "MEDIUM"
   }
 ]

@@ -1,0 +1,16 @@
+# Dependencies for research/strategies/deep_sector_rotation_paper_rebuild.
+# Python: 3.13 (newest CPython officially supported by TensorFlow 2.21.0's
+# published wheels as of 2026-08-14; TensorFlow does not yet publish
+# wheels for 3.14). Install into .venvs/deep_sector_rotation/ — see
+# README.md for exact setup commands.
+#
+# Only packages actually imported by src/, tests/, and notebooks/ are
+# listed here (verified by grepping import statements, not copied from
+# the root project's optional-dependency groups).
+numpy>=1.25.0
+pandas>=2.0.0
+tensorflow>=2.21.0,<3.0.0
+pytest>=8.0.0
+jupyter>=1.0.0
+ipykernel>=6.29.0
+nbformat>=5.9.0

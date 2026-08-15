@@ -1,0 +1,22 @@
+# Dependencies for research/strategies/weekly_sector_rotation.
+# Python: 3.14 (matches this project's currently-working root-.venv
+# setup; not forced onto the deep_sector_rotation TensorFlow Python
+# version). Install into .venvs/weekly_sector_rotation/ — see README.md
+# for exact setup commands.
+#
+# Only packages actually imported by the strategy's .py files and
+# notebooks are listed here (verified by grepping import statements;
+# matplotlib was in the "expected" list but is not actually imported
+# anywhere in this project, so it's omitted), with versions matching the
+# root project's optional-dependency groups this project has been running
+# against (pyproject.toml [deep-learning], [model], [production-data],
+# [notebooks]).
+numpy>=1.25.0
+pandas>=2.0.0
+torch>=2.0.0
+scikit-learn>=1.3.0,<2.0.0
+yfinance>=0.2.40
+jupyter>=1.0.0
+ipykernel>=6.29.0
+nbformat>=5.9.0
+pytest>=8.0.0
