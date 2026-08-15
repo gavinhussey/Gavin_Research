@@ -85,7 +85,7 @@
       "source_section": "2.1 Data preparation",
       "source_page": "3",
       "source_table_or_figure": "",
-      "classification": "STRONG_INFERENCE",
+      "classification": "STRONG_INFERENCE (USER_RESOLVED)",
       "decision_id_if_any": "DECISION_REQUIRED_TARGET_RETURN_INTERVAL",
       "implementation_module": "src/labels.py",
       "test_reference": "tests/test_labels.py"

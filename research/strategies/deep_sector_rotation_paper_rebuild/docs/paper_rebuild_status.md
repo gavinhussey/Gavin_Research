@@ -19,8 +19,13 @@ component was found to be genuinely `CONTRADICTORY`.
 - Tensor construction mechanics: chronological ordering, shape
   parameterization, no-lookahead guarantee (`src/tensors.py`,
   `tests/test_tensors.py`).
-- Label mechanics for both candidate target intervals
-  (`src/labels.py`, `tests/test_labels.py`).
+- Target label construction — `DECISION_REQUIRED_TARGET_RETURN_INTERVAL`
+  RESOLVED (first-actual-trading-day open → last-actual-trading-day close
+  of the target week, +1% threshold; see decision register), including
+  holiday-shortened weeks (`DECISION_REQUIRED_HOLIDAY_EXECUTION`, same
+  resolution) — `src/labels.py`, `src/calendar.py`, `tests/test_labels.py`,
+  `tests/test_calendar.py`. `DECISION_REQUIRED_PRICE_FIELD` (model tensor
+  input field) is untouched by this and remains open.
 - Normalization mechanics with a structural lookahead guard
   (`src/normalization.py`, `tests/test_normalization.py`).
 - MIMO architecture shape (11 outputs, 4 hidden Dense+ReLU+Dropout blocks,
@@ -79,11 +84,11 @@ the latest run.
 Resolve Level-1 decisions first (see decision register), in this order of
 practical urgency:
 1. `DECISION_REQUIRED_CUSTOM_FINANCIAL_LOSS` (blocks all training)
-2. `DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION` (blocks model instantiation
-   in this environment)
+2. `DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION` — **RESOLVED**
 3. `DECISION_REQUIRED_LOOKBACK_N`, `_PRICE_FIELD`, `_VOLUME_INPUT` (block
    tensor construction)
-4. `DECISION_REQUIRED_TARGET_RETURN_INTERVAL` (blocks label construction)
+4. `DECISION_REQUIRED_TARGET_RETURN_INTERVAL` — **RESOLVED** (also resolved
+   `DECISION_REQUIRED_HOLIDAY_EXECUTION` for weekly session selection)
 5. `DECISION_REQUIRED_NORMALIZATION_SCOPE`, `_HIDDEN_WIDTHS`,
    `_DROPOUT_RATE`, and the 7 training-hyperparameter items (block actual
    training runs)

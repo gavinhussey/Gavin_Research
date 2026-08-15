@@ -62,21 +62,36 @@ introduced by this ordering.
 
 ## Holiday handling
 
-**Not addressed by the paper.** See `paper_source_audit.md` §5 and
-`DECISION_REQUIRED_HOLIDAY_EXECUTION` in the decision register. Candidate
-resolutions (not chosen here):
+**Not addressed by the paper** (source gap; see `paper_source_audit.md`
+§5), but **RESOLVED** by explicit user decision as part of resolving
+`DECISION_REQUIRED_TARGET_RETURN_INTERVAL` — the two are the same
+underlying question for weekly entry/exit session selection. See
+`decisions/paper_decision_register.json` for the full resolution record.
 
-- Substitute nearest prior trading day for a missing Friday close (e.g.
-  Thursday close on a Good-Friday week).
-- Substitute nearest following trading day for a missing Monday open
-  (e.g. Tuesday open following an MLK/Presidents/Memorial/Labor Day
-  Monday).
+Resolved rule (equivalent to the "nearest trading day" candidate below,
+restated exactly):
+
+- Entry = **first actual trading day** of the target week (e.g. Tuesday
+  open following an MLK/Presidents/Memorial/Labor Day Monday holiday).
+- Exit = **last actual trading day** of the target week (e.g. Thursday
+  close on a Good-Friday week).
+- Applies uniformly to normal weeks and weeks shortened at either or both
+  ends.
+
+Rejected candidates (recorded for provenance, not chosen):
+
 - Skip the week entirely if either boundary day is a holiday.
 
 `src/calendar.py` builds the full weekly calendar table (as specified in
 the task brief: `week_id, first_actual_trading_day, last_actual_trading_day,
 friday_present, model_cutoff, entry_candidate_date, exit_candidate_date,
-label_known_date`) generically from the real NYSE trading calendar, but
-raises `PaperDecisionRequiredError` for any week where `friday_present` or
-the Monday entry day is False/missing, until the holiday-handling decision
-is supplied.
+label_known_date`) generically from the real NYSE trading calendar. This
+table already computed `entry_candidate_date`/`label_known_date` from
+*actual* observed trading days (not a literal Monday/Friday assumption),
+so no additional substitution logic was needed once the decision was
+resolved — only the blocking guard
+(`weeks_with_unavailable_target`, formerly
+`require_holiday_decision_if_incomplete`) was updated to stop treating
+`friday_present == False` as a block. It still reports weeks whose target
+window has not yet been observed (end of series), which is a structural
+data-availability fact, not a paper-interpretation gap.

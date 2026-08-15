@@ -96,13 +96,18 @@ close (week t); after close: analyze/rank/allocate/update; Monday open
 
 Classification: **EXPLICIT** for the general shape (weekly cadence keyed to
 Friday close for the input tensor; Monday-open entry, Friday-close exit for
-trading). **MISSING**: no statement of holiday-week handling — what happens
-when Friday is a market holiday (e.g. Good Friday) or when Monday is a
-holiday (e.g. many MLK/Presidents/Memorial/Labor Day Mondays). The paper's
-own tensor-construction language ("Friday close prices... non-trading days
-removed") suggests candidate weeks might simply use the last trading day of
-the week for the input tensor, but doesn't say what entry day is substituted
-when Monday itself is closed. See `DECISION_REQUIRED_HOLIDAY_EXECUTION`.
+trading). **MISSING** in the paper itself: no statement of holiday-week
+handling — what happens when Friday is a market holiday (e.g. Good Friday)
+or when Monday is a holiday (e.g. many MLK/Presidents/Memorial/Labor Day
+Mondays). The paper's own tensor-construction language ("Friday close
+prices... non-trading days removed") suggests candidate weeks might simply
+use the last trading day of the week for the input tensor, but doesn't say
+what entry day is substituted when Monday itself is closed. **RESOLVED**
+by explicit user decision (not by inference) as the same underlying
+question as `DECISION_REQUIRED_TARGET_RETURN_INTERVAL`: entry = first
+actual trading day of the week, exit = last actual trading day of the
+week. See `DECISION_REQUIRED_HOLIDAY_EXECUTION` in the decision register
+for the full resolution record.
 
 ## 6. Input tensor structure
 
@@ -168,22 +173,46 @@ close)."*
 price as the target positive class was arrived at in order to approximately
 balance the examples for classification."*
 
-Classification: **EXPLICIT** for `TARGET_THRESHOLD = +100 bps (1%)`, binary.
-**STRONG_INFERENCE** (not fully explicit) for `TARGET_RETURN_INTERVAL`: the
-phrase "implicitly predict two distinct future values (Monday open and
-Friday close)" plus the execution timeline (buy Monday open, sell Friday
-close of the *same* week the label is "for") together strongly imply the
-interval is **next Monday open → next Friday close** (i.e. the label
-measures the actual tradeable return the strategy would realize, not a
-Friday-close-to-Friday-close index return). This is stronger than a pure
-guess but the paper never writes the interval as an equation, so it is
-recorded as `STRONG_INFERENCE`, not `EXPLICIT`, and is still gated behind
-`DECISION_REQUIRED_TARGET_RETURN_INTERVAL` for the user to confirm before
-label construction executes, per the "do not assume" instruction in the
-task brief.
+Classification: **EXPLICIT** for `TARGET_THRESHOLD = +100 bps (1%)`, binary
+— this is a paper-stated number and is unaffected by the interval decision
+below. **STRONG_INFERENCE** (not fully explicit, and not upgraded to
+EXPLICIT by resolution) for `TARGET_RETURN_INTERVAL`: the phrase
+"implicitly predict two distinct future values (Monday open and Friday
+close)" plus the execution timeline (buy Monday open, sell Friday close of
+the *same* week the label is "for") together strongly imply the interval
+is **next Monday open → next Friday close** (i.e. the label measures the
+actual tradeable return the strategy would realize, not a
+Friday-close-to-Friday-close index return). The paper never writes the
+interval as an equation, so the *source* classification remains
+`STRONG_INFERENCE`.
 
-Implementation status: `src/labels.py` scaffolded with both candidate
-interval functions; label computation blocked until confirmed.
+**RESOLVED (2026-08-15) by explicit user decision, not by source
+inference:** `DECISION_REQUIRED_TARGET_RETURN_INTERVAL` is resolved to
+this exact equation —
+
+```
+target_trade_return[s,t+1] = final_actual_trading_day_close[s,t+1]
+                            / first_actual_trading_day_open[s,t+1] - 1
+target[s,t+1] = 1  iff  target_trade_return[s,t+1] >= 0.01,  else 0
+```
+
+— generalizing "Monday open"/"Friday close" to the target week's first/
+last *actual* trading day, so holiday-shortened weeks are handled without
+a separate substitution rule. This is a clearly labeled **USER-RESOLVED
+reconstruction decision** layered on top of the paper's own
+STRONG_INFERENCE support; it is not claimed to be paper-explicit. It also
+resolves `DECISION_REQUIRED_HOLIDAY_EXECUTION` for weekly entry/exit
+session selection (see §5 above and the decision register).
+`DECISION_REQUIRED_PRICE_FIELD` (§10/§14) is explicitly **not** resolved
+by this — raw executable Open/Close for the *label* does not decide what
+field feeds the model's input tensor `X_t`.
+
+Implementation status: `src/labels.py::build_paper_labels` implements the
+resolved definition, consuming `src/calendar.py`'s
+`entry_candidate_date`/`label_known_date` columns. Both candidate interval
+formula functions remain available (`label_monday_open_to_friday_close` —
+chosen; `label_friday_close_to_friday_close` — rejected, kept for
+provenance).
 
 ## 9. Canonical ticker ordering
 

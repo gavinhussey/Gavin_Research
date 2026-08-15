@@ -87,7 +87,7 @@
     "decision_id": "DECISION_REQUIRED_TARGET_RETURN_INTERVAL",
     "level": 1,
     "topic": "Exact date range the +1% label return is measured over",
-    "status": "USER_DECISION_REQUIRED",
+    "status": "RESOLVED_FIRST_ACTUAL_OPEN_TO_FINAL_ACTUAL_CLOSE",
     "source_classification": "STRONG_INFERENCE",
     "source_evidence": "p.3: '...implicitly predict two distinct future values (Monday open and Friday close)'; p.4-5 execution timeline confirms Mon-open entry / Fri-close exit.",
     "why_it_matters": "Changes every label in the entire dataset; a Fri-close-to-Fri-close definition captures weekend gap risk the strategy never actually trades, while Mon-open-to-Fri-close matches the tradeable P&L exactly.",
@@ -105,7 +105,13 @@
     ],
     "dependencies": [],
     "recommended_if_forced": "A",
-    "recommendation_confidence": "MEDIUM"
+    "recommendation_confidence": "MEDIUM",
+    "resolution": {
+      "date": "2026-08-15",
+      "option_chosen": "A, generalized to actual trading sessions",
+      "outcome": "RESOLVED by explicit user instruction, not by inference upgrade -- the paper source evidence remains STRONG_INFERENCE only (never an equation in the source text); the interval itself is a USER-RESOLVED reconstruction decision, distinct from the +100bps/+1% threshold, which remains PAPER EXPLICIT. Exact definition: target_trade_return[s,t+1] = final_actual_trading_day_close[s,t+1] / first_actual_trading_day_open[s,t+1] - 1, where 'first/final actual trading day' is the target week's first/last day actually present in the observed trading calendar (not a literal Monday/Friday) -- applies uniformly to normal and holiday-shortened weeks. target[s,t+1] = 1 iff target_trade_return[s,t+1] >= 0.01, else 0 (TARGET_THRESHOLD_BPS, unchanged, EXPLICIT). Implemented in src/labels.py::build_paper_labels, consuming src/calendar.py's entry_candidate_date (first actual trading day of week t+1) and label_known_date (last actual trading day of week t+1) columns -- both already computed generically from real observed trading days, so no separate holiday-substitution logic was needed. This resolution also settles DECISION_REQUIRED_HOLIDAY_EXECUTION for the weekly entry/exit session-selection question specifically -- see that decision's own resolution block.",
+      "note": "Resolves label/execution TIMING only. DECISION_REQUIRED_PRICE_FIELD (what price field feeds the model's input tensor X_t) is NOT resolved by this decision and remains USER_DECISION_REQUIRED -- raw executable Open/Close used for the target label does not imply raw Close (or any other field) is used for the model input."
+    }
   },
   {
     "decision_id": "DECISION_REQUIRED_NORMALIZATION_SCOPE",
@@ -887,7 +893,7 @@
     "decision_id": "DECISION_REQUIRED_HOLIDAY_EXECUTION",
     "level": 3,
     "topic": "Weekly-calendar handling when Friday close or Monday open falls on a market holiday",
-    "status": "USER_DECISION_REQUIRED",
+    "status": "RESOLVED_FIRST_ACTUAL_OPEN_TO_FINAL_ACTUAL_CLOSE",
     "source_classification": "MISSING",
     "source_evidence": "Not addressed anywhere in the paper.",
     "why_it_matters": "Every year in 2012-2022 contains multiple holiday-shortened weeks (Good Friday, MLK/Presidents/Memorial/Labor Day Mondays, etc.); without a rule, those weeks cannot be executed.",
@@ -905,7 +911,13 @@
     ],
     "dependencies": [],
     "recommended_if_forced": "A",
-    "recommendation_confidence": "LOW"
+    "recommendation_confidence": "LOW",
+    "resolution": {
+      "date": "2026-08-15",
+      "option_chosen": "A, restated exactly",
+      "outcome": "RESOLVED as a direct consequence of the user's DECISION_REQUIRED_TARGET_RETURN_INTERVAL resolution, which is the same underlying question for weekly entry/exit SESSION SELECTION: entry = first actual trading day of the target week (Tuesday if Monday is a holiday); exit = last actual trading day of the target week (Thursday if Friday is a holiday). This is mechanically equivalent to option A ('nearest following trading day for a missing Monday' / 'nearest prior trading day for a missing Friday'). Audited against the rest of this register and docs/paper_execution_timeline.md, docs/paper_source_audit.md #5: no other, independent holiday question was found under this decision_id (e.g. risk-rule evaluation cadence and the SPX benchmark series do not reference DECISION_REQUIRED_HOLIDAY_EXECUTION) -- so this decision is resolved in full, not split.",
+      "note": "Implemented in src/calendar.py, which already computed first_actual_trading_day/last_actual_trading_day generically from the real observed trading-day index (not from a literal Monday/Friday assumption); only the blocking guard (previously src/calendar.py::require_holiday_decision_if_incomplete, raised on friday_present == False) was removed, since that condition no longer represents an unresolved decision."
+    }
   },
   {
     "decision_id": "DECISION_REQUIRED_ETF_DIVIDEND_TREATMENT",

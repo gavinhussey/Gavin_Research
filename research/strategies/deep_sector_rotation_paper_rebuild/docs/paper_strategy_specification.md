@@ -31,9 +31,23 @@ the final reported model (no auxiliary economic series). `N`:
 
 ## Target
 
-Binary, `l`-length vector `y_{t+1}`, threshold = +100bps (+1%) increase.
-Interval: Monday-open(t+1) → Friday-close(t+1) (STRONG_INFERENCE, gated by
-`DECISION_REQUIRED_TARGET_RETURN_INTERVAL`).
+Binary, `l`-length vector `y_{t+1}`, threshold = +100bps (+1%) increase
+(**PAPER EXPLICIT**). Interval: **RESOLVED** (`DECISION_REQUIRED_TARGET_RETURN_INTERVAL`,
+USER-RESOLVED reconstruction decision, not paper-explicit) — first-actual-
+trading-day open(t+1) → last-actual-trading-day close(t+1), i.e.
+
+```
+target_trade_return[s,t+1] = final_actual_trading_day_close[s,t+1]
+                            / first_actual_trading_day_open[s,t+1] - 1
+target[s,t+1] = 1  iff  target_trade_return[s,t+1] >= 0.01,  else 0
+```
+
+generalizing "Monday open / Friday close" to actual trading sessions so
+holiday-shortened weeks (Good Friday, MLK/Presidents/Memorial/Labor Day
+Mondays, etc.) are handled without substitution or skipping. This also
+resolves `DECISION_REQUIRED_HOLIDAY_EXECUTION` for weekly entry/exit
+session selection. Does **not** resolve `DECISION_REQUIRED_PRICE_FIELD`
+(model input tensor field remains open).
 
 ## Normalization
 

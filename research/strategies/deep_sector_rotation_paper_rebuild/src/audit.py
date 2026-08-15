@@ -35,7 +35,7 @@ COMPONENT_TRACES: list[ComponentTrace] = [
     ComponentTrace("Input tensor shape N x (l+m)", "2.1 Data preparation", "3-4", "Figure 1", "EXPLICIT", "DECISION_REQUIRED_LOOKBACK_N", "src/tensors.py", "tests/test_tensors.py"),
     ComponentTrace("Auxiliary variables excluded from final model", "2.1 Data preparation", "3", "", "EXPLICIT", "", "src/tensors.py", "tests/test_tensors.py"),
     ComponentTrace("Target threshold +100bps", "2.1 / Discussion", "3, 6", "", "EXPLICIT", "", "src/labels.py", "tests/test_labels.py"),
-    ComponentTrace("Target return interval", "2.1 Data preparation", "3", "", "STRONG_INFERENCE", "DECISION_REQUIRED_TARGET_RETURN_INTERVAL", "src/labels.py", "tests/test_labels.py"),
+    ComponentTrace("Target return interval", "2.1 Data preparation", "3", "", "STRONG_INFERENCE (USER_RESOLVED)", "DECISION_REQUIRED_TARGET_RETURN_INTERVAL", "src/labels.py", "tests/test_labels.py"),
     ComponentTrace("Normalization (zero mean, unit variance)", "2.1 Data preparation", "3", "", "EXPLICIT", "DECISION_REQUIRED_NORMALIZATION_SCOPE", "src/normalization.py", "tests/test_normalization.py"),
     ComponentTrace("MIMO geometry (11 simultaneous outputs)", "2.2 Deep learning model / Discussion", "3, 6", "", "EXPLICIT", "", "src/model.py", "tests/test_model_architecture.py"),
     ComponentTrace("4 Dense+ReLU+Dropout hidden layers, linear output", "2.2 Deep learning model", "3", "", "EXPLICIT", "DECISION_REQUIRED_HIDDEN_WIDTHS; DECISION_REQUIRED_DROPOUT_RATE", "src/model.py", "tests/test_model_architecture.py"),

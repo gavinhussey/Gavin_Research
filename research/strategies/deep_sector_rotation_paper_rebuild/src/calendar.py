@@ -8,14 +8,20 @@ Trading-day presence is derived from the *actual observed* raw price data
 (real Yahoo Finance trading days), not from a synthetic holiday calendar --
 this keeps the calendar grounded in real data rather than an assumed
 schedule, consistent with the project's no-synthetic-data constraint.
+
+DECISION_REQUIRED_HOLIDAY_EXECUTION is RESOLVED (see
+../decisions/paper_decision_register.json): entry = first actual trading
+day of the target week; exit = last actual trading day of the target week
+-- exactly what `entry_candidate_date` / `exit_candidate_date` /
+`label_known_date` already compute below, generically, for every week
+including holiday-shortened ones. `friday_present == False` is therefore
+no longer a blocking condition.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import pandas as pd
-
-from .decisions import require_resolved
 
 
 @dataclass(frozen=True)
@@ -81,24 +87,19 @@ def build_weekly_calendar(trading_days: pd.DatetimeIndex) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def require_holiday_decision_if_incomplete(calendar_df: pd.DataFrame) -> None:
-    """Block on any week whose Friday (or the next week's Monday entry) is missing.
+def weeks_with_unavailable_target(calendar_df: pd.DataFrame) -> pd.DataFrame:
+    """Weeks whose target window (week t+1) is not yet observable.
 
-    The paper never specifies holiday-week handling (see
-    DECISION_REQUIRED_HOLIDAY_EXECUTION), so any week for which the
-    literal 'Friday close' / 'Monday open' assumption fails must not be
-    silently substituted -- it must be explicitly gated.
+    This is NOT a paper-decision gap -- DECISION_REQUIRED_HOLIDAY_EXECUTION
+    is resolved, and holiday-shortened weeks are handled automatically via
+    `entry_candidate_date` / `label_known_date` (both already computed from
+    *actual* observed trading days, not a literal Monday/Friday
+    assumption). The only remaining reason a week's target can be
+    unavailable here is structural: it is the most recent week(s) in the
+    series, whose following week has not happened yet. Callers must
+    exclude these weeks from label construction rather than fabricate a
+    value for them (see build_paper_labels in ../src/labels.py).
     """
-    incomplete = calendar_df[
-        (~calendar_df["friday_present"]) | (calendar_df["entry_candidate_date"].isna())
+    return calendar_df[
+        calendar_df["entry_candidate_date"].isna() | calendar_df["label_known_date"].isna()
     ]
-    if len(incomplete) > 0:
-        require_resolved(
-            "DECISION_REQUIRED_HOLIDAY_EXECUTION",
-            required_before=(
-                f"{len(incomplete)} week(s) lack a literal Friday close and/or "
-                f"a following Monday open (e.g. week_id={incomplete['week_id'].iloc[0]}); "
-                f"holiday-substitution rule must be chosen before these weeks can "
-                f"be executed."
-            ),
-        )

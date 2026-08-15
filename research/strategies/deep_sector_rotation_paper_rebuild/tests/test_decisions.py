@@ -54,3 +54,43 @@ def test_unknown_decision_id_still_raises_with_placeholder_topic():
         assert False, "expected PaperDecisionRequiredError"
     except PaperDecisionRequiredError as exc:
         assert "unknown decision id" in exc.topic
+
+
+def test_price_field_remains_unresolved():
+    """#15: DECISION_REQUIRED_PRICE_FIELD must remain untouched by the
+    target-return-interval resolution -- what feeds the model tensor is a
+    separate, still-open question from what the label execution price is."""
+    data = json.loads(REGISTER_JSON.read_text())
+    record = next(item for item in data if item["decision_id"] == "DECISION_REQUIRED_PRICE_FIELD")
+    assert record["status"] == "USER_DECISION_REQUIRED"
+
+
+def test_only_target_return_interval_holiday_and_framework_decisions_are_resolved():
+    """#16: no other Level-1 (or any other) paper decision changed status
+    as a side effect of resolving DECISION_REQUIRED_TARGET_RETURN_INTERVAL."""
+    data = json.loads(REGISTER_JSON.read_text())
+    expected_resolved = {
+        "DECISION_REQUIRED_FRAMEWORK_SUBSTITUTION",
+        "DECISION_REQUIRED_TARGET_RETURN_INTERVAL",
+        "DECISION_REQUIRED_HOLIDAY_EXECUTION",
+    }
+    actually_resolved = {
+        item["decision_id"] for item in data if item["status"] != "USER_DECISION_REQUIRED"
+    }
+    assert actually_resolved == expected_resolved
+
+
+def test_target_return_interval_resolved_status():
+    data = json.loads(REGISTER_JSON.read_text())
+    record = next(item for item in data if item["decision_id"] == "DECISION_REQUIRED_TARGET_RETURN_INTERVAL")
+    assert record["status"] == "RESOLVED_FIRST_ACTUAL_OPEN_TO_FINAL_ACTUAL_CLOSE"
+    assert "resolution" in record
+    # threshold vs interval must not be conflated: threshold stays EXPLICIT/paper-stated
+    assert record["source_classification"] == "STRONG_INFERENCE"
+
+
+def test_holiday_execution_resolved_status():
+    data = json.loads(REGISTER_JSON.read_text())
+    record = next(item for item in data if item["decision_id"] == "DECISION_REQUIRED_HOLIDAY_EXECUTION")
+    assert record["status"] == "RESOLVED_FIRST_ACTUAL_OPEN_TO_FINAL_ACTUAL_CLOSE"
+    assert "resolution" in record
