@@ -191,6 +191,37 @@ class PointInTimeSelectionResult:
     rejected: tuple[RejectedFiling, ...]
 
 
+_FUNDAMENTAL_FIELDS: tuple[str, ...] = (
+    "revenue",
+    "gross_profit",
+    "operating_income",
+    "net_income",
+    "diluted_eps",
+    "stockholders_equity",
+    "operating_cash_flow",
+    "capital_expenditure",
+)
+
+
+def _populated_field_count(filing: FilingFundamentals) -> int:
+    return sum(1 for name in _FUNDAMENTAL_FIELDS if getattr(filing, name) is not None)
+
+
+def _is_more_complete_revision(
+    candidate: FilingFundamentals, existing: FilingFundamentals
+) -> bool:
+    """Whether ``candidate`` should replace ``existing`` as the selected
+    filing for their shared quarter -- more populated fundamental fields
+    wins; a tie in completeness falls back to the later ``filed_at``
+    (preserving the original "latest amendment wins" behavior when both
+    candidates are equally complete)."""
+    candidate_count = _populated_field_count(candidate)
+    existing_count = _populated_field_count(existing)
+    if candidate_count != existing_count:
+        return candidate_count > existing_count
+    return candidate.filed_at > existing.filed_at
+
+
 def select_point_in_time_fundamentals(
     filings: Sequence[FilingFundamentals],
     instrument_id: InstrumentId,
@@ -208,13 +239,22 @@ def select_point_in_time_fundamentals(
     - A filing with ``filed_at > cutoff`` is rejected ("filed after
       cutoff") — this is the core no-lookahead guarantee.
     - When multiple filings share the same ``quarter_end`` (an original
-      filing plus a later amendment/restatement), only the filing with the
-      latest ``filed_at`` *that is still <= cutoff* is kept for that
-      quarter; earlier ones are rejected ("superseded by a later revision
-      within cutoff"). An amendment whose own ``filed_at`` is after
-      ``cutoff`` is excluded by the cutoff rule above and can never
-      pre-empt the original — a later revision is never visible before its
-      own filing date.
+      filing plus a later amendment/restatement, or -- in real SEC EDGAR
+      data -- a comparative-period fragment surfaced by a later, unrelated
+      filing), the one kept for that quarter is whichever candidate still
+      ``<= cutoff`` has the most populated fundamental fields; a tie in
+      completeness falls back to the latest ``filed_at``. This is not a
+      lookahead risk: every candidate compared is already known to be
+      ``<= cutoff``, so preferring a more complete *earlier* filing over a
+      sparser *later* one never uses information before its own filing
+      date -- it only stops a same-quarter fragment (e.g. a different
+      accession's comparative-period figures, common in SEC XBRL data)
+      from blanking out fields a fuller filing already supplied. The
+      loser in each comparison is rejected ("superseded by a more
+      complete revision within cutoff"). An amendment whose own
+      ``filed_at`` is after ``cutoff`` is excluded by the cutoff rule
+      above and can never pre-empt the original — a later revision is
+      never visible before its own filing date.
     - Surviving filings are sorted by ``quarter_end`` ascending (a stable
       sort, so exact ``filed_at`` ties for different quarters resolve
       deterministically by input order).
@@ -243,14 +283,14 @@ def select_point_in_time_fundamentals(
         existing = best_by_quarter.get(filing.quarter_end)
         if existing is None:
             best_by_quarter[filing.quarter_end] = filing
-        elif filing.filed_at > existing.filed_at:
+        elif _is_more_complete_revision(filing, existing):
             rejected.append(
-                RejectedFiling(existing, "superseded by a later revision within cutoff")
+                RejectedFiling(existing, "superseded by a more complete revision within cutoff")
             )
             best_by_quarter[filing.quarter_end] = filing
         else:
             rejected.append(
-                RejectedFiling(filing, "superseded by a later revision within cutoff")
+                RejectedFiling(filing, "superseded by a more complete revision within cutoff")
             )
 
     ordered = sorted(best_by_quarter.values(), key=lambda f: f.quarter_end)

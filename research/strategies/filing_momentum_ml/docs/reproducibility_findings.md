@@ -97,6 +97,153 @@ comparison is no longer being pursued — see the policy note above.
   backtest run predates this fix and should be re-run before being cited
   against the external report.
 
+- **Point-in-time fundamentals selector discarded more-complete filings in
+  favor of sparser ones (`implementation_bug` /
+  `data_provenance_required`, fixed 2026-08-15)**: real SEC EDGAR XBRL
+  data frequently reports a quarter's figures across more than one
+  accession — a comparative-period fragment inside a *later*, unrelated
+  filing can supply only a handful of fields (e.g. `stockholders_equity`
+  alone, with `revenue`/`net_income`/`diluted_eps`/etc. all `None`) for a
+  quarter that an earlier, complete filing had already reported in full
+  (`acquisition/sec_edgar.py`'s own docstring discloses this as an
+  intentional, never-merge-two-filings parsing choice). Verified against
+  the real acquired dataset: 91% of (symbol, quarter_end) pairs have 2+
+  raw filing records, and in 47% of those duplicate groups the record
+  `select_point_in_time_fundamentals` kept — whichever had the latest
+  `filed_at` still `<= cutoff` — had *fewer* populated fields than an
+  earlier record already available for the same quarter, actively
+  discarding good data. Net effect measured against real data before the
+  fix: 99.75% of the 21,997 feature observations in the full 2015-2026
+  backtest had at least one of the 17 report §3 features missing (mean
+  4.24/17), with `fcf_trend` missing 81% of the time, `rev_qoq` 66%,
+  `eps_qoq` 63% — the report's own core "filing momentum" fundamentals.
+  Fixed in `atlas_quant.data.point_in_time.select_point_in_time_fundamentals`:
+  among same-quarter candidates still `<= cutoff`, the selector now keeps
+  whichever has the most populated fundamental fields, falling back to
+  latest `filed_at` only on a tie (preserving the original amendment/
+  restatement behavior when completeness is equal). This is not a
+  lookahead risk — every candidate compared was already known by
+  `cutoff`; the fix only changes which already-knowable record wins.
+  Rejection reason string changed from `"superseded by a later revision
+  within cutoff"` to `"superseded by a more complete revision within
+  cutoff"`.
+
+  Effect measured by re-running feature build on real data:
+  mean missing features/observation dropped from 4.24 to 3.10;
+  `rev_qoq` missing 66%→35%, `eps_qoq` 63%→33%, `rev_accel` 79%→57%,
+  `fcf_trend` 81%→67%. Re-running the full 2015-03-31 through 2026-06-30
+  production backtest (same data, same config, selector fix only)
+  changed the invested-scope (37 quarters) results modestly: total_return
+  1577.1%→1537.6%, sharpe 1.31→1.24, sortino 2.46→1.88, win_rate
+  75.0%→83.3%, max_drawdown -33.2%→-42.5% (same 2021-06→2021-12 window),
+  and the primary/fallback split shifted from 34/3 to 33/4 quarters (one
+  quarter's data completeness dropped below the threshold for primary
+  stock-selection under the corrected selection). This modest-magnitude
+  shift is consistent with a separate gain-importance analysis of the 78
+  real trained models on disk: the 9 report §3.1 fundamentals affected by
+  this bug collectively account for only ~12% of total model split gain
+  (one price/volatility feature, `vol_63d`, alone accounts for ~76%), so
+  the model had already partly adapted around the missingness rather than
+  relying heavily on it.
+
+  Remaining missingness (not addressed by the selector fix above — a
+  data-retrieval gap, not a selection bug): even after that fix,
+  `fcf_trend` (67%), `gm_trend` (66%), and `rev_accel` (57%) stayed
+  heavily missing. This traced to `acquisition/sec_edgar.py`'s
+  `_TAG_CANDIDATES` trying only a single us-gaap XBRL tag for several
+  concepts — companies commonly file the same real concept under other
+  standard GAAP tags the list didn't try.
+
+  **Follow-up (`data_provenance_required`, 2026-08-15): broadened
+  `_TAG_CANDIDATES`.** Added standard GAAP alternate tags for
+  `capital_expenditure` (`PaymentsForCapitalImprovements`,
+  `PaymentsToAcquireProductiveAssets`,
+  `PaymentsToAcquireOtherProductiveAssets`,
+  `PaymentsToAcquireMachineryAndEquipment` — this was the single largest
+  remaining gap, previously only `PaymentsToAcquirePropertyPlantAndEquipment`),
+  `revenue` (`RevenueFromContractWithCustomerIncludingAssessedTax`,
+  `SalesRevenueGoodsNet`, `SalesRevenueServicesNet`), and `diluted_eps`
+  (`EarningsPerShareBasicAndDiluted`, for smaller filers that report one
+  combined basic-and-diluted figure instead of a separate diluted tag).
+  `gross_profit` deliberately left untouched — unlike the others, there
+  is no common alternate XBRL tag for it; the only way to fill it in
+  further is to *derive* it as `Revenues − CostOfRevenue` when both are
+  disclosed, which is a real-but-computed value rather than a directly
+  reported one, and is being held as a separate, explicit decision
+  pending user confirmation rather than folded into this tag-matching
+  fix. Same treatment applies to fiscal Q4, which SEC XBRL never reports
+  as its own quarterly fact at all (only inside the 10-K's full-year
+  total) — likely the single largest remaining source of missing
+  quarters in the dataset, and not addressed by this fix.
+
+  This broadening only changes which tags the parser *recognizes* in a
+  company-facts payload — it cannot improve the already-acquired
+  `data/raw/filing_momentum_ml/filings.json` until acquisition is
+  re-run against live SEC EDGAR, which requires a real
+  `SEC_EDGAR_USER_AGENT` (name + contact email per SEC's fair-access
+  policy) not yet configured in this environment. Verified only against
+  hand-crafted fixture payloads in
+  `tests/unit/test_acquisition_sec_edgar.py`
+  (`test_capital_expenditure_recognizes_broadened_gaap_tags`,
+  `test_diluted_eps_recognizes_basic_and_diluted_combined_tag`,
+  `test_revenue_recognizes_additional_broadened_gaap_tags`) as of this
+  entry — real-data missingness improvement from this change is not yet
+  measured and should not be assumed until a live re-acquisition run
+  happens.
+
+  **Follow-up (`data_provenance_required`, 2026-08-15): derive fiscal Q4
+  for additive concepts.** SEC XBRL never files fiscal Q4 as its own
+  quarterly (~90-day) fact — only Q1-Q3 get a standalone 10-Q, with Q4
+  folded into the 10-K's full-year figure. This is very likely the
+  single largest remaining source of missing quarters in the dataset.
+  `parse_company_facts_to_filings` now derives
+  `Q4 = FY − (Q1+Q2+Q3)` for `_ADDITIVE_CONCEPTS` (`revenue`,
+  `gross_profit`, `operating_income`, `net_income`,
+  `operating_cash_flow`, `capital_expenditure`) whenever all four periods
+  are disclosed for the same fiscal year — real arithmetic on real
+  disclosed numbers (this is the same technique third-party financial
+  data vendors use for exactly this reason, not a platform-specific
+  approximation), never a partial estimate when one of the four is
+  missing. Deliberately **excluded** from this derivation:
+  - `diluted_eps` — not additive. EPS is a per-share ratio with a
+    weighted-average share count that changes quarter to quarter, so
+    `FY_EPS − Q1 − Q2 − Q3` is not a valid identity, not merely an
+    imprecise one. Stays `None` for Q4 unless a filing directly reports
+    it.
+  - `stockholders_equity` — a balance-sheet snapshot, not a flow; its
+    real Q4 value is the FY 10-K's own balance-sheet-date fact directly,
+    not a subtraction. Not yet implemented (would need to read the FY
+    instant fact as-is rather than derive by arithmetic) — still `None`
+    for Q4 as of this entry, a smaller and lower-risk follow-up than
+    this one.
+
+  Every derived Q4 row is added as its own, separately-sourced record
+  rather than merged into any real filing's row: `source` is suffixed
+  `_derived_q4` (propagates through to `DataProvenance.source`) and
+  `accession_number` is suffixed `#derived_q4` — a derived value must
+  never be indistinguishable from a directly-reported one to a
+  downstream consumer. A company that genuinely files its own Q4 10-Q
+  (rare, but real) is never overwritten by a derived row for the same
+  fiscal year.
+
+  Verified only against hand-crafted fixture payloads in
+  `tests/unit/test_acquisition_sec_edgar.py`
+  (`test_q4_is_derived_for_additive_concepts_when_all_four_periods_disclosed`,
+  `test_q4_derivation_excludes_diluted_eps_and_stockholders_equity`,
+  `test_q4_not_derived_when_any_quarter_missing`,
+  `test_real_directly_reported_q4_is_never_overwritten_by_a_derived_one`)
+  as of this entry — like the tag broadening above, this has no effect
+  on the already-acquired `filings.json` and its real-data missingness
+  impact is not yet measured; both require the same pending live
+  re-acquisition run once a real `SEC_EDGAR_USER_AGENT` is available.
+
+  Baseline (pre-fix) committed backtest output
+  (`backtest/filing_momentum_ml/output/strategy_statistics.txt`) has
+  **not** been overwritten with the corrected numbers as of this entry —
+  the corrected run's numbers above are recorded here for provenance, but
+  promoting them to the tracked/canonical output is a separate, deferred
+  step pending the data-retrieval follow-up above.
+
 ## Stage 14: paper-trading execution design decisions
 
 `atlas-quant filing-momentum paper-trade` (see

@@ -128,6 +128,151 @@ def test_revenue_tag_fallback_priority():
     assert by_accn["acc-2"].revenue == 1200.0
 
 
+def test_capital_expenditure_recognizes_broadened_gaap_tags():
+    facts = _facts_json()
+    # Real companies commonly file capex under a tag other than
+    # PaymentsToAcquirePropertyPlantAndEquipment -- these must not be
+    # left None just because that one specific tag is absent.
+    facts["facts"]["us-gaap"]["PaymentsForCapitalImprovements"] = {
+        "units": {"USD": [
+            {"start": "2023-01-01", "end": "2023-03-31", "val": 75.0, "accn": "acc-1",
+             "fy": 2023, "fp": "Q1", "form": "10-Q", "filed": "2023-04-28"},
+        ]}
+    }
+    filings = parse_company_facts_to_filings("TEST", facts, source="sec_edgar", retrieved_at=_RETRIEVED_AT)
+    by_accn = {f.accession_number: f for f in filings}
+    assert by_accn["acc-1"].capital_expenditure == 75.0
+
+
+def test_diluted_eps_recognizes_basic_and_diluted_combined_tag():
+    facts = _facts_json()
+    # Smaller filers commonly report one combined basic-and-diluted EPS
+    # tag instead of a separate EarningsPerShareDiluted fact.
+    facts["facts"]["us-gaap"]["EarningsPerShareBasicAndDiluted"] = {
+        "units": {"USD/shares": [
+            {"start": "2023-01-01", "end": "2023-03-31", "val": 0.42, "accn": "acc-1",
+             "fy": 2023, "fp": "Q1", "form": "10-Q", "filed": "2023-04-28"},
+        ]}
+    }
+    filings = parse_company_facts_to_filings("TEST", facts, source="sec_edgar", retrieved_at=_RETRIEVED_AT)
+    by_accn = {f.accession_number: f for f in filings}
+    assert by_accn["acc-1"].diluted_eps == 0.42
+
+
+def test_revenue_recognizes_additional_broadened_gaap_tags():
+    facts = _facts_json()
+    del facts["facts"]["us-gaap"]["Revenues"]
+    facts["facts"]["us-gaap"]["SalesRevenueGoodsNet"] = {
+        "units": {"USD": [
+            {"start": "2023-01-01", "end": "2023-03-31", "val": 900.0, "accn": "acc-1",
+             "fy": 2023, "fp": "Q1", "form": "10-Q", "filed": "2023-04-28"},
+        ]}
+    }
+    filings = parse_company_facts_to_filings("TEST", facts, source="sec_edgar", retrieved_at=_RETRIEVED_AT)
+    by_accn = {f.accession_number: f for f in filings}
+    assert by_accn["acc-1"].revenue == 900.0
+
+
+def _q4_derivable_facts_json() -> dict:
+    def entries(tag_values, *, fy=2023):
+        return [
+            {"start": s, "end": e, "val": v, "accn": accn, "fy": fy, "fp": fp, "form": "10-Q", "filed": filed}
+            for (s, e, v, accn, fp, filed) in tag_values
+        ]
+
+    return {
+        "cik": 320193,
+        "entityName": "Test Co",
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {"USD": [
+                        {"start": "2023-01-01", "end": "2023-03-31", "val": 100.0, "accn": "acc-q1",
+                         "fy": 2023, "fp": "Q1", "form": "10-Q", "filed": "2023-04-28"},
+                        {"start": "2023-04-01", "end": "2023-06-30", "val": 110.0, "accn": "acc-q2",
+                         "fy": 2023, "fp": "Q2", "form": "10-Q", "filed": "2023-07-28"},
+                        {"start": "2023-07-01", "end": "2023-09-30", "val": 120.0, "accn": "acc-q3",
+                         "fy": 2023, "fp": "Q3", "form": "10-Q", "filed": "2023-10-28"},
+                        # FY 10-K figure -- Q4 = 500 - 100 - 110 - 120 = 170.
+                        {"start": "2023-01-01", "end": "2023-12-31", "val": 500.0, "accn": "acc-fy",
+                         "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2024-02-15"},
+                    ]}
+                },
+                "EarningsPerShareDiluted": {
+                    "units": {"USD/shares": [
+                        {"start": "2023-01-01", "end": "2023-03-31", "val": 0.10, "accn": "acc-q1",
+                         "fy": 2023, "fp": "Q1", "form": "10-Q", "filed": "2023-04-28"},
+                        {"start": "2023-04-01", "end": "2023-06-30", "val": 0.11, "accn": "acc-q2",
+                         "fy": 2023, "fp": "Q2", "form": "10-Q", "filed": "2023-07-28"},
+                        {"start": "2023-07-01", "end": "2023-09-30", "val": 0.12, "accn": "acc-q3",
+                         "fy": 2023, "fp": "Q3", "form": "10-Q", "filed": "2023-10-28"},
+                        {"start": "2023-01-01", "end": "2023-12-31", "val": 0.50, "accn": "acc-fy",
+                         "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2024-02-15"},
+                    ]}
+                },
+                "StockholdersEquity": {
+                    "units": {"USD": [
+                        {"end": "2023-12-31", "val": 9000.0, "accn": "acc-fy",
+                         "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2024-02-15"},
+                    ]}
+                },
+            }
+        },
+    }
+
+
+def test_q4_is_derived_for_additive_concepts_when_all_four_periods_disclosed():
+    filings = parse_company_facts_to_filings(
+        "TEST", _q4_derivable_facts_json(), source="sec_edgar", retrieved_at=_RETRIEVED_AT
+    )
+    q4_rows = [f for f in filings if f.fiscal_period == "Q4" and f.fiscal_year == 2023]
+    assert len(q4_rows) == 1
+    q4 = q4_rows[0]
+    assert q4.quarter_end == date(2023, 12, 31)
+    assert q4.revenue == pytest.approx(170.0)
+    assert q4.filed_at == datetime(2024, 2, 15)
+    # Marked as computed, not a directly-reported filing.
+    assert q4.source == "sec_edgar_derived_q4"
+    assert q4.accession_number == "acc-fy#derived_q4"
+
+
+def test_q4_derivation_excludes_diluted_eps_and_stockholders_equity():
+    filings = parse_company_facts_to_filings(
+        "TEST", _q4_derivable_facts_json(), source="sec_edgar", retrieved_at=_RETRIEVED_AT
+    )
+    q4 = next(f for f in filings if f.fiscal_period == "Q4" and f.fiscal_year == 2023)
+    # EPS is not additive (weighted share count changes quarter to
+    # quarter) and equity is a balance-sheet snapshot, not a flow --
+    # neither is derived by subtraction.
+    assert q4.diluted_eps is None
+    assert q4.stockholders_equity is None
+
+
+def test_q4_not_derived_when_any_quarter_missing():
+    facts = _q4_derivable_facts_json()
+    # Drop Q3 -- derivation must not fire on a partial trio.
+    facts["facts"]["us-gaap"]["Revenues"]["units"]["USD"] = [
+        e for e in facts["facts"]["us-gaap"]["Revenues"]["units"]["USD"] if e["accn"] != "acc-q3"
+    ]
+    filings = parse_company_facts_to_filings("TEST", facts, source="sec_edgar", retrieved_at=_RETRIEVED_AT)
+    assert not any(f.fiscal_period == "Q4" and f.fiscal_year == 2023 for f in filings)
+
+
+def test_real_directly_reported_q4_is_never_overwritten_by_a_derived_one():
+    facts = _q4_derivable_facts_json()
+    # A company that genuinely files its own Q4 10-Q (rare, but real).
+    facts["facts"]["us-gaap"]["Revenues"]["units"]["USD"].append(
+        {"start": "2023-10-01", "end": "2023-12-31", "val": 999.0, "accn": "acc-q4-real",
+         "fy": 2023, "fp": "Q4", "form": "10-Q", "filed": "2024-01-20"},
+    )
+    filings = parse_company_facts_to_filings("TEST", facts, source="sec_edgar", retrieved_at=_RETRIEVED_AT)
+    q4_rows = [f for f in filings if f.fiscal_period == "Q4" and f.fiscal_year == 2023]
+    assert len(q4_rows) == 1
+    assert q4_rows[0].revenue == 999.0
+    assert q4_rows[0].source == "sec_edgar"  # directly reported, not derived
+    assert q4_rows[0].accession_number == "acc-q4-real"
+
+
 def test_fetch_company_facts_uses_correct_url_and_headers():
     client = FakeHttpClient(json_responses={
         "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json": _facts_json(),

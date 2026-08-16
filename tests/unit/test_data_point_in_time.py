@@ -155,7 +155,43 @@ class TestSelectPointInTimeFundamentals:
         assert len(result.selected) == 1
         assert result.selected[0].revenue == 105.0
         assert any(
-            r.reason == "superseded by a later revision within cutoff" for r in result.rejected
+            r.reason == "superseded by a more complete revision within cutoff" for r in result.rejected
+        )
+
+    def test_sparser_later_filing_does_not_supersede_a_complete_earlier_one(self):
+        iid = instrument()
+        complete = make_filing(
+            instrument_id=iid,
+            quarter_end=date(2025, 9, 30),
+            fiscal_period="Q3",
+            filed_at=datetime(2025, 10, 30),
+            revenue=100.0,
+        )
+        # A later filing that only reports this quarter as a comparative
+        # fragment (e.g. a different accession's prior-year context in
+        # real SEC XBRL data) -- most fields None.
+        sparse_fragment = make_filing(
+            instrument_id=iid,
+            quarter_end=date(2025, 9, 30),
+            fiscal_period="Q3",
+            filed_at=datetime(2026, 1, 30),
+            revenue=None,
+            gross_profit=None,
+            operating_income=None,
+            net_income=None,
+            diluted_eps=None,
+            operating_cash_flow=None,
+            capital_expenditure=None,
+        )
+        result = select_point_in_time_fundamentals(
+            [complete, sparse_fragment], iid, cutoff=datetime(2026, 3, 1)
+        )
+        assert len(result.selected) == 1
+        assert result.selected[0].revenue == 100.0
+        assert any(
+            r.filing is sparse_fragment
+            and r.reason == "superseded by a more complete revision within cutoff"
+            for r in result.rejected
         )
 
     def test_later_amendment_unavailable_before_its_own_filing_date(self):

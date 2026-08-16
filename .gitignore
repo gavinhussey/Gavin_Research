@@ -42,3 +42,8 @@ data/logs/filing_momentum_ml/
 # research notebooks, never committed.
 data/raw/weekly_sector_rotation/
 data/processed/weekly_sector_rotation/
+
+# Filing Momentum ML data-quality sandbox -- deliberately kept outside
+# data/ so it can never be confused with (or accidentally read by) the
+# production raw-data paths above; same never-committed convention.
+sandbox/
