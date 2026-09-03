@@ -35,3 +35,15 @@ data/orders/filing_momentum_ml/
 
 # Scheduled-job output (nightly data-refresh check, daily paper-trade run).
 data/logs/filing_momentum_ml/
+
+# Multi-Factor Ranking ML -- same categories of never-committed
+# production/research data, mirrored under its own strategy name.
+data/raw/multi_factor_ranking_ml/
+data/normalized/multi_factor_ranking_ml/
+data/cache/multi_factor_ranking_ml/
+data/manifests/multi_factor_ranking_ml/
+research/strategies/multi_factor_ranking_ml/outputs/
+data/models/multi_factor_ranking_ml/
+data/decisions/multi_factor_ranking_ml/
+data/orders/multi_factor_ranking_ml/
+data/logs/multi_factor_ranking_ml/
