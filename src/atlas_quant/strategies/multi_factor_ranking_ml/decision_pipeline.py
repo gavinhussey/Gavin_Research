@@ -1,10 +1,14 @@
-"""Pure qualification, ranking, and rejection logic for Multi-Factor Ranking ML.
+"""Pure validation and ranking logic for Multi-Factor Ranking ML.
 
-Each function here implements exactly one step of the report's decision
-sequence (§5) and returns ``(kept, rejected)`` so a caller can chain steps
-without losing why anything was dropped. No I/O and no scoring — scores
-are an injected input (see ``scoring_domain.py``) this module only
-consumes.
+Each function here implements exactly one step of this strategy's
+decision sequence and returns ``(kept, rejected)`` so a caller can chain
+steps without losing why anything was dropped. No I/O and no scoring —
+scores are an injected input (see ``scoring_domain.py``) this module only
+consumes. There is no qualification threshold and no position-count cap
+here (filing_momentum_ml's ``apply_threshold``/``truncate_to_max_positions``
+are deliberately not carried over): every candidate that survives
+validation and sector exclusion is ranked, full stop -- this strategy
+ranks the whole universe, it does not select a subset of it.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from typing import Sequence
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.strategies.multi_factor_ranking_ml.decision_domain import (
     CandidateRejectionCategory,
+    RankedInstrument,
     RejectedCandidate,
 )
 from atlas_quant.strategies.multi_factor_ranking_ml.scoring_domain import ScoredCandidate
@@ -162,27 +167,6 @@ def apply_sector_exclusion(
     return kept, rejected
 
 
-def apply_threshold(
-    candidates: Sequence[ScoredCandidate], threshold: float
-) -> tuple[list[ScoredCandidate], list[RejectedCandidate]]:
-    """Report §4.3: qualifies iff ``score >= threshold`` (inclusive)."""
-    kept: list[ScoredCandidate] = []
-    rejected: list[RejectedCandidate] = []
-    for candidate in candidates:
-        if candidate.score >= threshold:
-            kept.append(candidate)
-        else:
-            rejected.append(
-                RejectedCandidate(
-                    candidate.instrument_id,
-                    CandidateRejectionCategory.BELOW_THRESHOLD,
-                    f"score={candidate.score!r} < threshold={threshold!r}",
-                    candidate.score,
-                )
-            )
-    return kept, rejected
-
-
 def rank_candidates(candidates: Sequence[ScoredCandidate]) -> list[ScoredCandidate]:
     """Descending score; ties broken by ascending instrument symbol for determinism.
 
@@ -192,16 +176,11 @@ def rank_candidates(candidates: Sequence[ScoredCandidate]) -> list[ScoredCandida
     return sorted(candidates, key=lambda c: (-c.score, c.instrument_id.symbol))
 
 
-def truncate_to_max_positions(
-    ranked: Sequence[ScoredCandidate], max_positions: int
-) -> tuple[list[ScoredCandidate], list[RejectedCandidate]]:
-    """Report §5.4: cap at ``max_positions`` after all other filters, by rank."""
-    kept = list(ranked[:max_positions])
-    capped = [
-        RejectedCandidate(
-            c.instrument_id, CandidateRejectionCategory.POSITION_CAP,
-            f"ranked below max_positions={max_positions}", c.score,
-        )
-        for c in ranked[max_positions:]
-    ]
-    return kept, capped
+def to_ranked(candidates: Sequence[ScoredCandidate]) -> tuple[RankedInstrument, ...]:
+    """Assign each of ``candidates`` (already sorted by :func:`rank_candidates`)
+    its 1-based rank -- the strategy's entire output: a score and a rank
+    per instrument, nothing else."""
+    return tuple(
+        RankedInstrument(instrument_id=c.instrument_id, score=c.score, rank=i)
+        for i, c in enumerate(candidates, start=1)
+    )

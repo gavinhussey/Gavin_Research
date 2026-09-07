@@ -1,11 +1,12 @@
-"""Normalizes raw provider records into the *existing* Stage 3 domain models.
+"""Normalizes raw provider records into this strategy's Stage 3 domain models.
 
 Provider payloads never enter the platform's feature/label/model
 pipelines directly — every field is converted into
-``FilingFundamentals``/``DailyPriceObservation``/``UniverseMembershipRecord``/
-``SectorRecord`` here, and nowhere else. This module defines no second set
-of domain models: the ``Raw*`` types below are provider-shaped input only;
-the output of every ``normalize_*`` function is always a Stage 3 type.
+``FundamentalsFeatureRecord``/``DailyPriceObservation``/
+``UniverseMembershipRecord``/``SectorRecord`` here, and nowhere else. This
+module defines no second set of domain models: the ``Raw*`` types below
+are provider-shaped input only; the output of every ``normalize_*``
+function is always a Stage 3 type.
 
 A record that fails to normalize (e.g. an unrecognized ``asset_class``, or
 a value the Stage 3 type's own ``__post_init__`` rejects) is dropped from
@@ -21,7 +22,6 @@ from datetime import date, datetime
 
 from atlas_quant.data.records import (
     DailyPriceObservation,
-    FilingFundamentals,
     PriceConvention,
     SectorRecord,
     UniverseMembershipRecord,
@@ -42,8 +42,28 @@ def _asset_class(raw_value: str) -> AssetClass:
 
 
 @dataclass(frozen=True, slots=True)
-class RawFilingRecord:
-    """A provider's filing-fundamentals payload, before normalization."""
+class RawFundamentalsRow:
+    """A provider's fundamentals+feature payload for one instrument/quarter,
+    before normalization.
+
+    Unlike filing_momentum_ml's ``RawFilingRecord`` (a fixed set of raw
+    SEC-filing fields: revenue, gross_profit, ...), this strategy's data
+    source (``fundamentals_quarterly.csv``/``filing_momentum_features.csv``
+    Bloomberg exports, joined by ``acquisition/fundamentals_quarterly.py``)
+    already delivers named, derived features directly -- so ``features``
+    is an open bag keyed by whatever names the caller supplies (in
+    practice, a subset of :data:`~...feature_domain.FEATURE_NAMES`), not a
+    fixed set of dataclass fields. A blank/missing cell is ``None`` here
+    (never a fabricated 0.0) -- ``float("nan")`` is only introduced later,
+    at :class:`~...feature_domain.FeatureObservation` construction.
+
+    ``filed_at`` carries this row's ``available_date`` -- the point-in-time
+    cutoff after which this quarter's data is knowable -- so this record
+    plugs directly into the existing, unmodified
+    :func:`atlas_quant.data.point_in_time.select_point_in_time_fundamentals`
+    (which only ever accesses ``.instrument_id``/``.filed_at``/``.quarter_end``
+    structurally, never a fixed filing-fundamentals field).
+    """
 
     symbol: str
     asset_class: str
@@ -51,15 +71,9 @@ class RawFilingRecord:
     fiscal_year: int
     quarter_end: date
     filed_at: datetime
-    revenue: float | None
-    gross_profit: float | None
-    operating_income: float | None
-    net_income: float | None
-    diluted_eps: float | None
-    stockholders_equity: float | None
-    operating_cash_flow: float | None
-    capital_expenditure: float | None
-    accession_number: str | None
+    filed_at_is_estimated: bool
+    gics_sector: str | None
+    features: dict[str, float | None]
     source: str
     retrieved_at: datetime
 
@@ -67,12 +81,9 @@ class RawFilingRecord:
         return {
             "symbol": self.symbol, "asset_class": self.asset_class, "fiscal_period": self.fiscal_period,
             "fiscal_year": self.fiscal_year, "quarter_end": self.quarter_end.isoformat(),
-            "filed_at": self.filed_at.isoformat(), "revenue": self.revenue, "gross_profit": self.gross_profit,
-            "operating_income": self.operating_income, "net_income": self.net_income,
-            "diluted_eps": self.diluted_eps, "stockholders_equity": self.stockholders_equity,
-            "operating_cash_flow": self.operating_cash_flow, "capital_expenditure": self.capital_expenditure,
-            "accession_number": self.accession_number, "source": self.source,
-            "retrieved_at": self.retrieved_at.isoformat(),
+            "filed_at": self.filed_at.isoformat(), "filed_at_is_estimated": self.filed_at_is_estimated,
+            "gics_sector": self.gics_sector, "features": dict(self.features),
+            "source": self.source, "retrieved_at": self.retrieved_at.isoformat(),
         }
 
 
@@ -116,58 +127,75 @@ class RawUniverseRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class RawSicHistoryRecord:
-    """One real filing's own point-in-time SIC code and its SIC→GICS
-    crosswalk sector, keyed to the exact accession that reported it.
+class FundamentalsFeatureRecord:
+    """One instrument/quarter's normalized fundamentals+feature row -- this
+    strategy's Stage 3 type, in place of filing_momentum_ml's
+    ``FilingFundamentals`` (whose fixed SEC-filing fields don't fit a
+    Bloomberg-CSV-derived feature bag).
 
-    The platform's sole sector-data source -- replaces the earlier
-    present-day-Wikipedia-snapshot ``RawSectorRecord``/``sectors.json``
-    (deleted: it applied one current GICS classification retroactively
-    across the whole backtest, an undisclosed lookahead). Normalized via
-    :func:`normalize_sic_history` into the same :class:`SectorRecord`
-    every downstream consumer already expects -- multiple records per
-    instrument over time is the normal, expected shape now, selected
-    point-in-time via
-    :func:`atlas_quant.data.point_in_time.select_point_in_time_sector`.
+    ``gics_sector`` travels with this record (from the same
+    ``fundamentals_quarterly.csv`` row) rather than through a separate
+    SIC-history acquisition path/file -- see
+    :func:`sector_records_from_fundamentals`, which derives
+    :class:`SectorRecord` facts directly from a sequence of these. This is
+    a present-day GICS classification applied to every historical row for
+    a ticker, not genuinely point-in-time (disclosed in
+    ``docs/reproducibility_findings.md``, not silently fixed here).
     """
 
-    symbol: str
-    asset_class: str
-    accession_number: str
+    instrument_id: InstrumentId
+    fiscal_period: str
+    fiscal_year: int
+    quarter_end: date
     filed_at: datetime
-    sic_code: int | None
+    filed_at_is_estimated: bool
     gics_sector: str | None
-    source: str
-    retrieved_at: datetime
+    features: dict[str, float | None]
+    provenance: DataProvenance
 
-    def to_dict(self) -> dict:
-        return {
-            "symbol": self.symbol, "asset_class": self.asset_class,
-            "accession_number": self.accession_number, "filed_at": self.filed_at.isoformat(),
-            "sic_code": self.sic_code, "gics_sector": self.gics_sector,
-            "source": self.source, "retrieved_at": self.retrieved_at.isoformat(),
-        }
+    def __post_init__(self) -> None:
+        if not self.fiscal_period or not self.fiscal_period.strip():
+            raise ValueError("FundamentalsFeatureRecord.fiscal_period must be non-empty")
+        if self.filed_at.date() < self.quarter_end:
+            raise ValueError(
+                "FundamentalsFeatureRecord.filed_at cannot be before its own "
+                f"quarter_end (filed_at={self.filed_at!r}, quarter_end={self.quarter_end!r}) "
+                "-- a fundamentals row cannot be knowable before the period it reports on ends"
+            )
 
 
-def normalize_filing(raw: RawFilingRecord) -> FilingFundamentals:
+def normalize_fundamentals_row(raw: RawFundamentalsRow) -> FundamentalsFeatureRecord:
     instrument_id = InstrumentId(symbol=raw.symbol, asset_class=_asset_class(raw.asset_class))
     provenance = DataProvenance(source=raw.source, as_of=raw.quarter_end, retrieved_at=raw.retrieved_at)
-    return FilingFundamentals(
+    return FundamentalsFeatureRecord(
         instrument_id=instrument_id,
         fiscal_period=raw.fiscal_period,
         fiscal_year=raw.fiscal_year,
         quarter_end=raw.quarter_end,
         filed_at=raw.filed_at,
-        revenue=raw.revenue,
-        gross_profit=raw.gross_profit,
-        operating_income=raw.operating_income,
-        net_income=raw.net_income,
-        diluted_eps=raw.diluted_eps,
-        stockholders_equity=raw.stockholders_equity,
-        operating_cash_flow=raw.operating_cash_flow,
-        capital_expenditure=raw.capital_expenditure,
+        filed_at_is_estimated=raw.filed_at_is_estimated,
+        gics_sector=raw.gics_sector,
+        features=dict(raw.features),
         provenance=provenance,
-        accession_number=raw.accession_number,
+    )
+
+
+def sector_records_from_fundamentals(records) -> tuple[SectorRecord, ...]:
+    """Derive one :class:`SectorRecord` per :class:`FundamentalsFeatureRecord`,
+    ``as_of=record.filed_at`` -- this strategy's sole sector source
+    (see :class:`FundamentalsFeatureRecord`'s docstring for the disclosed
+    present-day-snapshot caveat). Not sorted -- callers needing
+    chronological order (e.g. :func:`atlas_quant.data.point_in_time
+    .select_point_in_time_sector`) already sort by ``as_of`` themselves.
+    """
+    return tuple(
+        SectorRecord(
+            instrument_id=r.instrument_id,
+            raw_sector=r.gics_sector,
+            as_of=r.filed_at,
+            provenance=r.provenance,
+        )
+        for r in records
     )
 
 
@@ -198,23 +226,6 @@ def normalize_universe_member(raw: RawUniverseRecord) -> UniverseMembershipRecor
     )
 
 
-def normalize_sic_history(raw: RawSicHistoryRecord) -> SectorRecord:
-    """One filing's point-in-time SIC-derived sector fact.
-
-    ``raw_sector=raw.gics_sector`` may be ``None`` (a real SIC-fetch
-    failure -- never fabricated; ``SectorEncoder.normalize`` already
-    treats a missing/unrecognized raw sector as ``"Unknown"``, so this
-    needs no special-casing here). ``as_of=raw.filed_at`` is what makes
-    this point-in-time: it's the filing's own timestamp, not an
-    acquisition-run timestamp.
-    """
-    instrument_id = InstrumentId(symbol=raw.symbol, asset_class=_asset_class(raw.asset_class))
-    provenance = DataProvenance(source=raw.source, as_of=raw.filed_at, retrieved_at=raw.retrieved_at)
-    return SectorRecord(
-        instrument_id=instrument_id, raw_sector=raw.gics_sector, as_of=raw.filed_at, provenance=provenance
-    )
-
-
 def _normalize_batch(raws, normalize_one, category: str):
     normalized = []
     issues: list[DataValidationIssue] = []
@@ -229,8 +240,8 @@ def _normalize_batch(raws, normalize_one, category: str):
     return tuple(normalized), tuple(issues)
 
 
-def normalize_filings(raws) -> tuple[tuple[FilingFundamentals, ...], tuple[DataValidationIssue, ...]]:
-    return _normalize_batch(raws, normalize_filing, "filing")
+def normalize_fundamentals_batch(raws) -> tuple[tuple[FundamentalsFeatureRecord, ...], tuple[DataValidationIssue, ...]]:
+    return _normalize_batch(raws, normalize_fundamentals_row, "fundamentals")
 
 
 def normalize_prices(raws) -> tuple[tuple[DailyPriceObservation, ...], tuple[DataValidationIssue, ...]]:
@@ -239,7 +250,3 @@ def normalize_prices(raws) -> tuple[tuple[DailyPriceObservation, ...], tuple[Dat
 
 def normalize_universe(raws) -> tuple[tuple[UniverseMembershipRecord, ...], tuple[DataValidationIssue, ...]]:
     return _normalize_batch(raws, normalize_universe_member, "universe")
-
-
-def normalize_sic_history_batch(raws) -> tuple[tuple[SectorRecord, ...], tuple[DataValidationIssue, ...]]:
-    return _normalize_batch(raws, normalize_sic_history, "sector")

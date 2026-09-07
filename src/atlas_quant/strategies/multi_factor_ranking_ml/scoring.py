@@ -15,7 +15,7 @@ from atlas_quant.domain.audit import AuditRecord, AuditTrail
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.strategies.multi_factor_ranking_ml.estimator import Estimator
 from atlas_quant.strategies.multi_factor_ranking_ml.feature_domain import FeatureObservation
-from atlas_quant.strategies.multi_factor_ranking_ml.model_schema import build_feature_matrix
+from atlas_quant.strategies.multi_factor_ranking_ml.model_schema import build_feature_matrix, select_feature_columns
 from atlas_quant.strategies.multi_factor_ranking_ml.model_training import ModelIdentity
 from atlas_quant.strategies.multi_factor_ranking_ml.scoring_domain import ScoredCandidate
 
@@ -126,7 +126,14 @@ def score_observations(
     lookup = {
         (obs.instrument_id, obs.feature_timestamp): obs for obs in observations
     }
-    probabilities = fitted_estimator.predict_proba(matrix.to_numpy())
+    # Must select the exact same columns, in the same order, that training
+    # actually fit on (model_training.train_model may have excluded
+    # entirely-missing-that-window columns) -- scoring on a different
+    # column set than the estimator was fit on would be meaningless, not
+    # just a shape mismatch.
+    probabilities = fitted_estimator.predict_proba(
+        select_feature_columns(matrix, model_identity.used_feature_names)
+    )
 
     scored: list[ScoredCandidate] = []
     for row_index, (instrument_id, feature_timestamp) in enumerate(

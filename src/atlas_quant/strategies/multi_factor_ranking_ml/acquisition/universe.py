@@ -83,7 +83,14 @@ def fetch_nasdaq100_constituents(client: HttpClient) -> list[str]:
 
 def build_universe_records(client: HttpClient, *, as_of: datetime, retrieved_at: datetime) -> list[RawUniverseRecord]:
     """Build the present-day S&P 500 + Nasdaq 100 universe from real
-    Wikipedia data."""
+    Wikipedia data.
+
+    Kept as a legitimate, independent acquisition mechanism, but this
+    strategy's actual production universe is
+    :func:`universe_records_from_fundamentals` instead -- the real
+    Bloomberg data (1520 tickers) already defines exactly what's covered;
+    a separately Wikipedia-scraped list would mismatch it (names in one
+    list without data in the other)."""
     sp500 = fetch_sp500_constituents(client)
     nasdaq100 = fetch_nasdaq100_constituents(client)
     all_symbols = sorted(set(sp500) | set(nasdaq100))
@@ -94,4 +101,35 @@ def build_universe_records(client: HttpClient, *, as_of: datetime, retrieved_at:
             survivorship_biased=True, retrieved_at=retrieved_at,
         )
         for symbol in all_symbols
+    ]
+
+
+def universe_records_from_fundamentals(rows, *, retrieved_at: datetime) -> list[RawUniverseRecord]:
+    """Derive this strategy's real production universe from
+    ``fundamentals_quarterly.csv`` rows (``acquisition.fundamentals_quarterly
+    .read_fundamentals_quarterly``'s output, before the legacy-features join
+    -- ``.symbol``/``.filed_at`` are all this needs) instead of a
+    Wikipedia scrape.
+
+    Each ticker's ``as_of`` is its own earliest ``filed_at`` (the first
+    date any of its data became knowable) -- genuine per-ticker historical
+    coverage, not a present-day snapshot applied retroactively, so
+    ``survivorship_biased=False``: a ticker that later left the universe
+    (delisted, acquired) still appears here for the period it had real
+    data, unlike the Wikipedia path above which only ever reflects today's
+    membership.
+    """
+    earliest_by_symbol: dict[str, datetime] = {}
+    for row in rows:
+        current = earliest_by_symbol.get(row.symbol)
+        if current is None or row.filed_at < current:
+            earliest_by_symbol[row.symbol] = row.filed_at
+
+    return [
+        RawUniverseRecord(
+            symbol=symbol, asset_class="equity", as_of=as_of,
+            source="bloomberg_fundamentals_quarterly", survivorship_biased=False,
+            retrieved_at=retrieved_at,
+        )
+        for symbol, as_of in sorted(earliest_by_symbol.items())
     ]

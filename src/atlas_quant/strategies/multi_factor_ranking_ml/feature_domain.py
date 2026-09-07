@@ -1,13 +1,34 @@
 """The Multi-Factor Ranking ML feature observation — one instrument/quarter's model row.
 
-This strategy's feature set is not yet defined — cloned from
-filing_momentum_ml's architecture, but deliberately without its 17
-filing-derived features (this strategy uses its own features, built from
-Bloomberg CSV data over a larger universe, not SEC filings). Populate
-:data:`FEATURE_NAMES` as those features are defined; everything else in
-this module (:class:`FeatureObservation`'s structure, validation, and
-(de)serialization) is generic and already keys off that tuple, not a
-hardcoded list, so it needs no further change once features exist.
+This strategy's 83-feature set is built from Bloomberg CSV exports (see
+``docs/reproducibility_findings.md`` for full provenance), not
+filing_momentum_ml's 17 filing-derived features. :data:`FEATURE_NAMES` is
+grouped in three blocks, in order:
+
+1. 63 fundamentals-derived/market columns from ``fundamentals_quarterly.csv``
+   (growth rates, margins, valuation ratios, analyst estimates, beta, etc.)
+   -- kept only where at least 95% of the 1520-ticker universe has
+   historical coverage (a coverage analysis excluded a handful of
+   thin-coverage columns, e.g. gross-margin-derived fields at ~77%).
+2. 12 features carried over from ``filing_momentum_features.csv`` that
+   have no equivalent in (1): ``fcf_trend``, ``vol_20d``, ``vol_63d``,
+   ``vol_ratio``, ``roe_trend``, ``rev_accel``, ``rev_trend``, ``om_trend``,
+   ``nm_trend``, ``price_mom_3m``, ``price_mom_6m``, ``price_mom_12m``.
+   (``rev_qoq``/``eps_qoq`` were dropped as exact duplicates of
+   ``revenue_qoq_growth``/``diluted_eps_qoq_growth`` in block 1;
+   ``gm_trend`` was dropped for insufficient universe coverage, ~77%.)
+3. ``quarter_num`` (the fiscal quarter, 1-4) and ``sector_enc`` (GICS
+   sector, label-encoded via ``sector_encoding.SectorEncoder`` -- a
+   present-day classification applied to every historical row for a
+   ticker, not genuinely point-in-time; a disclosed caveat, not fixed).
+4. 6 market-wide macro features, broadcast-joined onto every instrument
+   by its own ``available_date`` (most recent observation on or before
+   that date, never after): ``fed_funds_rate``, ``hy_credit_oas``,
+   ``ust_10y_yield``, ``ust_2y_yield``, ``vix``, ``yield_curve_10y_2y``.
+
+Everything else in this module (:class:`FeatureObservation`'s structure,
+validation, and (de)serialization) is generic and already keys off this
+tuple, not a hardcoded list.
 """
 
 from __future__ import annotations
@@ -23,9 +44,41 @@ from atlas_quant.domain.provenance import DataProvenance
 from atlas_quant.domain.serialization import to_jsonable
 
 #: Canonical order. A model matrix's column order should always come
-#: from this tuple, never from dict iteration order. Empty until this
-#: strategy's own feature set is defined.
-FEATURE_NAMES: tuple[str, ...] = ()
+#: from this tuple, never from dict iteration order. See module
+#: docstring for the four-block grouping and provenance of each.
+FEATURE_NAMES: tuple[str, ...] = (
+    # Block 1: fundamentals_quarterly.csv derived/market columns (63).
+    "market_cap", "consensus_eps_next_q", "volatility_30d", "analyst_target_price",
+    "pe_ratio", "price_to_book", "volatility_63d", "volatility_20d", "volume",
+    "consensus_sales_next_q", "price_to_sales", "beta", "analyst_rating",
+    "volatility_90d", "analyst_eps_num_est", "free_cash_flow", "operating_margin",
+    "net_margin", "operating_cash_flow_margin", "free_cash_flow_margin",
+    "revenue_yoy_growth", "revenue_qoq_growth", "operating_income_yoy_growth",
+    "operating_income_qoq_growth", "net_income_yoy_growth", "net_income_qoq_growth",
+    "diluted_eps_yoy_growth", "diluted_eps_qoq_growth", "operating_cash_flow_yoy_growth",
+    "operating_cash_flow_qoq_growth", "free_cash_flow_yoy_growth",
+    "free_cash_flow_qoq_growth", "total_assets_yoy_growth", "total_assets_qoq_growth",
+    "total_debt_yoy_growth", "total_debt_qoq_growth", "stockholders_equity_yoy_growth",
+    "stockholders_equity_qoq_growth", "diluted_share_count_yoy_growth",
+    "diluted_share_count_qoq_growth", "shares_outstanding_yoy_growth",
+    "shares_outstanding_qoq_growth", "revenue_growth_acceleration",
+    "operating_income_growth_acceleration", "eps_growth_acceleration",
+    "operating_cash_flow_growth_acceleration", "free_cash_flow_growth_acceleration",
+    "operating_margin_yoy_change_bps", "operating_margin_qoq_change_bps",
+    "net_margin_yoy_change_bps", "net_margin_qoq_change_bps",
+    "free_cash_flow_margin_yoy_change_bps", "free_cash_flow_margin_qoq_change_bps",
+    "operating_cash_flow_to_net_income", "free_cash_flow_to_net_income",
+    "capex_to_revenue", "capex_to_depreciation", "net_debt", "adjusted_net_debt",
+    "debt_to_equity", "debt_to_assets", "ROA", "ROE",
+    # Block 2: carried over from filing_momentum_features.csv (12).
+    "fcf_trend", "vol_20d", "vol_63d", "vol_ratio", "roe_trend", "rev_accel",
+    "rev_trend", "om_trend", "nm_trend", "price_mom_3m", "price_mom_6m", "price_mom_12m",
+    # Block 3: locally computed (2).
+    "quarter_num", "sector_enc",
+    # Block 4: macro, broadcast-joined by available_date (6).
+    "fed_funds_rate", "hy_credit_oas", "ust_10y_yield", "ust_2y_yield", "vix",
+    "yield_curve_10y_2y",
+)
 
 
 def missing_feature_names(features: Mapping[str, float]) -> tuple[str, ...]:

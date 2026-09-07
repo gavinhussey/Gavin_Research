@@ -1,7 +1,7 @@
 """Raw-data validation with explicit severity — never a warning string alone.
 
 Operates only on already-typed Stage 3 records
-(``FilingFundamentals``/``DailyPriceObservation``/
+(``FundamentalsFeatureRecord``/``DailyPriceObservation``/
 ``UniverseMembershipRecord``/``SectorRecord``) — never raw provider
 payloads. Severity determines behavior explicitly:
 
@@ -19,11 +19,16 @@ import math
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from atlas_quant.data.point_in_time import TradingCalendar
-from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, SectorRecord, UniverseMembershipRecord
+from atlas_quant.data.records import DailyPriceObservation, SectorRecord, UniverseMembershipRecord
 from atlas_quant.domain.identifiers import InstrumentId
+
+if TYPE_CHECKING:
+    # Deferred to avoid a circular import: normalization.py imports
+    # DataValidationIssue/ValidationSeverity from this module.
+    from atlas_quant.strategies.multi_factor_ranking_ml.production.normalization import FundamentalsFeatureRecord
 
 
 class ValidationSeverity(str, Enum):
@@ -63,16 +68,23 @@ class DataValidationSummary:
         return tuple(i for i in self.issues if i.category == category)
 
 
-def validate_filings(filings: Sequence[FilingFundamentals]) -> tuple[DataValidationIssue, ...]:
-    """Filing validation: required fields, duplicates, zero-denominator cases.
+def validate_filings(filings: Sequence["FundamentalsFeatureRecord"]) -> tuple[DataValidationIssue, ...]:
+    """Fundamentals-record validation: duplicates and non-finite feature values.
 
-    ``FilingFundamentals.__post_init__`` already rejects an empty
+    ``FundamentalsFeatureRecord.__post_init__`` already rejects an empty
     ``fiscal_period`` and a ``filed_at`` before ``quarter_end`` at
     construction time — those cases cannot reach this function at all;
     only conditions the domain type itself permits are checked here.
+    Unlike filing_momentum_ml's fixed-field ``FilingFundamentals`` (whose
+    ``revenue``/``stockholders_equity`` zero-checks don't apply here --
+    this strategy's features are derived ratios/growth rates, not raw
+    dollar fundamentals), this checks every named value in ``features``
+    generically: a missing value (``None``) is expected and not an issue,
+    but a non-finite one (inf/-inf -- never legitimately produced by this
+    strategy's data source) is always an error.
     """
     issues: list[DataValidationIssue] = []
-    seen: dict[tuple, list[FilingFundamentals]] = {}
+    seen: dict[tuple, list["FundamentalsFeatureRecord"]] = {}
     for filing in filings:
         key = (filing.instrument_id, filing.quarter_end)
         seen.setdefault(key, []).append(filing)
@@ -83,25 +95,19 @@ def validate_filings(filings: Sequence[FilingFundamentals]) -> tuple[DataValidat
             issues.append(
                 DataValidationIssue(
                     ValidationSeverity.WARNING, "filing", subject,
-                    f"{len(group)} filings for the same instrument/quarter (amendment/restatement or "
-                    "duplicate) -- Stage 3's point-in-time selector resolves this by filed_at, not this "
+                    f"{len(group)} fundamentals rows for the same instrument/quarter (amendment/restatement "
+                    "or duplicate) -- Stage 3's point-in-time selector resolves this by filed_at, not this "
                     "validator",
                 )
             )
         for filing in group:
-            if filing.revenue is not None and filing.revenue == 0:
-                issues.append(DataValidationIssue(ValidationSeverity.WARNING, "filing", subject, "revenue is exactly zero"))
-            if filing.stockholders_equity is not None and filing.stockholders_equity == 0:
-                issues.append(DataValidationIssue(ValidationSeverity.WARNING, "filing", subject, "stockholders_equity is exactly zero"))
-            for field_name in ("revenue", "gross_profit", "operating_income", "net_income", "diluted_eps",
-                               "stockholders_equity", "operating_cash_flow", "capital_expenditure"):
-                value = getattr(filing, field_name)
+            for feature_name, value in filing.features.items():
                 if value is not None and not math.isfinite(value):
                     issues.append(
-                        DataValidationIssue(ValidationSeverity.ERROR, "filing", subject, f"{field_name} is non-finite")
+                        DataValidationIssue(ValidationSeverity.ERROR, "filing", subject, f"{feature_name} is non-finite")
                     )
-            if filing.accession_number is None:
-                issues.append(DataValidationIssue(ValidationSeverity.INFO, "filing", subject, "no accession_number recorded"))
+            if filing.gics_sector is None:
+                issues.append(DataValidationIssue(ValidationSeverity.INFO, "filing", subject, "no gics_sector recorded"))
 
     return tuple(issues)
 

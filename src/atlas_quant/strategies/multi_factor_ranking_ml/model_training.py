@@ -22,6 +22,10 @@ from atlas_quant.strategies.multi_factor_ranking_ml.estimator import (
     EstimatorBuildInfo,
     resolve_estimator_parameters,
 )
+from atlas_quant.strategies.multi_factor_ranking_ml.model_schema import (
+    non_degenerate_feature_names,
+    select_feature_columns,
+)
 from atlas_quant.strategies.multi_factor_ranking_ml.training_dataset import (
     TrainingDatasetResult,
     TrainingEligibilityResult,
@@ -52,6 +56,7 @@ class ModelIdentity:
     library: str
     library_version: str | None
     random_state: int
+    used_feature_names: tuple[str, ...]
 
     def identity(self) -> str:
         return compute_config_identity(
@@ -65,6 +70,7 @@ class ModelIdentity:
                 "included_quarters": [q.isoformat() for q in self.included_quarters],
                 "estimator_type": self.estimator_type,
                 "random_state": self.random_state,
+                "used_feature_names": list(self.used_feature_names),
             }
         )
 
@@ -91,6 +97,9 @@ def compute_model_identity(
     Depends only on pre-fit inputs (dataset, config, estimator build info),
     so a caller can compute this before deciding whether to fit at all —
     e.g. to check a model cache keyed by :meth:`ModelIdentity.identity`.
+    ``used_feature_names`` (see :func:`~.model_schema.non_degenerate_feature_names`)
+    is itself pre-fit-computable, a pure function of the dataset's own
+    feature matrix, so this guarantee still holds.
     """
     return ModelIdentity(
         strategy_id=strategy_id,
@@ -104,6 +113,7 @@ def compute_model_identity(
         library=build_info.library,
         library_version=build_info.library_version,
         random_state=model_config.random_state,
+        used_feature_names=non_degenerate_feature_names(dataset.feature_matrix),
     )
 
 
@@ -167,8 +177,25 @@ def train_model(
 
     estimator, build_info = estimator_factory(model_config)
 
+    used_feature_names = non_degenerate_feature_names(dataset.feature_matrix)
+    dropped = [n for n in dataset.feature_matrix.column_names if n not in used_feature_names]
+    warnings: tuple[str, ...] = ()
+    if dropped:
+        warnings = (
+            f"{len(dropped)} feature(s) entirely missing across this training window, "
+            f"excluded from this fit: {dropped}",
+        )
+        audit = audit.append(
+            AuditRecord(
+                stage="fit",
+                message=f"{len(dropped)} entirely-missing feature(s) excluded from this fit",
+                timestamp=dataset.training_cutoff,
+                data={"dropped_feature_names": dropped},
+            )
+        )
+
     try:
-        X = dataset.feature_matrix.to_numpy()
+        X = select_feature_columns(dataset.feature_matrix, used_feature_names)
         y = list(dataset.labels)
         estimator.fit(X, y)
     except Exception as exc:  # noqa: BLE001 - a fit failure is a reported state, not a crash
@@ -199,5 +226,5 @@ def train_model(
     return TrainingResult(
         state=TrainingState.TRAINED, model_identity=model_identity, dataset=dataset,
         eligibility=eligibility, estimator_build_info=build_info, fit_error=None,
-        warnings=(), audit_trail=audit, fitted_estimator=estimator,
+        warnings=warnings, audit_trail=audit, fitted_estimator=estimator,
     )

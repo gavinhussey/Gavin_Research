@@ -24,11 +24,10 @@ DISPLAY_NAME = "Multi-Factor Ranking ML"
 # Bumped whenever this module's formulas, defaults, or schema change in a
 # way that could alter results. Not the same as the platform version.
 #
-# 0.2.0: the old "below min_positions => abandon the stock picks and put
-# 100% of deployable capital into a SPY/VGT blend" fallback was replaced
-# by the partial-fill ETF sleeve described in MultiFactorRankingMLConfig's
-# docstring. A real decision/sizing behavior change, so results under
-# 0.1.0 and 0.2.0 are not comparable.
+# 0.2.0: cloned from filing_momentum_ml, then diverged into a pure
+# ranking system -- qualification threshold, position sizing, and the
+# ETF fallback sleeve were all deleted entirely (see
+# MultiFactorRankingMLConfig's docstring), not carried over in any form.
 STRATEGY_VERSION = "0.2.0"
 
 # sha256 of ~/Downloads/report_current.html at the time this config was
@@ -104,51 +103,37 @@ class MultiFactorRankingMLConfig:
 
     Field-by-field report provenance:
 
-    - ``ml_threshold`` = 0.35 — report §4.3 (``ML_THRESHOLD``)
     - ``ml_train_years`` = 3 — report §4.4 (``ML_TRAIN_YEARS``)
     - ``min_train_quarters`` = 8 — report §4.4 (``MIN_TRAIN_Q``)
     - ``n_winners`` = 10 — report §4.2 (``N_WINNERS``)
-    - ``max_positions`` = 10 — report §5.4. ``min_positions`` is report
-      §5.4's 3, **deliberately overridden to 6** -- see
-      ``docs/reproducibility_findings.md`` for the disclosed divergence and
-      the walk-forward evidence behind it.
-    - ``deployable_pct`` = 0.95 — report §5.3 (``ML_DEPLOYABLE_PCT``)
     - ``return_cap`` = 0.50 — report §5.5 (``RETURN_CAP``)
-    - ``earnings_lag_days`` = 42 — report §5.5
     - ``fcf_mode`` = "ratio" — report §3.1, the stated production default
-    - ``exclude_sectors`` = ("Materials",) — report §5.2
-    - ``fallback_dynamic_weight`` = True, ``fallback_lookback_quarters``
-      = 12 — report §5.4 (the weighting rule itself is unchanged)
+    - ``exclude_sectors`` = ("Materials",) — report §5.2 (a sector-eligibility
+      exclusion applied before ranking, independent of any qualification bar)
 
-    ``fallback_tickers`` = ("VOO", "VTI") is **not** report-sourced. The
-    report specified ("SPY", "VGT"); this platform deliberately chose a
-    different pairing, and a different mechanism for using it, as a
-    design decision. The mechanism (implemented in ``strategy.py``, see
-    also ``docs/strategy_decision_specification.md``):
+    This strategy is a **pure ranking system, not a portfolio-construction
+    one**: given a set of scored candidates, it validates them, applies
+    the sector exclusion, and ranks every survivor by descending score --
+    it never qualifies a subset against a threshold, never sizes
+    positions, never allocates capital, and never falls back to an ETF
+    sleeve. Accordingly this config carries none of
+    filing_momentum_ml's ``ml_threshold``/``min_positions``/
+    ``max_positions``/``deployable_pct``/``earnings_lag_days``/
+    ``fallback_tickers``/``fallback_dynamic_weight``/
+    ``fallback_lookback_quarters``/``strategy_budget_pct`` fields --
+    deleted entirely (not disabled/defaulted-away), since none of those
+    concepts apply to a ranking-only strategy. See
+    ``docs/reproducibility_findings.md`` and
+    ``docs/strategy_decision_specification.md`` for the pure-ranking
+    decision sequence this replaced those with.
 
-    - A **full-quota** quarter (at least ``min_positions`` qualifying
-      stocks survive) is weighted exactly as before — score-proportional
-      across the picks, summing to ``deployable_pct``. It also records
-      that quarter's implied score-to-weight ratio
-      ``k = deployable_pct / sum(scores)``.
-    - A **partial-fill** quarter (fewer than ``min_positions`` survive)
-      never discards its picks and never goes to cash. Each surviving
-      pick is sized at ``score * k`` using the *most recent prior
-      full-quota quarter's* ``k``, so a thin quarter's few picks keep the
-      same per-unit-of-score conviction a full quarter would have given
-      them instead of being inflated by renormalizing across a small
-      peer set. Whatever deployable capital those picks leave unused is
-      placed in ``fallback_tickers`` (weighted by
-      ``dynamic_fallback_weights``/``static_fallback_weights``).
-
-    So ``fallback_tickers`` is now a *capital sleeve for unused deployable
-    budget*, not a substitute for the strategy's stock picks.
-
-    ``strategy_budget_pct`` is new relative to the report: the report
-    assumed 100% of portfolio capital and had no concept of a "strategy
-    budget." Default 1.0 reproduces that assumption for a standalone
-    backtest; a multi-strategy allocator (Stage 7+) is expected to override
-    it per-run, not by editing this default.
+    Evaluation timing is likewise not a fixed post-quarter-end lag (the
+    report's ``earnings_lag_days`` = 42 day cap, approximating "give
+    companies time to file"): this strategy ranks the full universe on
+    the first calendar day of every quarter, using each instrument's own
+    most recent fundamentals row with ``available_date`` on or before the
+    prior day -- a genuine point-in-time cutoff, not an approximation. See
+    ``evaluation_schedule.py``.
 
     Deliberately *not* a field here: a "minimum positive labels" threshold.
     ``report_current.html`` defines only ``N_WINNERS = 10`` (positive
@@ -164,35 +149,19 @@ class MultiFactorRankingMLConfig:
     """
 
     strategy_id: str = STRATEGY_ID
-    universe_id: str = "sp500_nasdaq100_dedup"
+    universe_id: str = "bloomberg_fundamentals_quarterly"
 
     fcf_mode: FcfMode = "ratio"
-    ml_threshold: float = 0.35
     ml_train_years: int = 3
     min_train_quarters: int = 8
     n_winners: int = 10
-
-    max_positions: int = 10
-    min_positions: int = 6  # disclosed divergence from report §5.4's 3 -- see docs/reproducibility_findings.md
-    deployable_pct: float = 0.95
     return_cap: float = 0.50
-    earnings_lag_days: int = 42
 
     exclude_sectors: tuple[str, ...] = ("Materials",)
-
-    fallback_tickers: tuple[str, ...] = ("VOO", "VTI")
-    fallback_dynamic_weight: bool = True
-    fallback_lookback_quarters: int = 12
-
-    strategy_budget_pct: float = 1.0
 
     model: MultiFactorRankingModelConfig = field(default_factory=MultiFactorRankingModelConfig)
 
     def __post_init__(self) -> None:
-        if not (0.0 < self.ml_threshold < 1.0):
-            raise ValueError(
-                f"ml_threshold must be within (0.0, 1.0), got {self.ml_threshold!r}"
-            )
         if self.ml_train_years <= 0:
             raise ValueError(
                 f"ml_train_years must be > 0, got {self.ml_train_years!r}"
@@ -203,44 +172,13 @@ class MultiFactorRankingMLConfig:
             )
         if self.n_winners <= 0:
             raise ValueError(f"n_winners must be > 0, got {self.n_winners!r}")
-        if self.max_positions < 1:
-            raise ValueError(
-                f"max_positions must be >= 1, got {self.max_positions!r}"
-            )
-        if self.min_positions < 1:
-            raise ValueError(
-                f"min_positions must be >= 1, got {self.min_positions!r}"
-            )
-        if self.min_positions > self.max_positions:
-            raise ValueError(
-                "min_positions cannot exceed max_positions, got "
-                f"min_positions={self.min_positions!r}, max_positions={self.max_positions!r}"
-            )
-        if not (0.0 < self.deployable_pct <= 1.0):
-            raise ValueError(
-                f"deployable_pct must be within (0.0, 1.0], got {self.deployable_pct!r}"
-            )
         if not (0.0 < self.return_cap <= 1.0):
             raise ValueError(
                 f"return_cap must be within (0.0, 1.0], got {self.return_cap!r}"
             )
-        if self.earnings_lag_days < 0:
-            raise ValueError(
-                f"earnings_lag_days must be >= 0, got {self.earnings_lag_days!r}"
-            )
         if self.fcf_mode not in _VALID_FCF_MODES:
             raise ValueError(
                 f"fcf_mode must be one of {_VALID_FCF_MODES}, got {self.fcf_mode!r}"
-            )
-        if self.fallback_lookback_quarters <= 0:
-            raise ValueError(
-                "fallback_lookback_quarters must be > 0, got "
-                f"{self.fallback_lookback_quarters!r}"
-            )
-        if not (0.0 <= self.strategy_budget_pct <= 1.0):
-            raise ValueError(
-                "strategy_budget_pct must be within [0.0, 1.0], got "
-                f"{self.strategy_budget_pct!r}"
             )
 
     def identity(self) -> str:

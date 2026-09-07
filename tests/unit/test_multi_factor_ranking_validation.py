@@ -2,9 +2,10 @@
 
 from datetime import date, datetime, timezone
 
-from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, SectorRecord, UniverseMembershipRecord
+from atlas_quant.data.records import DailyPriceObservation, SectorRecord, UniverseMembershipRecord
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
+from atlas_quant.strategies.multi_factor_ranking_ml.production.normalization import FundamentalsFeatureRecord
 from atlas_quant.strategies.multi_factor_ranking_ml.production.validation import (
     DataValidationSummary,
     ValidationSeverity,
@@ -22,36 +23,42 @@ def _provenance(as_of) -> DataProvenance:
     return DataProvenance(source="test", as_of=as_of, retrieved_at=_NOW)
 
 
-def _filing(**overrides) -> FilingFundamentals:
+def _fundamentals(**overrides) -> FundamentalsFeatureRecord:
     defaults = dict(
-        instrument_id=_AAPL, fiscal_period="Q1", fiscal_year=2024, quarter_end=date(2024, 3, 31),
-        filed_at=datetime(2024, 5, 2, tzinfo=timezone.utc), revenue=100.0, gross_profit=40.0,
-        operating_income=30.0, net_income=25.0, diluted_eps=1.5, stockholders_equity=500.0,
-        operating_cash_flow=28.0, capital_expenditure=-5.0, provenance=_provenance(date(2024, 3, 31)),
-        accession_number="acc-1",
+        instrument_id=_AAPL, fiscal_period="2024 Q1", fiscal_year=2024, quarter_end=date(2024, 3, 31),
+        filed_at=datetime(2024, 5, 2, tzinfo=timezone.utc), filed_at_is_estimated=False,
+        gics_sector="Information Technology", features={"revenue_qoq_growth": 0.05, "beta": 1.2},
+        provenance=_provenance(date(2024, 3, 31)),
     )
     defaults.update(overrides)
-    return FilingFundamentals(**defaults)
+    return FundamentalsFeatureRecord(**defaults)
 
 
-def test_clean_filing_has_no_issues():
-    issues = validate_filings([_filing()])
+def test_clean_fundamentals_row_has_no_issues():
+    issues = validate_filings([_fundamentals()])
     assert issues == ()
 
 
-def test_duplicate_filing_quarter_is_warning():
-    issues = validate_filings([_filing(), _filing(accession_number="acc-2")])
-    assert any(i.severity == ValidationSeverity.WARNING and "filings for the same" in i.message for i in issues)
+def test_duplicate_fundamentals_row_for_same_quarter_is_warning():
+    issues = validate_filings(
+        [_fundamentals(), _fundamentals(filed_at=datetime(2024, 5, 3, tzinfo=timezone.utc))]
+    )
+    assert any(i.severity == ValidationSeverity.WARNING and "fundamentals rows for the same" in i.message for i in issues)
 
 
-def test_zero_revenue_is_warning():
-    issues = validate_filings([_filing(revenue=0.0)])
-    assert any(i.severity == ValidationSeverity.WARNING and "revenue is exactly zero" in i.message for i in issues)
+def test_non_finite_feature_value_is_error():
+    issues = validate_filings([_fundamentals(features={"beta": float("inf")})])
+    assert any(i.severity == ValidationSeverity.ERROR and "non-finite" in i.message for i in issues)
 
 
-def test_missing_accession_number_is_info():
-    issues = validate_filings([_filing(accession_number=None)])
-    assert any(i.severity == ValidationSeverity.INFO for i in issues)
+def test_missing_feature_value_is_not_an_issue():
+    issues = validate_filings([_fundamentals(features={"beta": None})])
+    assert issues == ()
+
+
+def test_missing_gics_sector_is_info():
+    issues = validate_filings([_fundamentals(gics_sector=None)])
+    assert any(i.severity == ValidationSeverity.INFO and "no gics_sector recorded" in i.message for i in issues)
 
 
 def _price(trading_date, close=150.0) -> DailyPriceObservation:
@@ -85,7 +92,7 @@ def test_duplicate_price_date_is_warning():
 
 
 def _universe_member(**overrides) -> UniverseMembershipRecord:
-    defaults = dict(instrument_id=_AAPL, as_of=_NOW, source="sp500", survivorship_biased=True, provenance=_provenance(_NOW))
+    defaults = dict(instrument_id=_AAPL, as_of=_NOW, source="fundamentals_quarterly", survivorship_biased=False, provenance=_provenance(_NOW))
     defaults.update(overrides)
     return UniverseMembershipRecord(**defaults)
 
@@ -96,9 +103,14 @@ def test_empty_universe_is_fatal():
 
 
 def test_survivorship_biased_universe_is_info_not_error():
-    issues = validate_universe([_universe_member()])
+    issues = validate_universe([_universe_member(survivorship_biased=True)])
     assert any(i.severity == ValidationSeverity.INFO and "survivorship-biased" in i.message for i in issues)
     assert not any(i.severity in (ValidationSeverity.ERROR, ValidationSeverity.FATAL) for i in issues)
+
+
+def test_non_survivorship_biased_universe_has_no_such_info_issue():
+    issues = validate_universe([_universe_member(survivorship_biased=False)])
+    assert not any("survivorship-biased" in i.message for i in issues)
 
 
 def _sector(raw_sector, **overrides) -> SectorRecord:
@@ -129,9 +141,8 @@ def test_different_sectors_at_different_as_of_is_not_a_conflict():
 
 
 def test_summary_counts_by_severity():
-    summary = DataValidationSummary(issues=validate_filings([_filing(revenue=0.0, accession_number=None)]))
+    summary = DataValidationSummary(issues=validate_filings([_fundamentals(gics_sector=None)]))
     counts = summary.counts_by_severity()
-    assert counts["warning"] == 1
     assert counts["info"] == 1
     assert summary.has_fatal is False
     assert summary.has_error is False

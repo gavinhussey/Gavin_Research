@@ -1,44 +1,45 @@
 """Multi-Factor Ranking ML's point-in-time feature pipeline.
 
-Turns provider-neutral records (:mod:`atlas_quant.data.records`) into
-:class:`~atlas_quant.strategies.multi_factor_ranking_ml.feature_domain
-.FeatureObservation` rows. This module's job is exclusively: point-in-time
-selection, timing resolution, missing-data handling, and assembling the
-result — that plumbing is generic and kept unchanged from
-filing_momentum_ml's architecture. What's removed is the *concrete*
-feature computation: filing_momentum_ml's 17 filing-derived formulas are
-gone (see ``formulas.py``), so ``build_feature_observation`` currently
-assembles an empty ``features`` mapping (matching the empty
-``FEATURE_NAMES`` in ``feature_domain.py``). Once this strategy's own
-feature formulas exist, compute them here (from whatever raw records the
-new Bloomberg-CSV acquisition path produces) and populate ``features``
-before constructing the ``FeatureObservation`` — the point-in-time cutoff
-enforcement below (``feature_date > data_cutoff.date()`` is rejected)
-must keep applying to however that data arrives.
+Turns :class:`~...production.normalization.FundamentalsFeatureRecord`
+history into :class:`~...feature_domain.FeatureObservation` rows, one per
+instrument per quarterly evaluation cycle (see ``evaluation_schedule.py``).
+
+Timing model -- deliberately not filing_momentum_ml's fixed
+``earnings_lag_days`` post-quarter-end approximation: this strategy ranks
+the full universe on each cycle's ``quarter_start`` (the first calendar
+day of a quarter), using each instrument's own most recent fundamentals
+row with ``available_date <= cutoff`` (``cutoff`` = the day before
+``quarter_start``). Different instruments naturally land on different
+actual fiscal quarters depending on their own filing timing -- expected
+and correct, never normalized away. An instrument with no row satisfying
+that cutoff yet (newly public, or a long true reporting lag) is rejected
+for that cycle, never fabricated.
+
+``features`` is assembled from three sources, matching
+``feature_domain.FEATURE_NAMES``'s three blocks: the selected record's own
+``features`` bag (blocks 1-2, already keyed by name), ``quarter_num``/
+``sector_enc`` computed locally (block 3), and the 6 macro series (block
+4) looked up via ``macro_lookup`` at the *cycle's* ``cutoff`` -- the same
+cutoff for every instrument in a cycle, since macro is market-wide and
+every instrument ranked together should see the same macro snapshot.
 
 Explicitly out of scope here: qualification, model training/prediction,
-position weighting (including ``score_proportional_weights``, which
-belongs to the later strategy stage and is deliberately never called from
-this module), portfolio construction, and backtesting.
+ranking/rejection (``decision_pipeline.py``), and this strategy has no
+position-weighting or portfolio-construction stage at all (pure ranking
+system -- see ``strategy.py``).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Mapping, Sequence
 
-from atlas_quant.data.point_in_time import (
-    FilingTimingMode,
-    TradingCalendar,
-    resolve_feature_timestamp,
-    select_point_in_time_fundamentals,
-    select_point_in_time_sector,
-)
-from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, SectorRecord
+from atlas_quant.data.point_in_time import select_point_in_time_fundamentals
 from atlas_quant.domain.audit import AuditRecord, AuditTrail
 from atlas_quant.domain.identifiers import InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
+from atlas_quant.strategies.multi_factor_ranking_ml.acquisition.macro import MACRO_SERIES_NAMES, MacroSeriesLookup
 from atlas_quant.strategies.multi_factor_ranking_ml.config import (
     FEATURE_SCHEMA_VERSION,
     STRATEGY_VERSION,
@@ -49,6 +50,8 @@ from atlas_quant.strategies.multi_factor_ranking_ml.feature_domain import (
     FeatureObservation,
     missing_feature_names,
 )
+from atlas_quant.strategies.multi_factor_ranking_ml.production.normalization import FundamentalsFeatureRecord
+from atlas_quant.data.records import SectorRecord
 from atlas_quant.strategies.multi_factor_ranking_ml.sector_encoding import SectorEncoder
 
 _NAN = float("nan")
@@ -57,10 +60,10 @@ _TREND_WINDOW = 6
 
 @dataclass(frozen=True, slots=True)
 class RejectedObservation:
-    """One instrument/quarter that could not produce a feature observation, and why."""
+    """One instrument/cycle that could not produce a feature observation, and why."""
 
     instrument_id: InstrumentId
-    quarter_end: date
+    quarter_start: date
     reason: str
 
 
@@ -92,149 +95,82 @@ class FeaturePipelineResult:
         return [obs.to_model_row() for obs in self.observations]
 
 
+def _quarter_num(quarter_end: date) -> float:
+    return float((quarter_end.month - 1) // 3 + 1)
+
+
+def _macro_features(macro_lookup: MacroSeriesLookup | None, cutoff: date) -> dict[str, float]:
+    if macro_lookup is None:
+        return {name: _NAN for name in MACRO_SERIES_NAMES}
+    return {
+        name: (value if (value := macro_lookup.value_as_of(name, cutoff)) is not None else _NAN)
+        for name in MACRO_SERIES_NAMES
+    }
+
+
 def build_feature_observation(
     *,
     config: MultiFactorRankingMLConfig,
-    calendar: TradingCalendar,
     sector_encoder: SectorEncoder,
     instrument_id: InstrumentId,
-    strategy_cohort_end: date,
-    cohort_buy_timestamp: datetime,
-    filings: Sequence[FilingFundamentals],
-    prices: Sequence[DailyPriceObservation],
-    sector_record: SectorRecord | None,
-    data_cutoff: datetime,
-    mode: FilingTimingMode = "training",
+    quarter_start: date,
+    cutoff: date,
+    fundamentals: Sequence[FundamentalsFeatureRecord],
+    macro_lookup: MacroSeriesLookup | None = None,
     feature_cache_identity: str | None = None,
 ) -> FeatureObservation | RejectedObservation:
-    """Build one instrument/shared-cohort's :class:`FeatureObservation`, or report why not.
+    """Build one instrument's :class:`FeatureObservation` for this cycle, or
+    report why not.
 
-    Recovered report/legacy behavior (``ml_scorer.py``'s ``RollingMLScorer``
-    + ``data_sec.py``'s ``get_available_as_of``): every ticker produces one
-    candidate row per shared ``strategy_cohort_end``, built from whichever
-    fiscal history is most recently knowable as of ``data_cutoff`` --
-    ordinal ("most recent N filed quarters"), never requiring the
-    selected filing's own ``quarter_end`` to equal ``strategy_cohort_end``.
-    This function is rejected only for genuine data insufficiency (no
-    knowable fundamental history at all, or a resolved feature date past
-    ``data_cutoff``) -- never for a fiscal/calendar mismatch, which is not
-    a rejection condition at all, only a timing-precision one (see below).
-
-    An earlier implementation required exact equality between the
-    selected filing's ``quarter_end`` and ``strategy_cohort_end`` as an
-    *inclusion* condition -- this was an implementation bug (synthetic
-    test fixtures are always calendar-aligned, so the bug was invisible
-    until real data, where the majority of issuers use 52/53-week or
-    otherwise offset fiscal calendars). The report/legacy implementation
-    never had such a requirement; exact equality there is used only to
-    refine ``feature_timestamp``'s entry-timing precision.
+    Selects this instrument's own most recent fundamentals row knowable
+    as of ``cutoff`` (no requirement that its ``quarter_end`` equal any
+    particular calendar date -- see module docstring). Rejected only for
+    genuine data insufficiency: no fundamentals row knowable yet as of
+    ``cutoff``.
     """
+    cutoff_dt = datetime.combine(cutoff, time.min)
     selection = select_point_in_time_fundamentals(
-        filings, instrument_id, cutoff=data_cutoff, max_periods=_TREND_WINDOW
+        fundamentals, instrument_id, cutoff=cutoff_dt, max_periods=_TREND_WINDOW
     )
     if not selection.selected:
         return RejectedObservation(
             instrument_id=instrument_id,
-            quarter_end=strategy_cohort_end,
-            reason="no fundamental history knowable as of data_cutoff",
+            quarter_start=quarter_start,
+            reason="no fundamentals row knowable as of cutoff",
         )
 
-    target_filing = selection.selected[-1]
-    has_exact_cohort_match = target_filing.quarter_end == strategy_cohort_end
-
-    if has_exact_cohort_match:
-        # Entry-timing refinement only (report §3/§5.5): filed_at + 1
-        # trading day, capped at the shared cohort's own buy timestamp.
-        # ``quarter_end=strategy_cohort_end`` here (not
-        # ``target_filing.quarter_end``) is deliberate -- the day-42 cap is
-        # always anchored to the shared cohort's clock, never replaced by
-        # the issuer's own fiscal quarter-end.
-        timing = resolve_feature_timestamp(
-            filed_at=target_filing.filed_at,
-            quarter_end=strategy_cohort_end,
-            calendar=calendar,
-            earnings_lag_days=config.earnings_lag_days,
-            mode=mode,
-        )
-        feature_date = timing.feature_date
-        timing_message = (
-            "exact fiscal-cohort match: day-42 cap applied" if timing.capped
-            else "exact fiscal-cohort match: natural filing_date + 1 trading day used"
-        )
-        timing_data = {
-            "cohort_match": True,
-            "filed_at": timing.filed_at.isoformat(),
-            "natural_feature_date": timing.natural_feature_date.isoformat(),
-            "day42_cutoff_date": timing.day42_cutoff_date.isoformat(),
-            "feature_date": timing.feature_date.isoformat(),
-            "mode": timing.mode,
-            "capped": timing.capped,
-        }
-    else:
-        # No exact fiscal-period match to this shared cohort -- recovered
-        # report/legacy fallback (never a rejection, never nearest-date
-        # matching): use the cohort's own buy timestamp directly.
-        feature_date = cohort_buy_timestamp.date()
-        timing_message = "no exact fiscal-cohort match: cohort_buy_timestamp used directly"
-        timing_data = {
-            "cohort_match": False,
-            "issuer_fiscal_quarter_end": target_filing.quarter_end.isoformat(),
-            "strategy_cohort_end": strategy_cohort_end.isoformat(),
-            "feature_date": feature_date.isoformat(),
-        }
-
-    if feature_date > data_cutoff.date():
-        return RejectedObservation(
-            instrument_id=instrument_id,
-            quarter_end=strategy_cohort_end,
-            reason="resolved feature_date falls after data_cutoff",
-        )
+    target = selection.selected[-1]
 
     audit_trail = AuditTrail()
     audit_trail = audit_trail.append(
         AuditRecord(
             stage="point_in_time_selection",
-            message=f"selected {len(selection.selected)} filing(s), rejected {len(selection.rejected)}",
-            timestamp=data_cutoff,
+            message=f"selected {len(selection.selected)} row(s), rejected {len(selection.rejected)}",
+            timestamp=cutoff_dt,
             data={
                 "rejected_reasons": [r.reason for r in selection.rejected],
                 "selected_fiscal_quarter_ends": [f.quarter_end.isoformat() for f in selection.selected],
+                "target_quarter_end": target.quarter_end.isoformat(),
+                "cutoff": cutoff.isoformat(),
+                "quarter_start": quarter_start.isoformat(),
             },
         )
     )
-    audit_trail = audit_trail.append(
-        AuditRecord(
-            stage="timing_resolution",
-            message=timing_message,
-            timestamp=data_cutoff,
-            data=timing_data,
-        )
+
+    sector_record = SectorRecord(
+        instrument_id=instrument_id,
+        raw_sector=target.gics_sector,
+        as_of=target.filed_at,
+        provenance=DataProvenance(source="fundamentals_quarterly", as_of=target.filed_at, retrieved_at=target.filed_at),
     )
+    classification = sector_encoder.classify(sector_record)
 
-    # This strategy's concrete feature formulas are not yet defined (see
-    # module docstring) -- FEATURE_NAMES is empty, so the only valid
-    # ``features`` mapping is also empty (FeatureObservation.__post_init__
-    # rejects any name not in FEATURE_NAMES). Compute real features here
-    # once they exist, keyed by whatever FEATURE_NAMES then contains.
-    features: dict[str, float] = {}
-
-    raw_sector = sector_record.raw_sector if sector_record else None
-    classification = sector_encoder.classify(
-        sector_record
-        if sector_record is not None
-        else SectorRecord(
-            instrument_id=instrument_id,
-            raw_sector=None,
-            as_of=data_cutoff,
-            provenance=DataProvenance(
-                source="unavailable", as_of=data_cutoff, retrieved_at=data_cutoff
-            ),
-        )
-    )
-
-    provenance = [target_filing.provenance] + [p.provenance for p in prices[:1]]
-    if sector_record is not None:
-        provenance.append(sector_record.provenance)
+    features: dict[str, float] = {
+        name: (value if value is not None else _NAN) for name, value in target.features.items()
+    }
+    features["quarter_num"] = _quarter_num(target.quarter_end)
+    features["sector_enc"] = float(classification.sector_enc)
+    features.update(_macro_features(macro_lookup, cutoff))
 
     missing = missing_feature_names(features)
     if missing:
@@ -242,7 +178,7 @@ def build_feature_observation(
             AuditRecord(
                 stage="missing_data",
                 message=f"{len(missing)} of {len(FEATURE_NAMES)} features missing",
-                timestamp=data_cutoff,
+                timestamp=cutoff_dt,
                 data={"missing_features": list(missing)},
             )
         )
@@ -252,19 +188,19 @@ def build_feature_observation(
         strategy_version=STRATEGY_VERSION,
         feature_schema_version=FEATURE_SCHEMA_VERSION,
         instrument_id=instrument_id,
-        fiscal_period=target_filing.fiscal_period,
-        quarter_end=target_filing.quarter_end,
-        filing_timestamp=target_filing.filed_at,
-        feature_timestamp=feature_date,
-        data_cutoff=data_cutoff,
+        fiscal_period=target.fiscal_period,
+        quarter_end=target.quarter_end,
+        filing_timestamp=target.filed_at,
+        feature_timestamp=cutoff,
+        data_cutoff=cutoff_dt,
         sector=classification.normalized_sector,
         features=features,
         missing_features=missing,
-        provenance=tuple(provenance),
+        provenance=(target.provenance,),
         config_identity=config.identity(),
         feature_cache_identity=feature_cache_identity,
-        strategy_cohort_end=strategy_cohort_end,
-        cohort_buy_timestamp=cohort_buy_timestamp,
+        strategy_cohort_end=quarter_start,
+        cohort_buy_timestamp=datetime.combine(quarter_start, time.min),
         audit_trail=audit_trail,
     )
 
@@ -272,55 +208,34 @@ def build_feature_observation(
 def run_feature_pipeline(
     *,
     config: MultiFactorRankingMLConfig,
-    calendar: TradingCalendar,
     sector_encoder: SectorEncoder,
-    targets: Sequence[tuple[InstrumentId, date, datetime]],
-    filings_by_instrument: dict[InstrumentId, Sequence[FilingFundamentals]],
-    prices_by_instrument: dict[InstrumentId, Sequence[DailyPriceObservation]],
-    sector_by_instrument: Mapping[InstrumentId, Sequence[SectorRecord]],
-    mode: FilingTimingMode = "training",
+    universe: Sequence[InstrumentId],
+    quarter_start: date,
+    cutoff: date,
+    fundamentals_by_instrument: Mapping[InstrumentId, Sequence[FundamentalsFeatureRecord]],
+    macro_lookup: MacroSeriesLookup | None = None,
     feature_cache_identity: str | None = None,
 ) -> FeaturePipelineResult:
-    """Build feature observations for every ``(instrument_id, strategy_cohort_end,
-    cohort_buy_timestamp)`` triple.
+    """Build feature observations for every instrument in ``universe``, for
+    one quarterly evaluation cycle (``quarter_start``/``cutoff`` -- see
+    ``evaluation_schedule.quarterly_evaluation_cycles``).
 
-    Each target carries its *own* point-in-time cutoff
-    (``cohort_buy_timestamp``, used directly as that target's
-    ``data_cutoff``) rather than one batch-wide cutoff shared across every
-    cohort -- a single shared cutoff would let an early cohort in a
-    multi-cohort batch see filings only knowable as of a *later* cohort's
-    own buy date, a real lookahead bug distinct from (but previously
-    masked by) the fiscal/calendar-equality bug this module also fixes.
-    The same per-target cutoff selects each instrument's sector via
-    :func:`atlas_quant.data.point_in_time.select_point_in_time_sector` --
-    ``sector_by_instrument`` holds each instrument's *full* sector
-    history (multiple point-in-time facts, not one snapshot), so an
-    instrument whose real classification changed over the backtest window
-    sees the classification that was actually knowable as of each
-    cohort's own cutoff, not today's.
-
-    Deterministic: iterates ``targets`` in the given order and never
+    Deterministic: iterates ``universe`` in the given order and never
     depends on dict iteration order for its own output ordering.
     """
     observations: list[FeatureObservation] = []
     rejected: list[RejectedObservation] = []
     warnings: list[str] = []
 
-    for instrument_id, strategy_cohort_end, cohort_buy_timestamp in targets:
+    for instrument_id in universe:
         result = build_feature_observation(
             config=config,
-            calendar=calendar,
             sector_encoder=sector_encoder,
             instrument_id=instrument_id,
-            strategy_cohort_end=strategy_cohort_end,
-            cohort_buy_timestamp=cohort_buy_timestamp,
-            filings=filings_by_instrument.get(instrument_id, ()),
-            prices=prices_by_instrument.get(instrument_id, ()),
-            sector_record=select_point_in_time_sector(
-                sector_by_instrument.get(instrument_id, ()), instrument_id, cutoff=cohort_buy_timestamp,
-            ),
-            data_cutoff=cohort_buy_timestamp,
-            mode=mode,
+            quarter_start=quarter_start,
+            cutoff=cutoff,
+            fundamentals=fundamentals_by_instrument.get(instrument_id, ()),
+            macro_lookup=macro_lookup,
             feature_cache_identity=feature_cache_identity,
         )
         if isinstance(result, RejectedObservation):
@@ -329,7 +244,7 @@ def run_feature_pipeline(
             observations.append(result)
             if result.missing_features:
                 warnings.append(
-                    f"{result.instrument_id.symbol} {strategy_cohort_end.isoformat()}: "
+                    f"{result.instrument_id.symbol} {quarter_start.isoformat()}: "
                     f"{len(result.missing_features)} missing feature(s)"
                 )
 

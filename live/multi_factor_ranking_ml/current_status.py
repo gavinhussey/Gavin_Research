@@ -1,23 +1,23 @@
 #!/usr/bin/env python
 """multi_factor_ranking_ml's live status check: a convenience wrapper around
-`atlas-quant multi-factor-ranking current-status`.
+`atlas-quant multi-factor-ranking rank`.
 
 One subfolder per strategy lives under `live/` (this is
-multi_factor_ranking_ml's); add a sibling subfolder for each new strategy's own
-live-status tooling rather than growing this one to cover more than one
-strategy.
+multi_factor_ranking_ml's); add a sibling subfolder for each new strategy's
+own live-status tooling rather than growing this one to cover more than
+one strategy.
 
-Reports the currently-held cohort's live unrealized return/alpha vs. the
-benchmark, and the next cohort's not-yet-entered scheduled picks. This is
-read-only reporting -- it never places, models, or simulates placing a
-trade; see `run_multi_factor_ranking_current_status`'s own docstring
-(`production/orchestration.py`) for exactly what it does and does not
-guarantee (in particular: it re-derives "what would we pick" fresh on
-every run rather than reading back a persisted decision log).
+This is a pure ranking system (no positions, no weights, no capital, no
+orders -- see `strategy.py`'s module docstring), so unlike a portfolio
+strategy's "current status," this has no unrealized return/alpha to
+report: it produces and permanently records (via `production/decision_log.py`)
+the current quarterly cycle's full ranking, then prints it -- "what would
+we pick right now." Re-running for a cycle already decided returns that
+same locked-in record rather than recomputing it.
 
-Performs one real network request per run (a handful of current quotes
-via `production/live_pricing.py`) -- separate from, and much smaller
-than, `acquire-data`'s full historical batch acquisition.
+Never places, models, or simulates placing a trade, and makes no network
+request -- purely a local computation over `--raw-root`'s already-acquired
+CSV files.
 
 Edit the constant below, then run:
 
@@ -31,24 +31,32 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# --- edit this to change how far back the training-history buffer starts ---
-START_QUARTER = "2015-03-31"
+# --- edit this to change how many top-ranked instruments are printed ---
+TOP_N = 25
+AS_OF = None  # YYYY-MM-DD string, or None for today
 JSON_OUTPUT = False
 # -----------------------------------------------------------------------
 
 RAW_ROOT = REPO_ROOT / "data" / "raw" / "multi_factor_ranking_ml"
-MANIFEST = REPO_ROOT / "data" / "manifests" / "multi_factor_ranking_ml" / "data_manifest.json"
+DECISION_LOG_ROOT = REPO_ROOT / "data" / "decisions" / "multi_factor_ranking_ml"
 
 
 def main() -> int:
-    from atlas_quant.cli.main import main as cli_main
+    # NOT atlas_quant.cli.main -- that console-script entry point is
+    # hard-wired to filing_momentum_ml's CLI (a pre-existing, one-strategy
+    # limitation of atlas-quant's single console script, not something
+    # this strategy can fix). Call multi_factor_ranking's own CLI directly.
+    from atlas_quant.cli.multi_factor_ranking import main as cli_main
 
     args = [
-        "multi-factor-ranking", "current-status",
+        "multi-factor-ranking", "rank",
         "--raw-root", str(RAW_ROOT),
-        "--manifest", str(MANIFEST),
-        "--start-quarter", START_QUARTER,
+        "--decision-log-root", str(DECISION_LOG_ROOT),
     ]
+    if TOP_N is not None:
+        args += ["--top-n", str(TOP_N)]
+    if AS_OF is not None:
+        args += ["--as-of", AS_OF]
     if JSON_OUTPUT:
         args.append("--json")
     return cli_main(args)

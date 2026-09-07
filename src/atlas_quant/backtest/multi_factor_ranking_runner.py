@@ -1,479 +1,602 @@
-"""The standalone Multi-Factor Ranking ML historical backtest runner, Stage 7.
+"""The standalone Multi-Factor Ranking ML historical backtest runner.
 
-Orchestrates, in order, Stage 6 (labeling/training/scoring) and Stage 5
-(the strategy decision) for one quarter at a time — never reimplementing
-any of their formulas. This is a single-strategy backtest: ``strategy_budget_pct`` defaults to 1.0 (100%
-assigned capital) so the report's standalone behavior is reproduced;
-cross-strategy allocation is out of scope entirely.
+This strategy is a pure ranking system: no positions, no weights, no
+capital, no orders (see ``strategy.py``'s module docstring). A P&L/
+equity-curve backtest -- filing_momentum_ml's shape, and this module's
+own shape before this rewrite -- has no meaning here: there is nothing to
+hold, size, or realize a return on as a *portfolio*.
+
+Instead this evaluates the *ranking's quality* directly, the standard
+approach for a pure cross-sectional ranking system: for each quarterly
+evaluation cycle (``evaluation_schedule.quarterly_evaluation_cycles``),
+rank the universe, then measure the Information Coefficient (IC) --
+Spearman rank correlation between each ranked instrument's score and its
+realized forward return to the next cycle. No weights or capital are
+implied anywhere in this computation; IC and the decile spread below are
+descriptive statistics about the ranking's predictive quality, never a
+simulated trading strategy.
+
+Orchestrates, per cycle: build features (``feature_pipeline.py``) ->
+train on the trailing window of prior cycles' labeled data
+(``training_dataset.py``/``model_training.py``, unchanged from
+filing_momentum_ml's lineage -- these are generic quarter/InstrumentId
+machinery, not filing-specific) -> score this cycle's candidates
+(``scoring.py``) -> rank via the Stage 5 evaluator (``strategy.py``) ->
+measure IC against the *next* cycle's realized returns.
 """
 
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass, field
-from datetime import date, datetime
-from enum import Enum
-from pathlib import Path
+from datetime import date, datetime, time
 from typing import Callable, Mapping, Sequence
 
-from atlas_quant.backtest.accounting import (
-    INSTRUMENT_RETURN_CAP,
-    PositionOutcome,
-    compute_period_return,
-    resolve_position,
-)
-from atlas_quant.backtest.benchmark import BenchmarkResult, resolve_benchmark
-from atlas_quant.backtest.clock import BacktestPeriod
-from atlas_quant.backtest.price_resolution import PriceResolutionPolicy
 from atlas_quant.config.identity import compute_config_identity
-from atlas_quant.data.point_in_time import TradingCalendar
 from atlas_quant.data.records import DailyPriceObservation
 from atlas_quant.domain.audit import AuditRecord, AuditTrail
 from atlas_quant.domain.identifiers import InstrumentId
-from atlas_quant.domain.serialization import to_jsonable
 from atlas_quant.domain.status import StrategyStatus
-from atlas_quant.strategies.base import StrategyEvaluationContext, StrategyResult
+from atlas_quant.strategies.base import StrategyEvaluationContext
+from atlas_quant.strategies.multi_factor_ranking_ml.acquisition.macro import MacroSeriesLookup
 from atlas_quant.strategies.multi_factor_ranking_ml.config import (
     FEATURE_SCHEMA_VERSION,
     STRATEGY_ID,
     STRATEGY_VERSION,
     MultiFactorRankingMLConfig,
 )
+from atlas_quant.strategies.multi_factor_ranking_ml.decision_domain import MultiFactorRankingDecisionSummary
 from atlas_quant.strategies.multi_factor_ranking_ml.estimator import Estimator, EstimatorBuildInfo
-from atlas_quant.strategies.multi_factor_ranking_ml.fallback_domain import FallbackAssetStatistics
-from atlas_quant.strategies.multi_factor_ranking_ml.feature_domain import FeatureObservation
-from atlas_quant.strategies.multi_factor_ranking_ml.forward_return import build_forward_return_outcome
+from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import EvaluationCycle
+from atlas_quant.strategies.multi_factor_ranking_ml.feature_pipeline import FeaturePipelineResult, run_feature_pipeline
+from atlas_quant.strategies.multi_factor_ranking_ml.forward_return import ForwardReturnOutcome, build_forward_return_outcome
 from atlas_quant.strategies.multi_factor_ranking_ml.labeling import assign_quarterly_labels
-from atlas_quant.strategies.multi_factor_ranking_ml.model_training import (
-    ModelIdentity,
-    TrainingState,
-    train_model,
-)
-from atlas_quant.strategies.multi_factor_ranking_ml.production.model_store import train_model_cached
+from atlas_quant.strategies.multi_factor_ranking_ml.model_training import ModelIdentity, TrainingState, train_model
+from atlas_quant.strategies.multi_factor_ranking_ml.production.normalization import FundamentalsFeatureRecord
 from atlas_quant.strategies.multi_factor_ranking_ml.scoring import ScoringResult, score_observations
+from atlas_quant.strategies.multi_factor_ranking_ml.sector_encoding import SectorEncoder
 from atlas_quant.strategies.multi_factor_ranking_ml.strategy import (
     MultiFactorRankingEvaluationInputs,
     MultiFactorRankingMLStrategy,
 )
 from atlas_quant.strategies.multi_factor_ranking_ml.training_dataset import (
     LabeledObservation,
+    TrainingDatasetResult,
     build_training_dataset,
     check_training_eligibility,
 )
 
 
 @dataclass(frozen=True, slots=True)
-class TransactionCostPolicy:
-    """Report §9: transaction costs are not modeled. Represented explicitly,
-    not left as an undocumented frictionless-trading assumption."""
-
-    commission_bps: float = 0.0
-    slippage_bps: float = 0.0
-    other_bps: float = 0.0
-
-    def __post_init__(self) -> None:
-        for name in ("commission_bps", "slippage_bps", "other_bps"):
-            if getattr(self, name) < 0:
-                raise ValueError(f"{name} cannot be negative, got {getattr(self, name)!r}")
-
-    @property
-    def total_bps(self) -> float:
-        return self.commission_bps + self.slippage_bps + self.other_bps
-
-    def identity(self) -> str:
-        return compute_config_identity(self)
-
-
-@dataclass(frozen=True, slots=True)
 class MultiFactorRankingBacktestConfig:
-    """Every behavior-changing backtest-level configuration value, bundled and identified."""
+    """Every behavior-changing backtest-level configuration value, bundled and identified.
 
-    strategy_config: MultiFactorRankingMLConfig = field(default_factory=MultiFactorRankingMLConfig)
-    price_policy: PriceResolutionPolicy = field(default_factory=PriceResolutionPolicy)
-    transaction_costs: TransactionCostPolicy = field(default_factory=TransactionCostPolicy)
-    strategy_budget_pct: float = 1.0
-    instrument_return_cap: float = INSTRUMENT_RETURN_CAP
-
-    def __post_init__(self) -> None:
-        if not (0.0 <= self.strategy_budget_pct <= 1.0):
-            raise ValueError(
-                f"strategy_budget_pct must be within [0.0, 1.0], got {self.strategy_budget_pct!r}"
-            )
-
-    def identity(self) -> str:
-        return compute_config_identity(
-            {
-                "strategy_config_identity": self.strategy_config.identity(),
-                "price_policy": self.price_policy,
-                "transaction_costs": self.transaction_costs.identity(),
-                "strategy_budget_pct": self.strategy_budget_pct,
-                "instrument_return_cap": self.instrument_return_cap,
-            }
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class MultiFactorRankingBacktestDependencies:
-    """Every injectable dependency the runner needs — a frozen container, no mutable globals."""
-
-    feature_observation_source: Callable[[date], Sequence[FeatureObservation]]
-    price_source: Mapping[InstrumentId, tuple[DailyPriceObservation, ...]]
-    fallback_statistics_source: Callable[[BacktestPeriod], tuple[FallbackAssetStatistics, ...]]
-    estimator_factory: Callable[[MultiFactorRankingMLConfig], tuple[Estimator, EstimatorBuildInfo]]
-    trading_calendar: TradingCalendar
-    universe: tuple[InstrumentId, ...]
-    benchmark_instrument_id: InstrumentId
-    #: When set, a fit is loaded from this model-store root instead of
-    #: refitting whenever an identical ModelIdentity was already persisted
-    #: there. ``None`` (the default) preserves today's behavior exactly —
-    #: every period is always refit from scratch, with no disk I/O.
-    model_cache_root: Path | None = None
-
-
-class QuarterOutcomeType(str, Enum):
-    """One quarter's coarse capital-deployment bucket.
-
-    ``FALLBACK`` is the blended partial-fill bucket: fewer than
-    ``min_positions`` stocks qualified, so the quarter holds whatever
-    stocks did qualify *plus* an ETF sleeve over the deployable capital
-    they left unused (``MultiFactorRankingOutcome.BLENDED`` /
-    ``StrategyStatus.FALLBACK``). It is deliberately not merged into
-    ``PRIMARY`` -- a quarter with ETF exposure must stay distinguishable
-    from a pure stock-selection quarter in every downstream statistic.
-
-    ``CASH`` is now an edge case only. The strategy no longer produces a
-    100%-cash decision by design, so it is reachable only via
-    ``StrategyStatus.MISSING_DATA`` (fallback-ticker statistics genuinely
-    unavailable) or ``StrategyStatus.DISABLED``.
+    No ``strategy_budget_pct``/``price_policy``/``transaction_costs``/
+    ``instrument_return_cap`` here -- those are P&L-portfolio concepts
+    that don't apply to an IC/rank-correlation evaluation of a pure
+    ranking system.
     """
 
-    PRIMARY = "primary"
-    FALLBACK = "fallback"
-    CASH = "cash"
-    SKIPPED = "skipped"
+    strategy_config: MultiFactorRankingMLConfig = field(default_factory=MultiFactorRankingMLConfig)
+
+    def identity(self) -> str:
+        return compute_config_identity({"strategy_config_identity": self.strategy_config.identity()})
 
 
 @dataclass(frozen=True, slots=True)
-class BacktestQuarterResult:
-    """One quarter's complete, structured backtest outcome."""
+class RankingCycleResult:
+    """One quarterly cycle's ranking plus its measured forward-looking IC."""
 
-    period: BacktestPeriod
-    outcome_type: QuarterOutcomeType
+    cycle: EvaluationCycle
     training_state: TrainingState | None
     model_identity: ModelIdentity | None
     scoring_result: ScoringResult | None
-    strategy_result: StrategyResult | None
-    positions: tuple[PositionOutcome, ...]
-    period_return: float | None
-    benchmark: BenchmarkResult | None
-    benchmark_return: float | None
-    alpha: float | None
-    cash_weight: float
+    decision_summary: MultiFactorRankingDecisionSummary | None
+    ic: float | None
+    decile_spread: float | None
+    auc: float | None
+    ranked_count: int
+    scored_for_ic_count: int
+    scored_for_auc_count: int
     warnings: tuple[str, ...] = field(default_factory=tuple)
-    rejection_reasons: tuple[str, ...] = field(default_factory=tuple)
-    audit_trail: AuditTrail = field(default_factory=AuditTrail)
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "quarter_end": self.period.quarter_end.isoformat(),
-            "evaluation_timestamp": self.period.evaluation_timestamp.isoformat(),
-            "outcome_type": self.outcome_type.value,
+            "quarter_start": self.cycle.quarter_start.isoformat(),
+            "cutoff": self.cycle.cutoff.isoformat(),
             "training_state": self.training_state.value if self.training_state else None,
-            "period_return": self.period_return,
-            "benchmark_return": self.benchmark_return,
-            "alpha": self.alpha,
-            "cash_weight": self.cash_weight,
-            "position_count": len(self.positions),
+            "ic": self.ic,
+            "decile_spread": self.decile_spread,
+            "auc": self.auc,
+            "ranked_count": self.ranked_count,
+            "scored_for_ic_count": self.scored_for_ic_count,
+            "scored_for_auc_count": self.scored_for_auc_count,
             "warnings": list(self.warnings),
-            "rejection_reasons": list(self.rejection_reasons),
-            "audit_trail": self.audit_trail.to_dict(),
         }
 
 
 @dataclass(frozen=True, slots=True)
-class BacktestResult:
-    """The complete, structured top-level result of one standalone backtest run."""
+class ICBacktestResult:
+    """The complete, structured top-level result of one IC backtest run.
+
+    Headline stats are rank-correlation/IC based -- there is deliberately
+    no equity curve, total return, Sharpe ratio, or drawdown here: those
+    are P&L-portfolio concepts, and this strategy never holds a position.
+    """
 
     strategy_id: str
     strategy_version: str
     config_identity: str
-    backtest_start: date
-    backtest_end: date
-    quarter_results: tuple[BacktestQuarterResult, ...]
+    cycle_results: tuple[RankingCycleResult, ...]
     run_identity: str
     warnings: tuple[str, ...] = field(default_factory=tuple)
     audit_trail: AuditTrail = field(default_factory=AuditTrail)
+    #: Cycles scored against fewer than this many candidates are excluded
+    #: from every headline stat below (mean/std/hit-rate/spread) -- a
+    #: Spearman correlation or AUC computed over a handful of names (this
+    #: strategy's real early history: 9-12 stocks from 1986-10 through
+    #: 1989-04, before the universe's real growth to 30+ by 1989-07 and
+    #: 100+ by 1990-01) is dominated by sampling noise, not signal. Still
+    #: present in ``cycle_results`` and ``to_dict()``'s per-cycle list --
+    #: this only affects aggregation, never hides or deletes a cycle's
+    #: own recorded result.
+    min_scored_count: int = 30
+
+    def _is_headline_eligible(self, cycle: RankingCycleResult, *, for_auc: bool = False) -> bool:
+        count = cycle.scored_for_auc_count if for_auc else cycle.scored_for_ic_count
+        return count >= self.min_scored_count
 
     @property
-    def completed_quarter_count(self) -> int:
-        return sum(1 for q in self.quarter_results if q.outcome_type != QuarterOutcomeType.SKIPPED)
+    def _valid_ics(self) -> list[float]:
+        return [c.ic for c in self.cycle_results if c.ic is not None and self._is_headline_eligible(c)]
 
     @property
-    def skipped_quarter_count(self) -> int:
-        return sum(1 for q in self.quarter_results if q.outcome_type == QuarterOutcomeType.SKIPPED)
+    def cycle_count(self) -> int:
+        return len(self.cycle_results)
 
     @property
-    def cash_quarter_count(self) -> int:
-        return sum(1 for q in self.quarter_results if q.outcome_type == QuarterOutcomeType.CASH)
+    def measured_cycle_count(self) -> int:
+        """Cycles with a computable IC (enough scored candidates with a
+        realized forward return, and a model that actually trained)."""
+        return len(self._valid_ics)
 
     @property
-    def fallback_quarter_count(self) -> int:
-        """Quarters that ran as a blended partial fill (stocks + ETF sleeve)."""
-        return sum(1 for q in self.quarter_results if q.outcome_type == QuarterOutcomeType.FALLBACK)
+    def mean_ic(self) -> float | None:
+        ics = self._valid_ics
+        return statistics.mean(ics) if ics else None
 
     @property
-    def primary_quarter_count(self) -> int:
-        return sum(1 for q in self.quarter_results if q.outcome_type == QuarterOutcomeType.PRIMARY)
+    def ic_std(self) -> float | None:
+        ics = self._valid_ics
+        if len(ics) < 2:
+            return 0.0 if ics else None
+        return statistics.pstdev(ics)
 
-    def total_return(self) -> float:
-        growth = 1.0
-        for q in self.quarter_results:
-            if q.period_return is not None:
-                growth *= 1 + q.period_return
-        return growth - 1.0
+    @property
+    def ic_information_ratio(self) -> float | None:
+        """mean_ic / ic_std -- undefined (``None``) when std is zero or
+        there are no measured cycles, never a fabricated infinity."""
+        mean, std = self.mean_ic, self.ic_std
+        if mean is None or not std:
+            return None
+        return mean / std
 
-    def benchmark_total_return(self) -> float:
-        growth = 1.0
-        for q in self.quarter_results:
-            if q.benchmark_return is not None:
-                growth *= 1 + q.benchmark_return
-        return growth - 1.0
+    @property
+    def hit_rate(self) -> float | None:
+        """Fraction of measured cycles with a positive IC."""
+        ics = self._valid_ics
+        if not ics:
+            return None
+        return sum(1 for ic in ics if ic > 0) / len(ics)
 
-    def equity_curve(self) -> tuple[tuple[date, float, float], ...]:
-        strategy_growth = 1.0
-        benchmark_growth = 1.0
-        curve = []
-        for q in self.quarter_results:
-            if q.period_return is not None:
-                strategy_growth *= 1 + q.period_return
-            if q.benchmark_return is not None:
-                benchmark_growth *= 1 + q.benchmark_return
-            curve.append((q.period.quarter_end, strategy_growth, benchmark_growth))
-        return tuple(curve)
+    @property
+    def mean_decile_spread(self) -> float | None:
+        spreads = [
+            c.decile_spread for c in self.cycle_results
+            if c.decile_spread is not None and self._is_headline_eligible(c)
+        ]
+        return statistics.mean(spreads) if spreads else None
+
+    @property
+    def _valid_aucs(self) -> list[float]:
+        return [
+            c.auc for c in self.cycle_results
+            if c.auc is not None and self._is_headline_eligible(c, for_auc=True)
+        ]
+
+    @property
+    def measured_auc_cycle_count(self) -> int:
+        """Cycles with a computable AUC (both a winner and a non-winner
+        present among that cycle's scored candidates)."""
+        return len(self._valid_aucs)
+
+    @property
+    def mean_auc(self) -> float | None:
+        aucs = self._valid_aucs
+        return statistics.mean(aucs) if aucs else None
+
+    @property
+    def auc_std(self) -> float | None:
+        aucs = self._valid_aucs
+        if len(aucs) < 2:
+            return 0.0 if aucs else None
+        return statistics.pstdev(aucs)
+
+    @property
+    def auc_above_half_rate(self) -> float | None:
+        """Fraction of measured cycles with AUC > 0.5 -- AUC's own
+        no-skill baseline (a coin flip scores 0.5, not 0.0, so this plays
+        the same role ``hit_rate`` plays for IC, calibrated to AUC's
+        actual midpoint)."""
+        aucs = self._valid_aucs
+        if not aucs:
+            return None
+        return sum(1 for auc in aucs if auc > 0.5) / len(aucs)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "strategy_id": self.strategy_id,
             "strategy_version": self.strategy_version,
             "config_identity": self.config_identity,
-            "backtest_start": self.backtest_start.isoformat(),
-            "backtest_end": self.backtest_end.isoformat(),
             "run_identity": self.run_identity,
-            "completed_quarter_count": self.completed_quarter_count,
-            "skipped_quarter_count": self.skipped_quarter_count,
-            "cash_quarter_count": self.cash_quarter_count,
-            "fallback_quarter_count": self.fallback_quarter_count,
-            "primary_quarter_count": self.primary_quarter_count,
-            "total_return": self.total_return(),
-            "benchmark_total_return": self.benchmark_total_return(),
-            "quarter_results": [q.to_dict() for q in self.quarter_results],
+            "cycle_count": self.cycle_count,
+            "min_scored_count": self.min_scored_count,
+            "measured_cycle_count": self.measured_cycle_count,
+            "mean_ic": self.mean_ic,
+            "ic_std": self.ic_std,
+            "ic_information_ratio": self.ic_information_ratio,
+            "hit_rate": self.hit_rate,
+            "mean_decile_spread": self.mean_decile_spread,
+            "measured_auc_cycle_count": self.measured_auc_cycle_count,
+            "mean_auc": self.mean_auc,
+            "auc_std": self.auc_std,
+            "auc_above_half_rate": self.auc_above_half_rate,
+            "cycles": [c.to_dict() for c in self.cycle_results],
             "warnings": list(self.warnings),
             "audit_trail": self.audit_trail.to_dict(),
         }
 
-    def to_dataframe(self):
-        import pandas as pd
 
-        return pd.DataFrame([q.to_dict() for q in self.quarter_results])
+def _ranks(values: Sequence[float]) -> list[float]:
+    """1-based ascending ranks, ties averaged (the standard mid-rank
+    convention) -- shared by :func:`spearman_correlation` and
+    :func:`roc_auc`, both of which are rank-based statistics."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg_rank = (i + j) / 2 + 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg_rank
+        i = j + 1
+    return ranks
 
 
-def _compute_run_identity(
-    periods: Sequence[BacktestPeriod],
-    config: MultiFactorRankingBacktestConfig,
-    dependencies: MultiFactorRankingBacktestDependencies,
-) -> str:
-    return compute_config_identity(
-        {
-            "strategy_id": STRATEGY_ID,
-            "strategy_version": STRATEGY_VERSION,
-            "feature_schema_version": FEATURE_SCHEMA_VERSION,
-            "config_identity": config.identity(),
-            "period_identities": [p.identity() for p in periods],
-            "universe": sorted(str(i) for i in dependencies.universe),
-            "benchmark_instrument": str(dependencies.benchmark_instrument_id),
-        }
+def spearman_correlation(x: Sequence[float], y: Sequence[float]) -> float | None:
+    """Spearman rank correlation between ``x`` and ``y``.
+
+    Ties are averaged (the standard mid-rank convention). Returns
+    ``None`` (never a fabricated 0.0) when there are fewer than 2 pairs,
+    or when either series has zero variance in rank (every value tied --
+    correlation is undefined, not zero).
+    """
+    n = len(x)
+    if n != len(y):
+        raise ValueError(f"x and y must be the same length, got {n} and {len(y)}")
+    if n < 2:
+        return None
+
+    rx = _ranks(list(x))
+    ry = _ranks(list(y))
+    mean_rx = sum(rx) / n
+    mean_ry = sum(ry) / n
+    cov = sum((a - mean_rx) * (b - mean_ry) for a, b in zip(rx, ry))
+    var_x = sum((a - mean_rx) ** 2 for a in rx)
+    var_y = sum((b - mean_ry) ** 2 for b in ry)
+    if var_x == 0 or var_y == 0:
+        return None
+    return cov / (var_x**0.5 * var_y**0.5)
+
+
+def decile_spread(score_return_pairs: Sequence[tuple[float, float]]) -> float | None:
+    """Top-decile mean forward return minus bottom-decile mean forward
+    return, ``score_return_pairs`` sorted descending by score first.
+
+    Purely descriptive analytics about the ranking's quality -- never
+    implies capital is deployed long the top decile / short the bottom
+    one. Returns ``None`` if there are fewer than 10 pairs (deciles would
+    be degenerate).
+    """
+    n = len(score_return_pairs)
+    if n < 10:
+        return None
+    ordered = sorted(score_return_pairs, key=lambda pair: -pair[0])
+    decile_size = n // 10
+    top = ordered[:decile_size]
+    bottom = ordered[-decile_size:]
+    top_mean = statistics.mean(r for _, r in top)
+    bottom_mean = statistics.mean(r for _, r in bottom)
+    return top_mean - bottom_mean
+
+
+def roc_auc(labels: Sequence[int], scores: Sequence[float]) -> float | None:
+    """ROC-AUC via the Mann-Whitney U / rank-sum formula: the probability
+    that a random positive-labeled (``1``) instance is scored higher than
+    a random negative-labeled (``0``) instance (a tie counts as 0.5).
+
+    Unlike IC (which measures rank-correlation against the *continuous*
+    forward return), this measures discrimination against the same
+    *binary* win/loss label the model is trained on (``labeling.py``'s
+    top-``n_winners`` global label) -- a direct read of how well the
+    model's own training objective is being achieved, not a proxy for it.
+
+    Returns ``None`` (never a fabricated 0.5) when ``labels`` contains no
+    positives or no negatives -- AUC is undefined, not "average," when
+    one class is entirely absent, exactly as :func:`spearman_correlation`
+    returns ``None`` rather than 0.0 for a degenerate input.
+    """
+    n = len(labels)
+    if n != len(scores):
+        raise ValueError(f"labels and scores must be the same length, got {n} and {len(scores)}")
+    if any(label not in (0, 1) for label in labels):
+        raise ValueError("roc_auc requires binary labels (0 or 1)")
+
+    n_pos = sum(1 for label in labels if label == 1)
+    n_neg = n - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return None
+
+    ranks = _ranks(list(scores))
+    positive_rank_sum = sum(rank for label, rank in zip(labels, ranks) if label == 1)
+    return (positive_rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+def _label_prior_cycle(
+    cycle: EvaluationCycle,
+    next_cycle: EvaluationCycle,
+    observations,
+    prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
+    n_winners: int,
+) -> tuple[LabeledObservation, ...]:
+    exit_cutoff = datetime.combine(next_cycle.quarter_start, time.min)
+    outcomes = [
+        build_forward_return_outcome(
+            obs.instrument_id, cycle.quarter_start, obs.feature_timestamp,
+            next_cycle.quarter_start, prices_by_instrument.get(obs.instrument_id, ()), exit_cutoff,
+        )
+        for obs in observations
+    ]
+    labeling = assign_quarterly_labels(outcomes, cycle.quarter_start, n_winners=n_winners)
+    label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
+    return tuple(
+        LabeledObservation(obs, label_by_id[obs.instrument_id], exit_cutoff)
+        for obs in observations
+        if obs.instrument_id in label_by_id
     )
 
 
-def _build_labeled_quarters(
-    periods: Sequence[BacktestPeriod],
-    dependencies: MultiFactorRankingBacktestDependencies,
-    n_winners: int,
-) -> dict[date, list[LabeledObservation]]:
-    """Compute every period's own forward-return outcomes and quarterly labels once,
-    upfront -- pure historical fact, independent of which quarter later trains on it."""
-    labeled: dict[date, list[LabeledObservation]] = {}
-    for period in periods:
-        observations = dependencies.feature_observation_source(period.quarter_end)
-        outcomes = [
-            build_forward_return_outcome(
-                obs.instrument_id, period.quarter_end, obs.feature_timestamp,
-                period.exit_timestamp.date(), dependencies.price_source.get(obs.instrument_id, ()),
-                period.exit_timestamp,
-            )
-            for obs in observations
-        ]
-        labeling = assign_quarterly_labels(outcomes, period.quarter_end, n_winners=n_winners)
-        label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
-        labeled[period.quarter_end] = [
-            LabeledObservation(obs, label_by_id[obs.instrument_id], period.label_availability_cutoff)
-            for obs in observations
-        ]
-    return labeled
+def build_feature_results(
+    *,
+    config: MultiFactorRankingMLConfig,
+    universe: Sequence[InstrumentId],
+    fundamentals_by_instrument: Mapping[InstrumentId, Sequence[FundamentalsFeatureRecord]],
+    sector_encoder: SectorEncoder,
+    cycles: Sequence[EvaluationCycle],
+    macro_lookup: MacroSeriesLookup | None = None,
+) -> dict[date, FeaturePipelineResult]:
+    """Build every cycle's :class:`FeaturePipelineResult`, keyed by ``quarter_start``.
 
-
-def run_multi_factor_ranking_backtest(
-    periods: Sequence[BacktestPeriod],
-    dependencies: MultiFactorRankingBacktestDependencies,
-    config: MultiFactorRankingBacktestConfig | None = None,
-) -> BacktestResult:
-    """Run the standalone Multi-Factor Ranking ML backtest over ``periods``, in order.
-
-    For each period: build/score via Stage 6, decide via Stage 5, then
-    resolve positions/benchmark and compute the period's return. A model
-    is retrained from scratch for every period (never reused across
-    quarters) — the per-period fitted estimator lives only inside that
-    period's ``TrainingResult`` momentarily and is never carried into a
-    later period's training call.
-
-    Exactly one piece of state crosses quarter boundaries:
-    ``carried_reference_ratio``, the ``deployable_pct / sum(scores)``
-    ratio recorded by the most recent *full-quota* quarter, which a later
-    partial-fill quarter sizes its few picks against (see
-    ``strategy.MultiFactorRankingMLStrategy``). It is deliberately not
-    overwritten by a partial-fill quarter's ``None``, so "most recent
-    full-quota quarter" is preserved across any number of intervening
-    thin quarters. Nothing else — no model, no score, no position — is
-    carried forward.
+    Independent of ``config.ml_train_years``/``config.n_winners`` and of
+    which estimator will be used -- feature construction only depends on
+    each cycle's own point-in-time cutoff. Callers sweeping several
+    ``ml_train_years`` values (or several estimator configs) over the
+    *same* universe/cycles/data should build this once and pass it to
+    every :func:`run_ic_backtest` call via its ``feature_results``
+    parameter, rather than paying this cost again per sweep point --
+    this is real, expensive, per-instrument point-in-time selection work
+    across the whole universe, not a cheap lookup.
     """
-    config = config or MultiFactorRankingBacktestConfig()
-    strategy_config = config.strategy_config
-    labeled_quarters = _build_labeled_quarters(periods, dependencies, strategy_config.n_winners)
-    strategy = MultiFactorRankingMLStrategy()
+    feature_results: dict[date, FeaturePipelineResult] = {}
+    for cycle in cycles:
+        feature_results[cycle.quarter_start] = run_feature_pipeline(
+            config=config, sector_encoder=sector_encoder, universe=universe,
+            quarter_start=cycle.quarter_start, cutoff=cycle.cutoff,
+            fundamentals_by_instrument=fundamentals_by_instrument, macro_lookup=macro_lookup,
+        )
+    return feature_results
 
-    quarter_results: list[BacktestQuarterResult] = []
-    run_audit = AuditTrail()
-    carried_reference_ratio: float | None = None
 
-    for period in periods:
-        target_obs = dependencies.feature_observation_source(period.quarter_end)
+def build_labeled_quarters(
+    *,
+    cycles: Sequence[EvaluationCycle],
+    feature_results: Mapping[date, FeaturePipelineResult],
+    prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
+    n_winners: int,
+) -> dict[date, tuple[LabeledObservation, ...]]:
+    """Every cycle-but-the-last's realized top-``n_winners`` label, keyed by ``quarter_start``.
 
-        dataset = build_training_dataset(
-            period.quarter_end, period.training_cutoff, labeled_quarters,
-            strategy_id=STRATEGY_ID, feature_schema_version=FEATURE_SCHEMA_VERSION,
-            ml_train_years=strategy_config.ml_train_years,
-            model_config_identity=strategy_config.model.identity(),
+    Independent of ``config.ml_train_years`` -- a cycle's label (whether
+    it was one of that quarter's top ``n_winners`` by realized forward
+    return) is a pure function of that cycle, its next cycle, and prices,
+    never of which later cycle is currently training or how far back its
+    training window reaches. Callers sweeping several ``ml_train_years``
+    values over the same ``feature_results``/prices/``n_winners`` should
+    build this once and pass it to every :func:`run_ic_backtest` call via
+    its ``labeled_by_quarter`` parameter.
+    """
+    return {
+        cycles[i].quarter_start: _label_prior_cycle(
+            cycles[i], cycles[i + 1], feature_results[cycles[i].quarter_start].observations,
+            prices_by_instrument, n_winners,
+        )
+        for i in range(len(cycles) - 1)
+    }
+
+
+def run_ic_backtest(
+    *,
+    config: MultiFactorRankingMLConfig,
+    universe: Sequence[InstrumentId],
+    fundamentals_by_instrument: Mapping[InstrumentId, Sequence[FundamentalsFeatureRecord]],
+    prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
+    sector_encoder: SectorEncoder,
+    cycles: Sequence[EvaluationCycle],
+    estimator_factory: Callable[..., tuple[Estimator, EstimatorBuildInfo]],
+    macro_lookup: MacroSeriesLookup | None = None,
+    min_scored_count: int = 30,
+    feature_results: dict[date, FeaturePipelineResult] | None = None,
+    labeled_by_quarter: Mapping[date, tuple[LabeledObservation, ...]] | None = None,
+) -> ICBacktestResult:
+    """Run the full IC backtest across ``cycles`` (ascending chronological order).
+
+    The last cycle in ``cycles`` never produces a measured IC (there is
+    no next cycle to realize a forward return against) -- it still
+    appears in ``cycle_results`` with ``ic=None``, so a caller always sees
+    every requested cycle, not a silently shorter list.
+
+    ``feature_results``/``labeled_by_quarter`` are computed internally
+    (via :func:`build_feature_results`/:func:`build_labeled_quarters`)
+    when omitted -- the default, and what every existing caller gets.
+    Pass them explicitly (pre-built once, e.g. by a training-window
+    sweep script trying several ``config.ml_train_years`` values) to
+    skip rebuilding this ``ml_train_years``-independent work on every
+    call; the caller is responsible for having built them with a
+    matching ``n_winners``/universe/cycles, since this function has no
+    way to detect a mismatch.
+    """
+    if len(cycles) < 2:
+        raise ValueError("run_ic_backtest requires at least 2 cycles (the last has no next cycle to score against)")
+
+    audit = AuditTrail()
+    if feature_results is None:
+        feature_results = build_feature_results(
+            config=config, universe=universe, fundamentals_by_instrument=fundamentals_by_instrument,
+            sector_encoder=sector_encoder, cycles=cycles, macro_lookup=macro_lookup,
+        )
+    if labeled_by_quarter is None:
+        labeled_by_quarter = build_labeled_quarters(
+            cycles=cycles, feature_results=feature_results,
+            prices_by_instrument=prices_by_instrument, n_winners=config.n_winners,
+        )
+    cycle_results: list[RankingCycleResult] = []
+
+    for i, cycle in enumerate(cycles):
+        training_cutoff = datetime.combine(cycle.cutoff, time.min)
+        # Safe to hand the whole precomputed dict to every cycle here (even
+        # one built for the entire range, or one containing a quarter at/
+        # after this cycle's own target) -- build_training_dataset itself
+        # excludes any quarter with quarter_end >= target_quarter_end, so a
+        # cycle can never see its own or a later quarter's label regardless
+        # of what this dict happens to contain.
+        dataset: TrainingDatasetResult = build_training_dataset(
+            cycle.quarter_start, training_cutoff, labeled_by_quarter,
+            strategy_id=config.strategy_id, feature_schema_version=FEATURE_SCHEMA_VERSION,
+            ml_train_years=config.ml_train_years, model_config_identity=config.model.identity(),
         )
         eligibility = check_training_eligibility(
-            dataset, min_train_quarters=strategy_config.min_train_quarters,
-            n_winners=strategy_config.n_winners,
+            dataset, min_train_quarters=config.min_train_quarters, n_winners=config.n_winners
         )
-        if dependencies.model_cache_root is not None:
-            training_result = train_model_cached(
-                dataset, eligibility, strategy_config.model, dependencies.estimator_factory,
-                strategy_id=STRATEGY_ID, strategy_version=STRATEGY_VERSION,
-                cache_root=dependencies.model_cache_root,
-            )
-        else:
-            training_result = train_model(
-                dataset, eligibility, strategy_config.model, dependencies.estimator_factory,
-                strategy_id=STRATEGY_ID, strategy_version=STRATEGY_VERSION,
-            )
+        training_result = train_model(
+            dataset, eligibility, config.model, estimator_factory,
+            strategy_id=config.strategy_id, strategy_version=STRATEGY_VERSION,
+        )
 
         if training_result.state != TrainingState.TRAINED:
-            quarter_results.append(
-                BacktestQuarterResult(
-                    period=period, outcome_type=QuarterOutcomeType.SKIPPED,
-                    training_state=training_result.state, model_identity=None,
-                    scoring_result=None, strategy_result=None, positions=(), period_return=None,
-                    benchmark=None, benchmark_return=None, alpha=None, cash_weight=0.0,
+            cycle_results.append(
+                RankingCycleResult(
+                    cycle=cycle, training_state=training_result.state, model_identity=None,
+                    scoring_result=None, decision_summary=None, ic=None, decile_spread=None, auc=None,
+                    ranked_count=0, scored_for_ic_count=0, scored_for_auc_count=0,
                     warnings=(f"training skipped: {training_result.state.value}",),
-                    rejection_reasons=tuple(eligibility.reasons),
-                    audit_trail=training_result.audit_trail,
                 )
             )
             continue
 
+        current_observations = feature_results[cycle.quarter_start].observations
         scoring_result = score_observations(
-            training_result.fitted_estimator, training_result.model_identity, target_obs,
-            period.evaluation_timestamp, config_identity=strategy_config.identity(),
+            training_result.fitted_estimator, training_result.model_identity, current_observations,
+            training_cutoff, config_identity=config.identity(),
         )
 
-        benchmark_prices = dependencies.price_source.get(dependencies.benchmark_instrument_id, ())
-
-        inputs = MultiFactorRankingEvaluationInputs(
-            config=strategy_config, scored_candidates=scoring_result.scored_candidates,
-            fallback_statistics=dependencies.fallback_statistics_source(period),
-            previous_reference_score_to_weight_ratio=carried_reference_ratio,
+        eval_context = StrategyEvaluationContext(
+            strategy_id=config.strategy_id, evaluation_timestamp=training_cutoff, data_cutoff=training_cutoff,
+            capital_budget_pct=0.0,
+            strategy_config=MultiFactorRankingEvaluationInputs(
+                config=config, scored_candidates=scoring_result.scored_candidates,
+            ),
         )
-        context = StrategyEvaluationContext(
-            strategy_id=STRATEGY_ID, evaluation_timestamp=period.evaluation_timestamp,
-            data_cutoff=period.evaluation_timestamp, capital_budget_pct=config.strategy_budget_pct,
-            strategy_config=inputs,
-        )
-        strategy_result = strategy.evaluate(context)
+        strategy_result = MultiFactorRankingMLStrategy().evaluate(eval_context)
+        summary: MultiFactorRankingDecisionSummary = strategy_result.state_update
 
-        # Only a full-quota quarter produces a new reference ratio; every
-        # other outcome leaves it None, which must NOT clear the carried
-        # value -- otherwise a single thin quarter would erase the
-        # conviction level the next thin quarter needs.
-        new_reference = getattr(strategy_result.state_update, "reference_score_to_weight_ratio", None)
-        if new_reference is not None:
-            carried_reference_ratio = new_reference
+        ic, spread, scored_for_ic = None, None, 0
+        auc, scored_for_auc = None, 0
+        if i + 1 < len(cycles):
+            next_cycle = cycles[i + 1]
+            exit_cutoff = datetime.combine(next_cycle.quarter_start, time.min)
+            outcomes: list[ForwardReturnOutcome] = []
+            score_by_instrument: dict[InstrumentId, float] = {}
+            pairs: list[tuple[float, float]] = []
+            for ranked in summary.ranked_candidates:
+                outcome: ForwardReturnOutcome = build_forward_return_outcome(
+                    ranked.instrument_id, cycle.quarter_start, cycle.quarter_start,
+                    next_cycle.quarter_start, prices_by_instrument.get(ranked.instrument_id, ()), exit_cutoff,
+                )
+                outcomes.append(outcome)
+                score_by_instrument[ranked.instrument_id] = ranked.score
+                if outcome.clipped_return is not None:
+                    pairs.append((ranked.score, outcome.clipped_return))
+            scored_for_ic = len(pairs)
+            if pairs:
+                ic = spearman_correlation([p[0] for p in pairs], [p[1] for p in pairs])
+                spread = decile_spread(pairs)
 
-        positions = tuple(
-            resolve_position(
-                rec, dependencies.price_source.get(rec.instrument_id, ()),
-                period.entry_timestamp.date(), period.exit_timestamp.date(),
-                config.price_policy, period.exit_timestamp, dependencies.trading_calendar,
-                return_cap=config.instrument_return_cap,
+            # Same binary win/loss label the model is trained on
+            # (labeling.py's global top-n_winners rule), applied to this
+            # cycle's own realized outcomes -- AUC measures how well the
+            # model's own training objective is being achieved, a direct
+            # complement to IC's continuous-return rank-correlation.
+            #
+            # Unlike training (where an uncomputable return is deliberately
+            # labeled 0 -- see labeling.py), this evaluation excludes those
+            # instruments entirely rather than counting them as confirmed
+            # negatives: we have no real evidence they underperformed, only
+            # that we don't know what they did, and treating "unknown" as
+            # "lost" would bias AUC. This mirrors IC's own `pairs` filter
+            # above, which excludes the same instruments for the same reason.
+            labeling = assign_quarterly_labels(outcomes, cycle.quarter_start, n_winners=config.n_winners)
+            label_pairs = [
+                (assignment.label, score_by_instrument[assignment.instrument_id])
+                for assignment in labeling.assignments
+                if assignment.clipped_return is not None and assignment.instrument_id in score_by_instrument
+            ]
+            scored_for_auc = len(label_pairs)
+            if label_pairs:
+                auc = roc_auc([p[0] for p in label_pairs], [p[1] for p in label_pairs])
+
+        cycle_results.append(
+            RankingCycleResult(
+                cycle=cycle, training_state=training_result.state, model_identity=training_result.model_identity,
+                scoring_result=scoring_result, decision_summary=summary, ic=ic, decile_spread=spread, auc=auc,
+                ranked_count=len(summary.ranked_candidates), scored_for_ic_count=scored_for_ic,
+                scored_for_auc_count=scored_for_auc,
             )
-            for rec in strategy_result.recommendations
-        )
-        cash_weight = max(0.0, 1.0 - strategy_result.capital_requested_pct)
-        # positions is empty for any status with no recommendations (cash-like
-        # outcomes), in which case this naturally reduces to cash_weight * 0.0.
-        period_return = compute_period_return(positions, cash_weight)
-
-        benchmark = resolve_benchmark(
-            dependencies.benchmark_instrument_id, benchmark_prices,
-            period.entry_timestamp.date(), period.exit_timestamp.date(),
-            config.price_policy, period.exit_timestamp, dependencies.trading_calendar,
-        )
-        benchmark_return = benchmark.raw_return
-        alpha = (period_return - benchmark_return) if benchmark_return is not None else None
-
-        if strategy_result.status == StrategyStatus.OK:
-            outcome_type = QuarterOutcomeType.PRIMARY
-        elif strategy_result.status == StrategyStatus.FALLBACK:
-            outcome_type = QuarterOutcomeType.FALLBACK
-        else:
-            outcome_type = QuarterOutcomeType.CASH
-            period_return = 0.0
-            cash_weight = 1.0
-
-        quarter_results.append(
-            BacktestQuarterResult(
-                period=period, outcome_type=outcome_type, training_state=training_result.state,
-                model_identity=training_result.model_identity, scoring_result=scoring_result,
-                strategy_result=strategy_result, positions=positions, period_return=period_return,
-                benchmark=benchmark, benchmark_return=benchmark_return, alpha=alpha,
-                cash_weight=cash_weight, warnings=strategy_result.warnings,
-                rejection_reasons=strategy_result.rejection_reasons,
-                audit_trail=strategy_result.audit_trail,
-            )
         )
 
-    run_audit = run_audit.append(
+    audit = audit.append(
         AuditRecord(
-            stage="backtest_run", message=f"completed {len(quarter_results)} period(s)",
-            timestamp=periods[-1].evaluation_timestamp if periods else datetime.min,
+            stage="ic_backtest", message=f"{len(cycle_results)} cycle(s) processed",
+            timestamp=datetime.combine(cycles[-1].quarter_start, time.min),
         )
     )
-    return BacktestResult(
-        strategy_id=STRATEGY_ID, strategy_version=STRATEGY_VERSION, config_identity=config.identity(),
-        backtest_start=periods[0].quarter_end if periods else date.min,
-        backtest_end=periods[-1].quarter_end if periods else date.min,
-        quarter_results=tuple(quarter_results),
-        run_identity=_compute_run_identity(periods, config, dependencies),
-        warnings=(), audit_trail=run_audit,
+
+    run_identity = compute_config_identity(
+        {"config_identity": config.identity(), "cycles": [c.quarter_start.isoformat() for c in cycles]}
+    )
+    return ICBacktestResult(
+        strategy_id=config.strategy_id, strategy_version=STRATEGY_VERSION, config_identity=config.identity(),
+        cycle_results=tuple(cycle_results), run_identity=run_identity, audit_trail=audit,
+        min_scored_count=min_scored_count,
     )

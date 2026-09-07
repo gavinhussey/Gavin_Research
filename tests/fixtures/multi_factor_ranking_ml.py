@@ -9,10 +9,10 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from atlas_quant.data.point_in_time import ListTradingCalendar
-from atlas_quant.data.records import DailyPriceObservation, FilingFundamentals, SectorRecord
+from atlas_quant.data.records import DailyPriceObservation, SectorRecord
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
-from atlas_quant.strategies.multi_factor_ranking_ml.fallback_domain import FallbackAssetStatistics
+from atlas_quant.strategies.multi_factor_ranking_ml.production.normalization import FundamentalsFeatureRecord
 from atlas_quant.strategies.multi_factor_ranking_ml.scoring_domain import ScoredCandidate
 
 
@@ -34,70 +34,55 @@ def weekday_calendar(start: date, end: date) -> ListTradingCalendar:
     return ListTradingCalendar(tuple(days))
 
 
-def make_filing(
+def make_fundamentals_row(
     *,
     instrument_id: InstrumentId,
     quarter_end: date,
     fiscal_period: str,
-    filed_days_after_quarter_end: int = 30,
-    revenue: float | None = 100.0,
-    gross_profit: float | None = 40.0,
-    operating_income: float | None = 15.0,
-    net_income: float | None = 10.0,
-    diluted_eps: float | None = 1.0,
-    stockholders_equity: float | None = 500.0,
-    operating_cash_flow: float | None = 20.0,
-    capital_expenditure: float | None = 5.0,
-    accession_number: str | None = None,
+    filed_days_after_quarter_end: int = 45,
+    features: dict[str, float | None] | None = None,
+    gics_sector: str | None = "Information Technology",
     filed_at: datetime | None = None,
-) -> FilingFundamentals:
+    filed_at_is_estimated: bool = False,
+) -> FundamentalsFeatureRecord:
     resolved_filed_at = filed_at or (
         datetime(quarter_end.year, quarter_end.month, quarter_end.day)
         + timedelta(days=filed_days_after_quarter_end)
     )
-    return FilingFundamentals(
+    return FundamentalsFeatureRecord(
         instrument_id=instrument_id,
         fiscal_period=fiscal_period,
         fiscal_year=quarter_end.year,
         quarter_end=quarter_end,
         filed_at=resolved_filed_at,
-        revenue=revenue,
-        gross_profit=gross_profit,
-        operating_income=operating_income,
-        net_income=net_income,
-        diluted_eps=diluted_eps,
-        stockholders_equity=stockholders_equity,
-        operating_cash_flow=operating_cash_flow,
-        capital_expenditure=capital_expenditure,
+        filed_at_is_estimated=filed_at_is_estimated,
+        gics_sector=gics_sector,
+        features=dict(features) if features is not None else {"revenue_qoq_growth": 0.05, "beta": 1.0},
         provenance=provenance(resolved_filed_at),
-        accession_number=accession_number,
     )
 
 
-def make_quarterly_filings(
+def make_quarterly_fundamentals(
     instrument_id: InstrumentId,
     quarter_ends: list[date],
     *,
-    revenue_start: float = 100.0,
-    revenue_step: float = 10.0,
-) -> list[FilingFundamentals]:
-    filings = []
-    revenue = revenue_start
-    for i, quarter_end in enumerate(quarter_ends):
-        filings.append(
-            make_filing(
+    feature_name: str = "revenue_qoq_growth",
+    value_start: float = 0.05,
+    value_step: float = 0.01,
+) -> list[FundamentalsFeatureRecord]:
+    rows = []
+    value = value_start
+    for quarter_end in quarter_ends:
+        rows.append(
+            make_fundamentals_row(
                 instrument_id=instrument_id,
                 quarter_end=quarter_end,
-                fiscal_period=f"Q{(quarter_end.month - 1) // 3 + 1}",
-                revenue=revenue,
-                gross_profit=revenue * 0.4,
-                operating_income=revenue * 0.15,
-                net_income=revenue * 0.10,
-                diluted_eps=1.0 + i * 0.05,
+                fiscal_period=f"{quarter_end.year} Q{(quarter_end.month - 1) // 3 + 1}",
+                features={feature_name: value},
             )
         )
-        revenue += revenue_step
-    return filings
+        value += value_step
+    return rows
 
 
 def make_price_series(
@@ -190,22 +175,6 @@ def make_scored_candidate(
         strategy_id=strategy_id,
         feature_schema_version=feature_schema_version,
         provenance=provenance(datetime(2026, 1, 1)),
-    )
-
-
-def make_fallback_statistics(
-    symbol: str,
-    quarterly_returns: tuple[float, ...],
-    *,
-    asset_class: AssetClass = AssetClass.ETF,
-    measurement_cutoff: datetime = datetime(2026, 1, 1),
-) -> FallbackAssetStatistics:
-    return FallbackAssetStatistics(
-        instrument_id=instrument(symbol, asset_class),
-        measurement_cutoff=measurement_cutoff,
-        quarterly_returns=quarterly_returns,
-        observation_count=len(quarterly_returns),
-        provenance=provenance(measurement_cutoff),
     )
 
 
@@ -322,30 +291,3 @@ def make_backtest_feature_observation_source(
     return source
 
 
-#: The ETF-sleeve tickers MultiFactorRankingMLConfig defaults to. Kept here so
-#: fixtures and the config can never silently drift apart.
-FALLBACK_TICKERS = ("VOO", "VTI")
-
-
-def make_backtest_fallback_statistics_source(voo_return: float = 0.02, vti_return: float = 0.03):
-    """A fallback_statistics_source covering the default VOO/VTI sleeve."""
-    from atlas_quant.strategies.multi_factor_ranking_ml.fallback_domain import FallbackAssetStatistics
-
-    voo = instrument("VOO", AssetClass.ETF)
-    vti = instrument("VTI", AssetClass.ETF)
-
-    def source(period) -> tuple:
-        return (
-            FallbackAssetStatistics(
-                instrument_id=voo, measurement_cutoff=period.evaluation_timestamp,
-                quarterly_returns=(voo_return,) * 12, observation_count=12,
-                provenance=provenance(period.evaluation_timestamp),
-            ),
-            FallbackAssetStatistics(
-                instrument_id=vti, measurement_cutoff=period.evaluation_timestamp,
-                quarterly_returns=(vti_return,) * 12, observation_count=12,
-                provenance=provenance(period.evaluation_timestamp),
-            ),
-        )
-
-    return source

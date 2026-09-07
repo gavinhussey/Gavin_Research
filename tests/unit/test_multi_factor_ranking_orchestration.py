@@ -1,244 +1,146 @@
-"""Unit tests for the top-level Multi-Factor Ranking ML production orchestration.
+from __future__ import annotations
 
-Dependency availability is monkeypatched throughout rather than assumed
-from the ambient environment (which packages happen to be installed has
-changed across sessions of this project before) -- both the
-BLOCKED_MISSING_DEPENDENCY report and the "dependencies available" path
-(full Stage 3/6/7/8 wiring with a fake estimator, test-only, never
-production code) are exercised this way.
-"""
+from datetime import date, datetime
 
-from datetime import date, datetime, timedelta
+import pytest
 
-from atlas_quant.backtest.clock import generate_quarterly_periods
-from atlas_quant.backtest.multi_factor_ranking_runner import MultiFactorRankingBacktestConfig
-from atlas_quant.data.point_in_time import ListTradingCalendar
-from atlas_quant.data.records import DailyPriceObservation
-from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.strategies.multi_factor_ranking_ml.config import MultiFactorRankingMLConfig
-from atlas_quant.strategies.multi_factor_ranking_ml.production import orchestration as orchestration_module
-from atlas_quant.strategies.multi_factor_ranking_ml.production.data_provenance import DataProvenanceManifest
-from atlas_quant.strategies.multi_factor_ranking_ml.production.orchestration import (
-    ProductionRunInputs,
-    ProductionRunState,
-    run_multi_factor_ranking_production_backtest,
+from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import (
+    EvaluationCycle,
+    quarterly_evaluation_cycles,
 )
-from atlas_quant.strategies.multi_factor_ranking_ml.sector_encoding import SectorEncoder
+from atlas_quant.strategies.multi_factor_ranking_ml.model_training import TrainingState
+from atlas_quant.strategies.multi_factor_ranking_ml.production import orchestration
+from atlas_quant.strategies.multi_factor_ranking_ml.production.decision_log import read_decision
 
-from tests.fixtures.multi_factor_ranking_ml import (
-    FakeEstimator,
-    make_quarterly_filings,
-    make_sector_record,
-    provenance,
-)
+from fixtures.multi_factor_ranking_ml import FakeEstimator, instrument, make_daily_series
 
-_AAA = InstrumentId(symbol="AAA", asset_class=AssetClass.EQUITY)
-_BBB = InstrumentId(symbol="BBB", asset_class=AssetClass.EQUITY)
-_SPY = InstrumentId(symbol="SPY", asset_class=AssetClass.EQUITY)
-_VOO = InstrumentId(symbol="VOO", asset_class=AssetClass.EQUITY)
-_VTI = InstrumentId(symbol="VTI", asset_class=AssetClass.EQUITY)
-_BENCHMARK = InstrumentId(symbol="SPY", asset_class=AssetClass.EQUITY)
-
-_QUARTER_ENDS = [date(2022, 3, 31), date(2022, 6, 30), date(2022, 9, 30), date(2022, 12, 31), date(2023, 3, 31)]
-_TARGET_QUARTER_END = date(2023, 3, 31)
+pytestmark = pytest.mark.filterwarnings("ignore")
 
 
-def _daily_prices(instrument_id: InstrumentId) -> list[DailyPriceObservation]:
-    prices = []
-    current = date(2019, 1, 1)
-    price = 100.0
-    while current <= date(2023, 6, 30):
-        if current.weekday() < 5:
-            prices.append(
-                DailyPriceObservation(
-                    instrument_id=instrument_id, trading_date=current, close=price,
-                    price_convention="split_dividend_adjusted",
-                    provenance=provenance(datetime(current.year, current.month, current.day)),
-                )
-            )
-            price *= 1.0003
-        current += timedelta(days=1)
-    return prices
-
-
-def _manifest() -> DataProvenanceManifest:
-    return DataProvenanceManifest(
-        dataset_identity_label="test-fixture", provider_name="fixture", provider_version=None,
-        retrieval_date=date(2023, 6, 1), data_cutoff=datetime(2023, 6, 1),
-        universe_identity="test-universe", universe_construction_method="fixture",
-        survivorship_biased=True, filing_source="fixture", filing_point_in_time_status="fixture",
-        price_source="fixture", price_convention="split_dividend_adjusted", sector_source="fixture",
-        sector_override_identity="none", trading_calendar_source="fixture",
-        coverage_start=date(2019, 1, 1), coverage_end=date(2023, 6, 30),
-        row_counts={}, missing_data_summary={}, duplicate_summary={},
-        corporate_action_treatment="none", delisting_treatment="none", data_corrections=(),
-        source_file_hashes={}, strategy_config_identity="x",
-        git_commit=None,
-    )
-
-
-def _build_inputs() -> ProductionRunInputs:
-    config = MultiFactorRankingBacktestConfig(strategy_config=MultiFactorRankingMLConfig())
-    calendar = ListTradingCalendar(tuple(p.trading_date for p in _daily_prices(_AAA)))
-    sector_encoder = SectorEncoder()
-    universe = (_AAA, _BBB)
-    filings_by_instrument = {
-        _AAA: make_quarterly_filings(_AAA, _QUARTER_ENDS),
-        _BBB: make_quarterly_filings(_BBB, _QUARTER_ENDS, revenue_start=200.0),
-    }
-    prices_by_instrument = {
-        _AAA: _daily_prices(_AAA), _BBB: _daily_prices(_BBB),
-        _SPY: _daily_prices(_SPY), _VOO: _daily_prices(_VOO), _VTI: _daily_prices(_VTI),
-    }
-    sector_by_instrument = {
-        _AAA: (make_sector_record(_AAA, "Technology", datetime(2023, 1, 1)),),
-        _BBB: (make_sector_record(_BBB, "Healthcare", datetime(2023, 1, 1)),),
-    }
-    periods = generate_quarterly_periods(_TARGET_QUARTER_END, _TARGET_QUARTER_END, earnings_lag_days=config.strategy_config.earnings_lag_days)
-    return ProductionRunInputs(
-        backtest_config=config, periods=periods, universe=universe, benchmark_instrument_id=_BENCHMARK,
-        trading_calendar=calendar, sector_encoder=sector_encoder, filings_by_instrument=filings_by_instrument,
-        prices_by_instrument=prices_by_instrument, sector_by_instrument=sector_by_instrument, manifest=_manifest(),
-    )
-
-
-def _missing_sklearn_only(report):
-    from atlas_quant.dependency_status import DependencyAvailability, DependencyCategory, DependencyStatus
-
-    return (
-        DependencyStatus(
-            "scikit-learn", DependencyCategory.PRODUCTION_DATA,
-            DependencyAvailability.MISSING_REQUIRED_FOR_PRODUCTION_BACKTEST, None, "1.3.0",
-            detail="module 'sklearn' not found",
-        ),
-    )
-
-
-def test_blocked_missing_dependency(monkeypatch):
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", _missing_sklearn_only)
-    result = run_multi_factor_ranking_production_backtest(_build_inputs())
-    assert result.state == ProductionRunState.BLOCKED_MISSING_DEPENDENCY
-    assert result.missing_dependencies
-    assert result.backtest_result is None
-
-
-def test_blocked_invalid_dataset_when_prices_missing(monkeypatch):
-    inputs = _build_inputs()
-    empty_prices = {k: v for k, v in inputs.prices_by_instrument.items() if k not in (_AAA, _BBB)}
-    inputs = ProductionRunInputs(
-        backtest_config=inputs.backtest_config, periods=inputs.periods, universe=inputs.universe,
-        benchmark_instrument_id=inputs.benchmark_instrument_id, trading_calendar=inputs.trading_calendar,
-        sector_encoder=inputs.sector_encoder, filings_by_instrument=inputs.filings_by_instrument,
-        prices_by_instrument=empty_prices, sector_by_instrument=inputs.sector_by_instrument, manifest=inputs.manifest,
-    )
-    # Bypass the dependency gate to reach the validation gate directly.
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
-
-    result = run_multi_factor_ranking_production_backtest(inputs)
-    assert result.state == ProductionRunState.BLOCKED_INVALID_DATASET
-    assert result.validation_summary is not None
-    assert result.validation_summary.has_fatal
-
-
-def test_completes_end_to_end_when_dependencies_available(monkeypatch):
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
-    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
-        FakeEstimator(), _fake_build_info(),
-    ))
-
-    result = run_multi_factor_ranking_production_backtest(_build_inputs())
-    assert result.state in (ProductionRunState.COMPLETED, ProductionRunState.COMPLETED_WITH_WARNINGS)
-    assert result.backtest_result is not None
-    assert result.performance_analysis is not None
-    assert result.performance_analysis.backtest_run_identity == result.backtest_result.run_identity
-
-
-def _fake_build_info():
+def _estimator_factory(*args, **kwargs):
     from atlas_quant.strategies.multi_factor_ranking_ml.estimator import EstimatorBuildInfo
 
-    return EstimatorBuildInfo(estimator_type="FakeEstimator", parameters={}, library="test", library_version=None)
-
-
-def _with_checkpoint_root(inputs: ProductionRunInputs, checkpoint_root) -> ProductionRunInputs:
-    import dataclasses
-
-    return dataclasses.replace(inputs, checkpoint_root=checkpoint_root)
-
-
-def test_model_cache_root_persists_and_reuses_the_fit(monkeypatch, tmp_path):
-    """With model_cache_root set, a second run over the identical inputs
-    must load the persisted fit rather than refit -- proven here by making
-    the second run's estimator explode on ``.fit`` and still succeed."""
-    import dataclasses
-
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
-    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
-        FakeEstimator(), _fake_build_info(),
-    ))
-
-    relaxed_config = MultiFactorRankingBacktestConfig(
-        strategy_config=dataclasses.replace(MultiFactorRankingMLConfig(), min_train_quarters=1, min_positions=1, n_winners=1),
-    )
-    multi_quarter_periods = generate_quarterly_periods(
-        date(2022, 3, 31), _TARGET_QUARTER_END, earnings_lag_days=relaxed_config.strategy_config.earnings_lag_days,
-    )
-    inputs = dataclasses.replace(
-        _build_inputs(), backtest_config=relaxed_config, periods=multi_quarter_periods, model_cache_root=tmp_path,
-    )
-    first = run_multi_factor_ranking_production_backtest(inputs)
-    assert first.state in (ProductionRunState.COMPLETED, ProductionRunState.COMPLETED_WITH_WARNINGS)
-    assert any(tmp_path.glob("*.joblib")), "expected the fitted model to be persisted to model_cache_root"
-
-    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
-        FakeEstimator(fit_error="a genuine refit must never happen on a cache hit"), _fake_build_info(),
-    ))
-    second = run_multi_factor_ranking_production_backtest(inputs)
-    assert second.state in (ProductionRunState.COMPLETED, ProductionRunState.COMPLETED_WITH_WARNINGS)
-    assert second.backtest_result.completed_quarter_count == first.backtest_result.completed_quarter_count
-
-
-def test_checkpoint_manifest_persisted_and_complete_after_run(monkeypatch, tmp_path):
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
-    monkeypatch.setattr(orchestration_module, "build_hgbc_estimator", lambda model_config: (
-        FakeEstimator(), _fake_build_info(),
-    ))
-
-    inputs = _with_checkpoint_root(_build_inputs(), tmp_path)
-    result = run_multi_factor_ranking_production_backtest(inputs)
-
-    assert result.run_manifest is not None
-    from atlas_quant.strategies.multi_factor_ranking_ml.production.checkpoint import (
-        CheckpointName,
-        CheckpointStatus,
-        read_run_manifest,
+    return FakeEstimator(default_score=0.5), EstimatorBuildInfo(
+        estimator_type="FakeEstimator", library="test", library_version=None, parameters={},
     )
 
-    loaded = read_run_manifest(tmp_path, result.run_identity)
-    assert loaded.overall_status == result.state.value
-    assert loaded.checkpoint(CheckpointName.BACKTEST_COMPLETED).status == CheckpointStatus.COMPLETED
-    assert loaded.checkpoint(CheckpointName.FEATURES_BUILT).status == CheckpointStatus.COMPLETED
-    # No report_options supplied -- report/comparison steps are recorded as skipped, not silently omitted.
-    assert loaded.checkpoint(CheckpointName.REPORT_COMPLETED).status == CheckpointStatus.SKIPPED
 
-
-def test_resume_rejects_manifest_with_mismatched_strategy_config_identity(monkeypatch, tmp_path):
-    from atlas_quant.strategies.multi_factor_ranking_ml.production.checkpoint import new_run_manifest, write_run_manifest
-
-    monkeypatch.setattr(orchestration_module, "missing_required_for_production", lambda report: ())
-
-    inputs = _with_checkpoint_root(_build_inputs(), tmp_path)
-    manifest_identity = inputs.manifest.identity()
-    run_identity = orchestration_module._run_identity(inputs, manifest_identity)
-
-    tampered = new_run_manifest(
-        run_identity=run_identity,
-        dataset_manifest_identity=manifest_identity,
-        strategy_config_identity="not-the-real-strategy-config-identity",
-        git_commit=None, dependency_versions={}, run_mode="production",
-        created_at=datetime(2024, 1, 1),
+def _write_fundamentals_quarterly(path, symbols, quarter_ends):
+    header = (
+        "ticker,period_end,fiscal_year,fiscal_quarter,available_date,available_date_is_estimated,"
+        "gics_sector_name,market_cap,consensus_eps_next_q,volatility_30d,analyst_target_price,pe_ratio,"
+        "price_to_book,volatility_63d,volatility_20d,volume,consensus_sales_next_q,price_to_sales,beta,"
+        "analyst_rating,volatility_90d,analyst_eps_num_est,free_cash_flow,operating_margin,net_margin,"
+        "operating_cash_flow_margin,free_cash_flow_margin,revenue_yoy_growth,revenue_qoq_growth,"
+        "operating_income_yoy_growth,operating_income_qoq_growth,net_income_yoy_growth,net_income_qoq_growth,"
+        "diluted_eps_yoy_growth,diluted_eps_qoq_growth,operating_cash_flow_yoy_growth,"
+        "operating_cash_flow_qoq_growth,free_cash_flow_yoy_growth,free_cash_flow_qoq_growth,"
+        "total_assets_yoy_growth,total_assets_qoq_growth,total_debt_yoy_growth,total_debt_qoq_growth,"
+        "stockholders_equity_yoy_growth,stockholders_equity_qoq_growth,diluted_share_count_yoy_growth,"
+        "diluted_share_count_qoq_growth,shares_outstanding_yoy_growth,shares_outstanding_qoq_growth,"
+        "revenue_growth_acceleration,operating_income_growth_acceleration,eps_growth_acceleration,"
+        "operating_cash_flow_growth_acceleration,free_cash_flow_growth_acceleration,"
+        "operating_margin_yoy_change_bps,operating_margin_qoq_change_bps,net_margin_yoy_change_bps,"
+        "net_margin_qoq_change_bps,free_cash_flow_margin_yoy_change_bps,free_cash_flow_margin_qoq_change_bps,"
+        "operating_cash_flow_to_net_income,free_cash_flow_to_net_income,capex_to_revenue,"
+        "capex_to_depreciation,net_debt,adjusted_net_debt,debt_to_equity,debt_to_assets,ROA,ROE\n"
     )
-    write_run_manifest(tmp_path, tampered)
+    lines = [header]
+    for symbol in symbols:
+        for i, quarter_end in enumerate(quarter_ends):
+            available_date = date.fromordinal(quarter_end.toordinal() + 45)
+            values = ",".join(str(0.01 * (i + 1)) for _ in range(63))
+            fiscal_quarter = (quarter_end.month - 1) // 3 + 1
+            lines.append(
+                f"{symbol} UN Equity,{quarter_end.isoformat()},{quarter_end.year},{fiscal_quarter},"
+                f"{available_date.isoformat()},False,Information Technology,{values}\n"
+            )
+    path.write_text("".join(lines))
 
-    result = run_multi_factor_ranking_production_backtest(inputs)
-    assert result.state == ProductionRunState.BLOCKED_IDENTITY_MISMATCH
-    assert "strategy_config_identity" in result.blocked_reason
+
+@pytest.fixture
+def raw_root(tmp_path):
+    symbols = ["AAA", "BBB", "CCC"]
+    quarter_ends = [date(2019, 12, 31), date(2020, 3, 31), date(2020, 6, 30), date(2020, 9, 30)]
+    _write_fundamentals_quarterly(tmp_path / "fundamentals_quarterly.csv", symbols, quarter_ends)
+
+    days = []
+    d = date(2019, 1, 1)
+    while d <= date(2021, 1, 1):
+        if d.weekday() < 5:
+            days.append(d)
+        d = date.fromordinal(d.toordinal() + 1)
+    lines = ["date," + ",".join(f"{s} UN Equity" for s in symbols) + "\n"]
+    for day in days:
+        lines.append(day.isoformat() + "," + ",".join("100.0" for _ in symbols) + "\n")
+    (tmp_path / "Close_Price.csv").write_text("".join(lines))
+    return tmp_path
+
+
+def test_load_raw_data_builds_universe_and_records(raw_root):
+    data = orchestration.load_raw_data(raw_root, price_convention="unadjusted")
+    assert len(data.universe) == 3
+    assert all(len(v) == 4 for v in data.fundamentals_by_instrument.values())
+    assert all(len(v) > 0 for v in data.prices_by_instrument.values())
+
+
+def test_load_raw_data_missing_optional_files_is_not_fatal(tmp_path):
+    _write_fundamentals_quarterly(tmp_path / "fundamentals_quarterly.csv", ["AAA"], [date(2020, 3, 31)])
+    data = orchestration.load_raw_data(tmp_path, price_convention="unadjusted")
+    assert data.prices_by_instrument == {}
+    assert data.macro_lookup.value_as_of("fed_funds_rate", date(2020, 1, 1)) is None
+
+
+def test_most_recent_cycle_picks_last_cycle_on_or_before_as_of():
+    cycle = orchestration.most_recent_cycle(date(2020, 5, 15))
+    assert cycle.quarter_start == date(2020, 4, 1)
+
+
+def test_run_current_ranking_trains_and_records_when_enough_history(raw_root, tmp_path):
+    data = orchestration.load_raw_data(raw_root, price_convention="unadjusted")
+    config = MultiFactorRankingMLConfig(min_train_quarters=1, n_winners=1)
+    cycle = EvaluationCycle(quarter_start=date(2020, 10, 1), cutoff=date(2020, 9, 30))
+    decision_log_root = tmp_path / "decisions"
+
+    result = orchestration.run_current_ranking(
+        config=config, data=data, cycle=cycle, estimator_factory=_estimator_factory,
+        decision_log_root=decision_log_root,
+    )
+
+    assert result.decision_log_entry is not None
+    logged = read_decision(decision_log_root, cycle.quarter_start)
+    assert logged is not None
+    assert logged.quarter_start == cycle.quarter_start
+    assert len(logged.rankings) == len(result.decision_summary.ranked_candidates)
+
+
+def test_run_current_ranking_returns_existing_entry_if_already_decided(raw_root, tmp_path):
+    data = orchestration.load_raw_data(raw_root, price_convention="unadjusted")
+    config = MultiFactorRankingMLConfig(min_train_quarters=1, n_winners=1)
+    cycle = EvaluationCycle(quarter_start=date(2020, 10, 1), cutoff=date(2020, 9, 30))
+    decision_log_root = tmp_path / "decisions"
+
+    first = orchestration.run_current_ranking(
+        config=config, data=data, cycle=cycle, estimator_factory=_estimator_factory,
+        decision_log_root=decision_log_root,
+    )
+    second = orchestration.run_current_ranking(
+        config=config, data=data, cycle=cycle, estimator_factory=_estimator_factory,
+        decision_log_root=decision_log_root,
+    )
+    assert second.decision_log_entry == first.decision_log_entry
+    assert "already decided" in second.warnings[0]
+
+
+def test_run_current_ranking_skips_when_insufficient_training_history(raw_root, tmp_path):
+    data = orchestration.load_raw_data(raw_root, price_convention="unadjusted")
+    config = MultiFactorRankingMLConfig(min_train_quarters=50, n_winners=1)
+    cycle = EvaluationCycle(quarter_start=date(2020, 10, 1), cutoff=date(2020, 9, 30))
+
+    result = orchestration.run_current_ranking(
+        config=config, data=data, cycle=cycle, estimator_factory=_estimator_factory,
+        decision_log_root=tmp_path / "decisions",
+    )
+    assert result.training_state != TrainingState.TRAINED
+    assert result.decision_log_entry is None

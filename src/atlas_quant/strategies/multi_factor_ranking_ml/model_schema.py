@@ -89,6 +89,49 @@ class FeatureMatrix:
         return pd.DataFrame(list(self.rows), columns=list(self.column_names))
 
 
+def non_degenerate_feature_names(matrix: FeatureMatrix) -> tuple[str, ...]:
+    """The subset of ``matrix.column_names`` with at least one non-NaN value
+    across ``matrix.rows``.
+
+    Exists because an entirely-NaN column crashes
+    ``sklearn.ensemble.HistGradientBoostingClassifier.fit`` outright in
+    this platform's pinned sklearn/numpy versions (``ValueError: window
+    shape cannot be larger than input array shape``) rather than being
+    handled the way this model's NaN-native design otherwise assumes --
+    a real library-level edge case, not a semantic choice. A wholly
+    missing column carries no information regardless of whether the fit
+    would tolerate it, so excluding it here is never a loss beyond what
+    was already true.
+
+    Pure function of the matrix's own data -- computable before any fit
+    happens, so :func:`~.model_training.compute_model_identity` can call
+    this too and a model-cache lookup (keyed by identity) still works
+    without fitting first. An empty matrix returns every column name
+    unchanged (there's nothing to detect as degenerate yet).
+    """
+    if not matrix.rows:
+        return matrix.column_names
+    import numpy as np
+
+    all_nan = np.all(np.isnan(matrix.to_numpy()), axis=0)
+    return tuple(name for name, is_all_nan in zip(matrix.column_names, all_nan) if not is_all_nan)
+
+
+def select_feature_columns(matrix: FeatureMatrix, feature_names: Sequence[str]):
+    """``matrix.to_numpy()`` restricted to ``feature_names``' columns, in that order.
+
+    Used to apply the exact same column selection at both training
+    (:func:`~.model_training.train_model`) and scoring
+    (:func:`~.scoring.score_observations`) time -- an estimator fit on a
+    reduced column set must be scored on that identical set, in that
+    identical order, or its predictions are meaningless.
+    """
+    import numpy as np
+
+    indices = [matrix.column_names.index(name) for name in feature_names]
+    return matrix.to_numpy()[:, indices]
+
+
 def build_feature_matrix(
     observations: Sequence[FeatureObservation],
     *,

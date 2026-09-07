@@ -1,9 +1,11 @@
 """Unit tests for Multi-Factor Ranking ML's typed, validated configuration.
 
-Default values are asserted against report_current.html directly (see the
-provenance comments in atlas_quant/strategies/multi_factor_ranking_ml/config.py)
-so a future accidental default change is caught here, not discovered later
-in a backtest discrepancy.
+This is a pure ranking system: no qualification threshold, no position
+sizing/count caps, no capital allocation, no ETF fallback -- see
+MultiFactorRankingMLConfig's docstring for exactly what was deleted and
+why. Defaults are asserted against report_current.html directly where a
+value is still report-sourced (see the provenance comments in
+atlas_quant/strategies/multi_factor_ranking_ml/config.py).
 """
 
 from datetime import date, datetime
@@ -24,24 +26,25 @@ def test_defaults_match_report_current_html():
     config = MultiFactorRankingMLConfig()
     assert config.strategy_id == STRATEGY_ID == "multi_factor_ranking_ml"
     assert config.fcf_mode == "ratio"  # report §3.1 production default
-    assert config.ml_threshold == 0.35  # report §4.3
     assert config.ml_train_years == 3  # report §4.4
     assert config.min_train_quarters == 8  # report §4.4
     assert config.n_winners == 10  # report §4.2
-    assert config.max_positions == 10  # report §5.4
-    # min_positions is a deliberate, disclosed divergence from report §5.4's 3 --
-    # see docs/reproducibility_findings.md and walkforward/multi_factor_ranking_ml/.
-    assert config.min_positions == 6
-    assert config.deployable_pct == 0.95  # report §5.3
     assert config.return_cap == 0.50  # report §5.5
-    assert config.earnings_lag_days == 42  # report §5.5
     assert config.exclude_sectors == ("Materials",)  # report §5.2
-    # A deliberate platform design decision, NOT report-sourced (the report
-    # specified SPY/VGT and an all-or-nothing fallback).
-    assert config.fallback_tickers == ("VOO", "VTI")
-    assert config.fallback_dynamic_weight is True  # report §5.4
-    assert config.fallback_lookback_quarters == 12  # report §5.4
-    assert config.strategy_budget_pct == 1.0  # standalone-backtest default
+
+
+def test_no_qualification_threshold_position_sizing_or_fallback_fields():
+    config = MultiFactorRankingMLConfig()
+    for deleted_field in (
+        "ml_threshold", "min_positions", "max_positions", "deployable_pct",
+        "earnings_lag_days", "fallback_tickers", "fallback_dynamic_weight",
+        "fallback_lookback_quarters", "strategy_budget_pct",
+    ):
+        assert not hasattr(config, deleted_field), (
+            f"MultiFactorRankingMLConfig unexpectedly has {deleted_field!r} -- "
+            "this strategy is a pure ranking system with no qualification/"
+            "sizing/fallback concepts"
+        )
 
 
 def test_default_model_hyperparameters_match_report_4_5():
@@ -56,42 +59,6 @@ def test_default_model_hyperparameters_match_report_4_5():
     assert model.random_state == 42
 
 
-@pytest.mark.parametrize("threshold", [0.0, 1.0, -0.1, 1.5])
-def test_ml_threshold_rejects_out_of_bounds_values(threshold):
-    with pytest.raises(ValueError):
-        MultiFactorRankingMLConfig(ml_threshold=threshold)
-
-
-def test_ml_threshold_accepts_open_interval_boundaries_close_to_edges():
-    MultiFactorRankingMLConfig(ml_threshold=0.001)
-    MultiFactorRankingMLConfig(ml_threshold=0.999)
-
-
-@pytest.mark.parametrize(
-    "min_positions,max_positions",
-    [(0, 10), (11, 10), (-1, 10)],
-)
-def test_position_count_validation_rejects_invalid_combinations(
-    min_positions, max_positions
-):
-    with pytest.raises(ValueError):
-        MultiFactorRankingMLConfig(min_positions=min_positions, max_positions=max_positions)
-
-
-def test_position_count_validation_accepts_equal_min_and_max():
-    MultiFactorRankingMLConfig(min_positions=5, max_positions=5)
-
-
-@pytest.mark.parametrize("pct", [0.0, -0.1, 1.1])
-def test_deployable_pct_rejects_out_of_bounds_values(pct):
-    with pytest.raises(ValueError):
-        MultiFactorRankingMLConfig(deployable_pct=pct)
-
-
-def test_deployable_pct_accepts_full_deployment_boundary():
-    MultiFactorRankingMLConfig(deployable_pct=1.0)
-
-
 @pytest.mark.parametrize("years", [0, -1])
 def test_training_window_validation_rejects_non_positive_years(years):
     with pytest.raises(ValueError):
@@ -102,6 +69,22 @@ def test_training_window_validation_rejects_non_positive_years(years):
 def test_training_window_validation_rejects_non_positive_min_quarters(quarters):
     with pytest.raises(ValueError):
         MultiFactorRankingMLConfig(min_train_quarters=quarters)
+
+
+@pytest.mark.parametrize("winners", [0, -5])
+def test_n_winners_validation_rejects_non_positive_values(winners):
+    with pytest.raises(ValueError):
+        MultiFactorRankingMLConfig(n_winners=winners)
+
+
+@pytest.mark.parametrize("cap", [0.0, -0.1, 1.5])
+def test_return_cap_rejects_out_of_bounds_values(cap):
+    with pytest.raises(ValueError):
+        MultiFactorRankingMLConfig(return_cap=cap)
+
+
+def test_return_cap_accepts_upper_boundary():
+    MultiFactorRankingMLConfig(return_cap=1.0)
 
 
 @pytest.mark.parametrize("mode", ["ratio", "raw"])
@@ -128,16 +111,6 @@ def test_fcf_mode_rejects_unknown_value():
 def test_model_parameter_validation_rejects_invalid_values(field, value):
     with pytest.raises(ValueError):
         MultiFactorRankingModelConfig(**{field: value})
-
-
-def test_strategy_budget_pct_default_is_full_allocation_for_standalone_runs():
-    assert MultiFactorRankingMLConfig().strategy_budget_pct == 1.0
-
-
-@pytest.mark.parametrize("pct", [-0.01, 1.01])
-def test_strategy_budget_pct_rejects_out_of_bounds_values(pct):
-    with pytest.raises(ValueError):
-        MultiFactorRankingMLConfig(strategy_budget_pct=pct)
 
 
 def test_config_is_deterministically_serializable_via_identity():

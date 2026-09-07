@@ -1,15 +1,20 @@
-"""Write-once decision log for multi_factor_ranking_ml's live picks, per quarter.
+"""Write-once decision log for multi_factor_ranking_ml's live rankings, per quarter.
 
-``current-status`` re-derives "what we'd pick for the next quarter" fresh
-on every call, from whatever data is currently acquired -- there is
-otherwise no record of what the system actually said at the time a
-decision was first made, so a later re-run can silently disagree with
-itself. This module gives each quarter exactly one, immutable, recorded
-decision: the first time a quarter's picks are computed, they are locked
-in; every later call reads the same record back rather than recomputing
-it.
+A fresh run of the decision pipeline re-derives "how we'd rank the
+universe today" every time it's called, from whatever data is currently
+acquired -- there is otherwise no record of what the system actually
+said at the time a ranking was first produced, so a later re-run (e.g.
+after new data lands) could silently disagree with itself. This module
+gives each quarterly evaluation cycle exactly one, immutable, recorded
+ranking: the first time a cycle's ranking is computed, it is locked in;
+every later call for that same cycle reads the same record back rather
+than recomputing it.
 
-Format: one JSON file per quarter (keyed by ``quarter_end``), written
+This is a pure ranking system -- an entry records every ranked
+instrument's score and rank, never a target weight/position size (see
+``strategy.py``'s module docstring for what was deleted and why).
+
+Format: one JSON file per quarter (keyed by ``quarter_start``), written
 atomically via the same temp-file-then-``os.replace`` pattern as
 ``checkpoint.py``/``model_store.py``.
 """
@@ -22,11 +27,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Sequence
 
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.serialization import to_jsonable
-from atlas_quant.domain.status import SignalKind
 
 #: Production default decision-log root. Protected by tests/_safety.py's
 #: PROTECTED_PATH_NAMES; every test in this repository uses a pytest
@@ -39,25 +42,24 @@ class DecisionLogCorrupted(Exception):
 
 
 @dataclass(frozen=True, slots=True)
-class DecisionPosition:
-    """One locked-in recommendation, stripped to what identifies a live pick."""
+class DecisionRanking:
+    """One locked-in ranked instrument -- a score and a rank, nothing else."""
 
     instrument_id: InstrumentId
-    role: SignalKind
-    target_weight: float
+    score: float
+    rank: int
 
 
 @dataclass(frozen=True, slots=True)
 class DecisionLogEntry:
-    """One quarter's locked, immutable decision record."""
+    """One quarterly evaluation cycle's locked, immutable ranking record."""
 
-    quarter_end: date
-    entry_timestamp: datetime
-    exit_timestamp: datetime
+    quarter_start: date
+    cutoff: date
     decided_at: datetime
-    outcome_type: str
+    outcome: str
     model_identity_hash: str | None
-    positions: tuple[DecisionPosition, ...] = field(default_factory=tuple)
+    rankings: tuple[DecisionRanking, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         return to_jsonable(self)
@@ -65,29 +67,28 @@ class DecisionLogEntry:
     @classmethod
     def from_dict(cls, data: dict) -> "DecisionLogEntry":
         return cls(
-            quarter_end=date.fromisoformat(data["quarter_end"]),
-            entry_timestamp=datetime.fromisoformat(data["entry_timestamp"]),
-            exit_timestamp=datetime.fromisoformat(data["exit_timestamp"]),
+            quarter_start=date.fromisoformat(data["quarter_start"]),
+            cutoff=date.fromisoformat(data["cutoff"]),
             decided_at=datetime.fromisoformat(data["decided_at"]),
-            outcome_type=data["outcome_type"],
+            outcome=data["outcome"],
             model_identity_hash=data.get("model_identity_hash"),
-            positions=tuple(
-                DecisionPosition(
+            rankings=tuple(
+                DecisionRanking(
                     instrument_id=InstrumentId(
-                        symbol=p["instrument_id"]["symbol"],
-                        asset_class=AssetClass(p["instrument_id"]["asset_class"]),
-                        venue=p["instrument_id"].get("venue"),
+                        symbol=r["instrument_id"]["symbol"],
+                        asset_class=AssetClass(r["instrument_id"]["asset_class"]),
+                        venue=r["instrument_id"].get("venue"),
                     ),
-                    role=SignalKind(p["role"]),
-                    target_weight=p["target_weight"],
+                    score=r["score"],
+                    rank=r["rank"],
                 )
-                for p in data.get("positions", ())
+                for r in data.get("rankings", ())
             ),
         )
 
 
-def _entry_path(root: Path, quarter_end: date) -> Path:
-    return root / f"{quarter_end.isoformat()}.json"
+def _entry_path(root: Path, quarter_start: date) -> Path:
+    return root / f"{quarter_start.isoformat()}.json"
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -101,13 +102,13 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def read_decision(root: Path, quarter_end: date) -> DecisionLogEntry | None:
-    """Return the locked decision for ``quarter_end``, or ``None`` if never decided.
+def read_decision(root: Path, quarter_start: date) -> DecisionLogEntry | None:
+    """Return the locked decision for ``quarter_start``, or ``None`` if never decided.
 
     Raises :class:`DecisionLogCorrupted` if a file exists but cannot be
     parsed -- a corrupt entry is never silently treated as "never decided".
     """
-    path = _entry_path(root, quarter_end)
+    path = _entry_path(root, quarter_start)
     if not path.exists():
         return None
     try:
@@ -122,9 +123,9 @@ def write_decision_if_absent(root: Path, entry: DecisionLogEntry) -> DecisionLog
 
     A caller must never assume the returned entry is the one it passed in.
     """
-    existing = read_decision(root, entry.quarter_end)
+    existing = read_decision(root, entry.quarter_start)
     if existing is not None:
         return existing
     root.mkdir(parents=True, exist_ok=True)
-    _atomic_write_text(_entry_path(root, entry.quarter_end), json.dumps(entry.to_dict(), indent=2, sort_keys=True))
+    _atomic_write_text(_entry_path(root, entry.quarter_start), json.dumps(entry.to_dict(), indent=2, sort_keys=True))
     return entry
