@@ -21,7 +21,7 @@ train_window_sweep.py), run the full IC backtest per candidate window
 across the full contiguous cycle range (a cycle's own point-in-time cutoff
 already prevents any lookahead regardless of which bucket it lands in),
 then split each candidate's `cycle_results` into two buckets by
-quarter_start and re-aggregate headline stats (mean IC/AUC, hit rate,
+quarter_start and re-aggregate headline stats (mean IC, hit rate,
 information ratio) separately per bucket using the same
 `ICBacktestResult` properties the sweep used -- no metric is
 reimplemented.
@@ -69,7 +69,7 @@ def main() -> int:
         ICBacktestResult, build_feature_results, build_labeled_quarters, run_ic_backtest,
     )
     from atlas_quant.strategies.multi_factor_ranking_ml.config import MultiFactorRankingMLConfig
-    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_hgbc_estimator
+    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_lgbm_ranker_estimator
     from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import quarterly_evaluation_cycles
     from atlas_quant.strategies.multi_factor_ranking_ml.production import orchestration
     from atlas_quant.strategies.multi_factor_ranking_ml.sector_encoding import SectorEncoder
@@ -103,7 +103,7 @@ def main() -> int:
     log("building labeled_by_quarter (also ml_train_years-independent -- computed once)")
     labeled_by_quarter = build_labeled_quarters(
         cycles=cycles, feature_results=feature_results, prices_by_instrument=data.prices_by_instrument,
-        n_winners=base_config.n_winners,
+        n_relevance_grades=base_config.n_relevance_grades,
     )
 
     def _bucket_stats(cycle_results, label: str) -> dict:
@@ -117,8 +117,7 @@ def main() -> int:
             "mean_ic": bucketed.mean_ic,
             "ic_ir": bucketed.ic_information_ratio,
             "hit_rate": bucketed.hit_rate,
-            "mean_auc": bucketed.mean_auc,
-            "auc_above_half": bucketed.auc_above_half_rate,
+            "mean_decile_spread": bucketed.mean_decile_spread,
         }
 
     rows = []
@@ -128,7 +127,7 @@ def main() -> int:
         result = run_ic_backtest(
             config=config, universe=data.universe, fundamentals_by_instrument=data.fundamentals_by_instrument,
             prices_by_instrument=data.prices_by_instrument, sector_encoder=SectorEncoder(), cycles=cycles,
-            estimator_factory=build_hgbc_estimator, macro_lookup=data.macro_lookup,
+            estimator_factory=build_lgbm_ranker_estimator, macro_lookup=data.macro_lookup,
             min_scored_count=MIN_SCORED_COUNT,
             feature_results=feature_results, labeled_by_quarter=labeled_by_quarter,
         )
@@ -139,23 +138,23 @@ def main() -> int:
         rows.append({"ml_train_years": years, "selection": selection_stats, "holdout": holdout_stats})
         log(
             f"  -> selection: measured={selection_stats['measured']} mean_ic={_fmt(selection_stats['mean_ic'])} "
-            f"mean_auc={_fmt(selection_stats['mean_auc'])}  |  "
+            f"ic_ir={_fmt(selection_stats['ic_ir'])}  |  "
             f"holdout: measured={holdout_stats['measured']} mean_ic={_fmt(holdout_stats['mean_ic'])} "
-            f"mean_auc={_fmt(holdout_stats['mean_auc'])}"
+            f"ic_ir={_fmt(holdout_stats['ic_ir'])}"
         )
 
     print()
     print(f"=== selection [{cycles[0].quarter_start}, {selection_end}] vs holdout [{holdout_start}, {cycles[-1].quarter_start}] ===")
     header = (
-        f"{'ml_train_years':>14}  {'sel_ic':>8}  {'sel_auc':>8}  {'sel_ir':>7}  "
-        f"{'hold_ic':>8}  {'hold_auc':>8}  {'hold_ir':>7}  {'hold_hit':>8}"
+        f"{'ml_train_years':>14}  {'sel_ic':>8}  {'sel_spread':>11}  {'sel_ir':>7}  "
+        f"{'hold_ic':>8}  {'hold_spread':>11}  {'hold_ir':>7}  {'hold_hit':>8}"
     )
     print(header)
     for r in rows:
         s, h = r["selection"], r["holdout"]
         print(
-            f"{r['ml_train_years']:>14}  {_fmt(s['mean_ic']):>8}  {_fmt(s['mean_auc']):>8}  {_fmt(s['ic_ir']):>7}  "
-            f"{_fmt(h['mean_ic']):>8}  {_fmt(h['mean_auc']):>8}  {_fmt(h['ic_ir']):>7}  {_fmt(h['hit_rate']):>8}"
+            f"{r['ml_train_years']:>14}  {_fmt(s['mean_ic']):>8}  {_fmt(s['mean_decile_spread']):>11}  {_fmt(s['ic_ir']):>7}  "
+            f"{_fmt(h['mean_ic']):>8}  {_fmt(h['mean_decile_spread']):>11}  {_fmt(h['ic_ir']):>7}  {_fmt(h['hit_rate']):>8}"
         )
     return 0
 

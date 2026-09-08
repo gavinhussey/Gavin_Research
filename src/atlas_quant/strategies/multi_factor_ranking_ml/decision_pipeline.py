@@ -102,12 +102,18 @@ def validate_candidates(
                 )
             )
             continue
-        if math.isnan(score) or math.isinf(score) or not (0.0 <= score <= 1.0):
+        # Finite-only, deliberately *not* bounded to [0.0, 1.0]: this
+        # strategy's score is a LambdaRank margin (see scoring.py), an
+        # unbounded real number whose order is what carries meaning. The
+        # previous [0, 1] bound was valid only while the score was a
+        # classifier probability, and is deleted rather than widened to
+        # some other arbitrary interval.
+        if not math.isfinite(score):
             rejected.append(
                 RejectedCandidate(
                     instrument_id,
                     CandidateRejectionCategory.INVALID_SCORE,
-                    f"score must be finite and within [0.0, 1.0], got {score!r}",
+                    f"score must be a finite real number, got {score!r}",
                     score,
                 )
             )

@@ -47,7 +47,7 @@ from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import (
 )
 from atlas_quant.strategies.multi_factor_ranking_ml.feature_pipeline import FeaturePipelineResult, run_feature_pipeline
 from atlas_quant.strategies.multi_factor_ranking_ml.forward_return import build_forward_return_outcome
-from atlas_quant.strategies.multi_factor_ranking_ml.labeling import assign_quarterly_labels
+from atlas_quant.strategies.multi_factor_ranking_ml.labeling import assign_quarterly_relevance
 from atlas_quant.strategies.multi_factor_ranking_ml.model_training import ModelIdentity, TrainingState, train_model
 from atlas_quant.strategies.multi_factor_ranking_ml.production.decision_log import (
     DecisionLogEntry,
@@ -166,7 +166,7 @@ def _label_prior_cycle(
     next_cycle: EvaluationCycle,
     observations,
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
-    n_winners: int,
+    n_relevance_grades: int,
 ) -> tuple[LabeledObservation, ...]:
     exit_cutoff = datetime.combine(next_cycle.quarter_start, time.min)
     outcomes = [
@@ -176,12 +176,14 @@ def _label_prior_cycle(
         )
         for obs in observations
     ]
-    labeling = assign_quarterly_labels(outcomes, cycle.quarter_start, n_winners=n_winners)
-    label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
+    graded = assign_quarterly_relevance(
+        outcomes, cycle.quarter_start, n_relevance_grades=n_relevance_grades
+    )
+    relevance_by_id = {a.instrument_id: a.relevance for a in graded.assignments}
     return tuple(
-        LabeledObservation(obs, label_by_id[obs.instrument_id], exit_cutoff)
+        LabeledObservation(obs, relevance_by_id[obs.instrument_id], exit_cutoff)
         for obs in observations
-        if obs.instrument_id in label_by_id
+        if obs.instrument_id in relevance_by_id
     )
 
 
@@ -246,7 +248,7 @@ def run_current_ranking(
         next_cycle = prior_cycles[i + 1] if i + 1 < len(prior_cycles) else cycle
         labeled_by_quarter[prior.quarter_start] = _label_prior_cycle(
             prior, next_cycle, feature_results[prior.quarter_start].observations,
-            data.prices_by_instrument, config.n_winners,
+            data.prices_by_instrument, config.n_relevance_grades,
         )
 
     training_cutoff = datetime.combine(cycle.cutoff, time.min)
@@ -256,7 +258,7 @@ def run_current_ranking(
         ml_train_years=config.ml_train_years, model_config_identity=config.model.identity(),
     )
     eligibility = check_training_eligibility(
-        dataset, min_train_quarters=config.min_train_quarters, n_winners=config.n_winners
+        dataset, min_train_quarters=config.min_train_quarters
     )
     training_result = train_model(
         dataset, eligibility, config.model, estimator_factory,

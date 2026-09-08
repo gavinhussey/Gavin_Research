@@ -1,8 +1,13 @@
-"""Scoring: fitted-estimator probabilities -> Stage 5 ScoredCandidate records.
+"""Scoring: fitted-ranker margins -> Stage 5 ScoredCandidate records.
 
-Never applies ``ml_threshold``, sector exclusion, ranking, position
-truncation, or weighting — this module produces raw probabilities only;
-Stage 5's ``MultiFactorRankingMLStrategy`` decides what to do with them.
+The score is the LambdaRank model's raw ``predict`` output: an unbounded
+real-valued ranking margin whose *order* is meaningful and whose
+magnitude is not a probability and is not calibrated. Only relative
+order within one scoring batch should ever be read from it.
+
+Never applies sector exclusion, ranking, position truncation, or
+weighting — this module produces raw scores only; Stage 5's
+``MultiFactorRankingMLStrategy`` decides what to do with them.
 """
 
 from __future__ import annotations
@@ -18,8 +23,6 @@ from atlas_quant.strategies.multi_factor_ranking_ml.feature_domain import Featur
 from atlas_quant.strategies.multi_factor_ranking_ml.model_schema import build_feature_matrix, select_feature_columns
 from atlas_quant.strategies.multi_factor_ranking_ml.model_training import ModelIdentity
 from atlas_quant.strategies.multi_factor_ranking_ml.scoring_domain import ScoredCandidate
-
-_POSITIVE_LABEL = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,22 +67,6 @@ class ScoringResult:
         }
 
 
-def positive_class_column(estimator: Estimator) -> int:
-    """Locate the column in ``predict_proba``'s output corresponding to label ``1``.
-
-    Never assumes column 1 (or any fixed index) — inspects ``classes_``
-    directly, since scikit-learn (and any estimator satisfying this
-    protocol) orders ``predict_proba`` columns to match ``classes_``,
-    which may be ``[0, 1]``, ``[1, 0]``, or something else entirely.
-    Raises :class:`ValueError` if the positive class is absent — this
-    must never silently fall back to an arbitrary column.
-    """
-    classes = list(estimator.classes_)
-    if _POSITIVE_LABEL not in classes:
-        raise ValueError(f"fitted estimator's classes_ ({classes!r}) does not include label 1")
-    return classes.index(_POSITIVE_LABEL)
-
-
 def score_observations(
     fitted_estimator: Estimator,
     model_identity: ModelIdentity,
@@ -92,10 +79,11 @@ def score_observations(
 
     A malformed individual observation (schema mismatch, duplicate
     instrument, future feature timestamp) is rejected individually
-    (reported in ``rejected``) rather than failing the whole batch. A
-    missing positive class on the estimator itself *is* a whole-batch
-    failure — every input observation is rejected with that reason, since
-    no score can be computed at all.
+    (reported in ``rejected``) rather than failing the whole batch.
+
+    No ``group`` is passed at predict time: LambdaRank grouping matters
+    only for the training loss. ``predict`` scores each row independently,
+    and the caller compares those scores within one quarter's batch.
     """
     audit = AuditTrail()
     matrix = build_feature_matrix(
@@ -106,23 +94,6 @@ def score_observations(
     )
     rejected = [ScoringRejection(r.instrument_id, r.reason) for r in matrix.rejected]
 
-    try:
-        pos_col = positive_class_column(fitted_estimator)
-    except ValueError as exc:
-        audit = audit.append(
-            AuditRecord(stage="scoring", message=f"scoring failed: {exc}", timestamp=scoring_cutoff)
-        )
-        rejected.extend(
-            ScoringRejection(iid, str(exc)) for iid in matrix.instrument_ids
-        )
-        return ScoringResult(
-            model_identity=model_identity, scoring_cutoff=scoring_cutoff,
-            input_observation_count=len(observations), scored_candidates=(),
-            rejected=tuple(rejected), warnings=(str(exc),),
-            model_schema_identity=model_identity.model_schema_identity,
-            config_identity=config_identity, audit_trail=audit,
-        )
-
     lookup = {
         (obs.instrument_id, obs.feature_timestamp): obs for obs in observations
     }
@@ -131,7 +102,7 @@ def score_observations(
     # entirely-missing-that-window columns) -- scoring on a different
     # column set than the estimator was fit on would be meaningless, not
     # just a shape mismatch.
-    probabilities = fitted_estimator.predict_proba(
+    scores = fitted_estimator.predict(
         select_feature_columns(matrix, model_identity.used_feature_names)
     )
 
@@ -140,7 +111,7 @@ def score_observations(
         zip(matrix.instrument_ids, matrix.feature_timestamps)
     ):
         obs = lookup[(instrument_id, feature_timestamp)]
-        score = float(probabilities[row_index][pos_col])
+        score = float(scores[row_index])
         scored.append(
             ScoredCandidate(
                 instrument_id=instrument_id,
@@ -163,7 +134,6 @@ def score_observations(
             stage="scoring",
             message=f"scored {len(scored)} of {len(observations)} observation(s)",
             timestamp=scoring_cutoff,
-            data={"positive_class_column": pos_col},
         )
     )
     return ScoringResult(

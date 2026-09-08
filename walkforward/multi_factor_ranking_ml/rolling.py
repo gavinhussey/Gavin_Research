@@ -60,7 +60,7 @@ def log(msg: str) -> None:
 def main() -> int:
     from atlas_quant.backtest.multi_factor_ranking_runner import run_ic_backtest
     from atlas_quant.strategies.multi_factor_ranking_ml.config import MultiFactorRankingMLConfig
-    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_hgbc_estimator
+    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_lgbm_ranker_estimator
     from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import quarterly_evaluation_cycles
     from atlas_quant.strategies.multi_factor_ranking_ml.production import orchestration
     from atlas_quant.strategies.multi_factor_ranking_ml.sector_encoding import SectorEncoder
@@ -75,7 +75,7 @@ def main() -> int:
     result = run_ic_backtest(
         config=config, universe=data.universe, fundamentals_by_instrument=data.fundamentals_by_instrument,
         prices_by_instrument=data.prices_by_instrument, sector_encoder=SectorEncoder(), cycles=cycles,
-        estimator_factory=build_hgbc_estimator, macro_lookup=data.macro_lookup,
+        estimator_factory=build_lgbm_ranker_estimator, macro_lookup=data.macro_lookup,
     )
     log(f"backtest complete: {result.cycle_count} cycle(s), {result.measured_cycle_count} measured")
 

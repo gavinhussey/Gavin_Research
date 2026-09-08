@@ -28,7 +28,13 @@ DISPLAY_NAME = "Multi-Factor Ranking ML"
 # ranking system -- qualification threshold, position sizing, and the
 # ETF fallback sleeve were all deleted entirely (see
 # MultiFactorRankingMLConfig's docstring), not carried over in any form.
-STRATEGY_VERSION = "0.2.0"
+# 0.3.0: the ML target changed from a binary "top-N performers this
+# quarter" classification (HistGradientBoostingClassifier +
+# predict_proba) to graded learning-to-rank (lightgbm LGBMRanker,
+# objective="lambdarank") over the whole quarterly cross-section. Scores
+# are now unbounded real-valued ranking margins, not calibrated
+# probabilities. See docs/reproducibility_findings.md.
+STRATEGY_VERSION = "0.3.0"
 
 # sha256 of ~/Downloads/report_current.html at the time this config was
 # written, so any future drift between this module and the report it was
@@ -64,33 +70,44 @@ _VALID_FCF_MODES: tuple[FcfMode, ...] = ("ratio", "raw")
 
 @dataclass(frozen=True, slots=True)
 class MultiFactorRankingModelConfig:
-    """HistGradientBoostingClassifier hyperparameters (report §4.5)."""
+    """``lightgbm.LGBMRanker`` (``objective="lambdarank"``) hyperparameters.
 
-    max_iter: int = 300
+    This strategy's model is a **learning-to-rank** model, not a
+    classifier: it is trained to order each quarter's entire
+    cross-section by relative forward performance. The previous
+    ``HistGradientBoostingClassifier`` configuration (``max_iter``,
+    ``max_leaf_nodes``, ``min_samples_leaf``, ``l2_regularization``,
+    ``class_weight``) is deleted, not disabled -- the fields below are the
+    LightGBM equivalents, carrying the previous values forward as
+    starting defaults. ``class_weight`` has no LGBMRanker analogue and is
+    gone entirely: a ranker has no classes to weight. See
+    ``docs/reproducibility_findings.md``.
+    """
+
+    n_estimators: int = 300
     max_depth: int = 5
     learning_rate: float = 0.05
-    max_leaf_nodes: int = 31
-    min_samples_leaf: int = 20
-    l2_regularization: float = 0.1
-    class_weight: str = "balanced"
+    num_leaves: int = 31
+    min_child_samples: int = 20
+    reg_lambda: float = 0.1
     random_state: int = 42
 
     def __post_init__(self) -> None:
-        if self.max_iter <= 0:
-            raise ValueError(f"max_iter must be > 0, got {self.max_iter!r}")
+        if self.n_estimators <= 0:
+            raise ValueError(f"n_estimators must be > 0, got {self.n_estimators!r}")
         if self.max_depth <= 0:
             raise ValueError(f"max_depth must be > 0, got {self.max_depth!r}")
         if self.learning_rate <= 0:
             raise ValueError(f"learning_rate must be > 0, got {self.learning_rate!r}")
-        if self.max_leaf_nodes < 2:
-            raise ValueError(f"max_leaf_nodes must be >= 2, got {self.max_leaf_nodes!r}")
-        if self.min_samples_leaf <= 0:
+        if self.num_leaves < 2:
+            raise ValueError(f"num_leaves must be >= 2, got {self.num_leaves!r}")
+        if self.min_child_samples <= 0:
             raise ValueError(
-                f"min_samples_leaf must be > 0, got {self.min_samples_leaf!r}"
+                f"min_child_samples must be > 0, got {self.min_child_samples!r}"
             )
-        if self.l2_regularization < 0:
+        if self.reg_lambda < 0:
             raise ValueError(
-                f"l2_regularization must be >= 0, got {self.l2_regularization!r}"
+                f"reg_lambda must be >= 0, got {self.reg_lambda!r}"
             )
 
     def identity(self) -> str:
@@ -103,9 +120,31 @@ class MultiFactorRankingMLConfig:
 
     Field-by-field report provenance:
 
-    - ``ml_train_years`` = 3 — report §4.4 (``ML_TRAIN_YEARS``)
-    - ``min_train_quarters`` = 8 — report §4.4 (``MIN_TRAIN_Q``)
-    - ``n_winners`` = 10 — report §4.2 (``N_WINNERS``)
+    - ``ml_train_years`` = 6 — **measured 2026-09-07**, not a report value
+      (the report's ``ML_TRAIN_YEARS`` = 3 is superseded). A full-history
+      sweep of 3/6/9/12/15/20 under the LambdaRank objective put 6y highest
+      on both mean IC (0.0504) and IC information ratio (0.2951), but a
+      paired per-cycle test shows 6y through 20y are **statistically
+      indistinguishable** (p ≈ 0.35–0.83); only 6y-vs-3y approaches
+      significance (p ≈ 0.052). 6 is therefore chosen on cost/parsimony —
+      it ties the longer windows while training on the least data and
+      carrying the least stale-regime exposure — not on demonstrated
+      superiority. See ``docs/training_window_sweep_findings.md``.
+    - ``min_train_quarters`` = 4 — **measured 2026-09-07**, not a report
+      value (the report's ``MIN_TRAIN_Q`` = 8 is superseded). The same
+      sweep varied this gate from 1 to 16 and every value produced
+      byte-identical results for every window (same 147 measured cycles,
+      same IC): the evaluation-side ``min_scored_count`` floor already
+      excludes the early sparse-universe cycles this gate would block, so
+      the gate is inert in practice. It is kept at a low value purely as a
+      guard against a pathologically tiny training set — which matters
+      only if that noise floor is ever lowered — and is explicitly **not**
+      a tuned parameter.
+    - ``n_relevance_grades`` = 10 — the number of rank-ordered relevance
+      buckets the LambdaRank training target uses (``labeling.py``). Not a
+      report value: it replaces the report's ``N_WINNERS`` = 10 binary
+      top-N label entirely (see ``docs/reproducibility_findings.md``),
+      keeping 10 only as a natural decile granularity.
     - ``return_cap`` = 0.50 — report §5.5 (``RETURN_CAP``)
     - ``fcf_mode`` = "ratio" — report §3.1, the stated production default
     - ``exclude_sectors`` = ("Materials",) — report §5.2 (a sector-eligibility
@@ -135,26 +174,23 @@ class MultiFactorRankingMLConfig:
     prior day -- a genuine point-in-time cutoff, not an approximation. See
     ``evaluation_schedule.py``.
 
-    Deliberately *not* a field here: a "minimum positive labels" threshold.
-    ``report_current.html`` defines only ``N_WINNERS = 10`` (positive
-    labels assigned per quarter, §4.2) and ``MIN_TRAIN_Q = 8`` (quarters of
-    history required before a model is usable, §4.4) — no separate,
-    independently-valued "minimum positive labels" parameter is named
-    anywhere in the report. The legacy prototype's ``ml_scorer.py`` does
-    gate model fitting on ``train["label"].sum() < N_WINNERS``
-    (``fit_for_quarter``), but that reuses ``N_WINNERS`` rather than
-    defining an independent constant — so this config schema already
-    represents that same requirement via ``n_winners``; Stage 5's training
-    gate should read ``config.n_winners`` for this check, not a new field.
+    Deliberately *not* a field here: any "minimum positive labels"
+    threshold. That gate (and the ``N_WINNERS`` binary top-N label it
+    reused) existed only because the model was a binary classifier that
+    needed both classes present to fit. Under LambdaRank there are no
+    classes: the only training-viability requirement beyond
+    ``min_train_quarters`` is that the relevance target is not constant
+    across the training set, which ``training_dataset.py`` checks
+    directly from the data and needs no configuration value.
     """
 
     strategy_id: str = STRATEGY_ID
     universe_id: str = "bloomberg_fundamentals_quarterly"
 
     fcf_mode: FcfMode = "ratio"
-    ml_train_years: int = 3
-    min_train_quarters: int = 8
-    n_winners: int = 10
+    ml_train_years: int = 6
+    min_train_quarters: int = 4
+    n_relevance_grades: int = 10
     return_cap: float = 0.50
 
     exclude_sectors: tuple[str, ...] = ("Materials",)
@@ -170,8 +206,10 @@ class MultiFactorRankingMLConfig:
             raise ValueError(
                 f"min_train_quarters must be > 0, got {self.min_train_quarters!r}"
             )
-        if self.n_winners <= 0:
-            raise ValueError(f"n_winners must be > 0, got {self.n_winners!r}")
+        if self.n_relevance_grades < 2:
+            raise ValueError(
+                f"n_relevance_grades must be >= 2, got {self.n_relevance_grades!r}"
+            )
         if not (0.0 < self.return_cap <= 1.0):
             raise ValueError(
                 f"return_cap must be within (0.0, 1.0], got {self.return_cap!r}"

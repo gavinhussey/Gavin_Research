@@ -42,12 +42,28 @@ explicitly assert `LABEL_RETURN_CLIP == 1.50` and that a +60% return is
 *not* clipped (it would be, at 50%, if the two constants were ever
 conflated).
 
-## Winner labeling (report §4.2)
+## Graded relevance labeling (learning-to-rank target)
 
-Global (never per-sector, never per-training-window, never a percentile)
-top-`n_winners` (10) by descending clipped forward return receive label
-`1`; every other valid outcome gets `0`. Invalid (no computable return)
-outcomes are excluded from ranking entirely.
+Each quarter, every instrument with a computable clipped forward return
+is ranked descending and bucketed into one of `n_relevance_grades` (10)
+rank-ordered relevance grades:
+
+    grade = n_relevance_grades - 1 - floor((rank - 1) * n_relevance_grades / valid_count)
+
+so grade 9 is the best-performing bucket and grade 0 the worst. Invalid
+(no computable return) outcomes are excluded from ranking entirely and
+receive grade 0.
+
+This **replaces** the previous binary global top-`n_winners` (10) label
+outright — see `reproducibility_findings.md` for the full rationale and
+consequences. The short version: this strategy's whole output is a
+1..N ranking of the entire cross-section, and a binary top-10 target
+could not distinguish the 400th-ranked stock from the 1,400th.
+
+**Bucketing is by rank, not by return magnitude**, which keeps the target
+comparable across quarters (a 5% return might be top-decile in one
+quarter and median in another) — and LambdaRank compares items only
+within their own query group regardless.
 
 **Tie-breaking**: descending clipped return, ties broken by ascending
 instrument symbol — a deliberate, documented departure from the legacy
@@ -55,75 +71,87 @@ prototype's `DataFrame.nlargest(..., keep="first")`, whose tie-break is an
 accident of ticker-iteration/row-insertion order, not a designed rule.
 This platform's rule is reproducible from an instrument's own data alone.
 
-**Small-quarter policy**: when fewer than `n_winners` valid outcomes
-exist, **no positive labels are assigned at all** (every valid outcome
-gets `0`) — cross-checked against, and matching, legacy `ml_scorer.py`'s
-`if len(valid) >= N_WINNERS: ... assign` (no `else` branch). Deliberately
-not "label everyone positive," which would artificially inflate a weak
-quarter's positive rate.
+**Small quarters need no special case.** With fewer valid outcomes than
+grades, the same formula simply yields coarser buckets (some grades
+unused) — never an error, never an inflated grade. This deliberately
+replaces the previous binary scheme's `valid_count < n_winners` branch,
+which had to suppress every positive label for that quarter.
 
-## Label availability and the rolling training window (report §4.4)
+## Query grouping (LambdaRank)
 
-Every labeled outcome has a `label_available_at` timestamp — always the
-outcome's own `sell_timestamp`, since the forward return cannot be known
-before the exit price exists. `training_dataset.build_training_dataset`
-enforces `D_train^(q) = {(x_i,q', y_i,q') : q - 3yr <= q' < q}` (report's
-own set notation, note the strict `q' < q`) *and* an additional,
-essential requirement the report's notation doesn't spell out:
-`label_available_at < training_cutoff` (strict) for every included row —
-even a quarter inside the trailing window is excluded if its own outcome
-wasn't yet knowable by the training cutoff. The comparison is strict, not
-`<=`, because a quarter's own `sell_timestamp`/`label_available_at` is
-defined to land on the exact same calendar day as the *next* quarter's
-`entry_timestamp`/`training_cutoff` (each period's exit lag equals the
-next period's entry lag from its own quarter-end). Under `<=`, that
-immediately-prior quarter's label would be treated as knowable at the
-literal instant it is realized — a same-day lookahead into a price that
-would not, in practice, be available before that day's entry decisions
-are placed. `<` correctly excludes exactly that one quarter, every
-retrain, disclosed as a fix in `reproducibility_findings.md`. The 3-year
-window boundary uses calendar-year arithmetic (`date.replace(year=...)`),
-an explicit, documented approximation of "3 years," not a
-trading-day-exact boundary.
+LambdaRank compares items only *within* a query group, and one quarter's
+cross-section is one query group. `build_training_dataset` emits rows
+contiguously per quarter (quarters visited in ascending order, each
+quarter's surviving rows appended as one block, an order
+`build_feature_matrix` preserves and never re-sorts) and records the
+block sizes in `TrainingDatasetResult.groups`, which `train_model` passes
+straight to `estimator.fit(X, y, group=...)`. A quarter that loses every
+row to feature-matrix validation contributes no group entry; `groups`
+always sums to `total_row_count`, and `check_training_eligibility`
+enforces that invariant (`groups_match_row_count`) rather than letting a
+misalignment reach LightGBM silently.
 
-## Training gates — verified as two separate, non-conflated requirements
+## Training gates
 
 - **Quarter gate** (report §4.4): `included_quarter_count >=
   min_train_quarters` (8).
-- **Positive-label gate** (report §4.2, Stage 2.1 finding, reconfirmed
-  here): `positive_label_count >= n_winners` (10) — there is **no**
-  separate `min_positive_labels` configuration value; this reuses
-  `n_winners` directly, exactly as the legacy `ml_scorer.py`'s own
-  training-viability check does (`train["label"].sum() < N_WINNERS`).
+- **Relevance-variation gate**: at least two distinct relevance values
+  must be present across the training set. A pairwise ranking loss has no
+  discordant pairs — and therefore no gradient — when every row shares one
+  grade, so this is a reported skip
+  (`TrainingState.SKIPPED_NO_RELEVANCE_VARIATION`), never a degenerate
+  fit. It is derived from the data itself and needs no configuration
+  value.
 
-Both gates, plus basic validity (non-empty, matrix/label length match, no
-infinite values, both label classes present), are evaluated and recorded
-independently in `TrainingEligibilityResult` — training is never silently
-attempted when any gate fails.
+  This gate **replaces** the previous binary-classifier-only gates
+  (`positive_label_count >= n_winners`, and "both label classes present"),
+  both deleted along with the binary target.
 
-## Estimator parameters (report §4.5) and dependency status
+Both gates, plus basic validity (non-empty, matrix/relevance length
+match, group sizes partitioning the rows exactly, no infinite values),
+are evaluated and recorded independently in `TrainingEligibilityResult` —
+training is never silently attempted when any gate fails.
 
-`estimator.resolve_estimator_parameters` resolves every report-defined
-hyperparameter explicitly: `max_iter=300, max_depth=5, learning_rate=0.05,
-max_leaf_nodes=31, min_samples_leaf=20, l2_regularization=0.1,
-class_weight="balanced", random_state=42`. **`scikit-learn` is confirmed
-absent** from this repository's venv (`pyproject.toml` declares only
-`numpy`/`pandas`) — an optional, explicitly gated dependency. It was
-not installed to make this stage "work." `estimator.build_hgbc_estimator`
-imports `sklearn` lazily (only inside its own body, never at module load
-time) and raises `ImportError` if absent; every unit test in this
-repository injects a deterministic `FakeEstimator`
-(`tests/fixtures/multi_factor_ranking_ml.py`) instead, and one
-`@pytest.mark.external_env` test exercises the real factory, skipped
-automatically when `sklearn` is absent.
+## Estimator parameters and dependency status
 
-## Positive-class probability selection
+`estimator.resolve_estimator_parameters` resolves every behavior-affecting
+hyperparameter explicitly — nothing is left to an undocumented library
+default: `objective="lambdarank", n_estimators=300, max_depth=5,
+learning_rate=0.05, num_leaves=31, min_child_samples=20, reg_lambda=0.1,
+random_state=42`. `objective` is pinned here because it *is* the strategy
+decision, not a tunable default.
 
-`scoring.positive_class_column` inspects the fitted estimator's
-`classes_` directly and locates the index of label `1` — never assumes
-column 1, predicted class, or a decision-function value. Raises
-`ValueError` (surfaced as a whole-batch scoring failure, since no score
-can be computed at all) if label `1` is absent from `classes_`.
+These are the `lightgbm.LGBMRanker` equivalents of the previous
+`HistGradientBoostingClassifier` parameters, carrying the same values
+forward as starting defaults (`max_iter`→`n_estimators`,
+`max_leaf_nodes`→`num_leaves`, `min_samples_leaf`→`min_child_samples`,
+`l2_regularization`→`reg_lambda`). `class_weight` is deleted — a ranker
+has no classes to weight. **No retuning has been done under the new
+objective.**
+
+`lightgbm` is an optional, explicitly gated dependency (`pyproject.toml`'s
+`model` extra). `estimator.build_lgbm_ranker_estimator` imports it lazily
+(only inside its own body, never at module load time) and raises
+`ImportError` if absent; unit tests inject a deterministic, ranker-shaped
+`FakeEstimator` (`tests/fixtures/multi_factor_ranking_ml.py`) instead, and
+`tests/unit/test_multi_factor_ranking_model_training.py` exercises the
+real factory, skipping itself automatically when lightgbm cannot be
+loaded. On macOS the wheel additionally needs an OpenMP runtime
+(`libomp.dylib`) present on the system — see `reproducibility_findings.md`.
+
+## Scoring
+
+`scoring.score_observations` calls `fitted_estimator.predict(X)` and takes
+each row's value directly. The result is a **raw LambdaRank margin**: an
+unbounded real number whose *order within one scoring batch* is
+meaningful and whose magnitude is neither a probability nor comparable
+across quarters. No `group` is passed at predict time — grouping matters
+only to the training loss.
+
+Consequently `decision_pipeline.validate_candidates` checks only that a
+score is **finite**; the previous `0.0 <= score <= 1.0` bound was valid
+only while the score was a classifier probability and is deleted, not
+widened to some other arbitrary interval.
 
 ## Model identity
 

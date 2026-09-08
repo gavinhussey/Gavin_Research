@@ -34,10 +34,15 @@ from atlas_quant.strategies.multi_factor_ranking_ml.model_schema import (
 
 @dataclass(frozen=True, slots=True)
 class LabeledObservation:
-    """One instrument/quarter's feature observation plus its report §4.2 label."""
+    """One instrument/quarter's feature observation plus its graded-relevance target.
+
+    ``relevance`` is the LambdaRank target from ``labeling.py`` (a
+    rank-ordered grade in ``0..n_relevance_grades-1``), not a binary
+    class label.
+    """
 
     observation: FeatureObservation
-    label: int
+    relevance: int
     label_available_at: datetime
 
 
@@ -57,12 +62,17 @@ class TrainingDatasetResult:
     included_quarters: tuple[date, ...]
     excluded_quarters: tuple[ExcludedQuarter, ...]
     feature_matrix: FeatureMatrix
-    labels: tuple[int, ...]
+    relevances: tuple[int, ...]
+    #: LambdaRank query-group sizes: one entry per included quarter, in
+    #: ``included_quarters`` order, summing to ``total_row_count``. Feature
+    #: matrix rows are emitted contiguously per quarter (see
+    #: :func:`build_training_dataset`), so this aligns row-for-row with
+    #: ``feature_matrix``/``relevances`` and can be passed straight to
+    #: ``estimator.fit(X, y, group=...)``.
+    groups: tuple[int, ...]
     instrument_ids: tuple[InstrumentId, ...]
     feature_timestamps: tuple[date, ...]
     label_available_timestamps: tuple[datetime, ...]
-    positive_label_count: int
-    negative_label_count: int
     total_row_count: int
     quarter_count: int
     model_schema_identity: str
@@ -107,6 +117,16 @@ def build_training_dataset(
     decisions are made — this matters at the boundary, since a quarter's
     ``sell_timestamp`` is defined to equal the following quarter's own
     ``training_cutoff``/``entry_timestamp``.
+
+    Row order is quarter-contiguous by construction: quarters are visited
+    in ascending order and each quarter's surviving rows are appended as
+    one block, which ``build_feature_matrix`` preserves (it never
+    re-sorts). ``groups`` records those block sizes so a LambdaRank fit
+    can treat one quarter as one query. A quarter all of whose rows were
+    rejected by feature-matrix validation contributes no group entry at
+    all (a zero-length query group is meaningless to LightGBM), so
+    ``groups`` may be shorter than ``included_quarters``; it always sums
+    to ``total_row_count``.
     """
     window_start = _trailing_window_start(target_quarter_end, ml_train_years)
     audit = AuditTrail()
@@ -114,6 +134,7 @@ def build_training_dataset(
     candidate_quarters = sorted(labeled_quarters.keys())
 
     included_rows: list[LabeledObservation] = []
+    row_quarters: list[date] = []
     included_quarters: list[date] = []
 
     for quarter_end in candidate_quarters:
@@ -131,6 +152,7 @@ def build_training_dataset(
             continue
 
         included_rows.extend(knowable)
+        row_quarters.extend([quarter_end] * len(knowable))
         included_quarters.append(quarter_end)
 
     observations = [r.observation for r in included_rows]
@@ -139,14 +161,28 @@ def build_training_dataset(
     )
 
     surviving_keys = set(zip(matrix.instrument_ids, matrix.feature_timestamps))
-    surviving_rows = [
-        r
-        for r in included_rows
+    surviving = [
+        (quarter_end, r)
+        for quarter_end, r in zip(row_quarters, included_rows)
         if (r.observation.instrument_id, r.observation.feature_timestamp) in surviving_keys
     ]
+    surviving_rows = [r for _, r in surviving]
 
-    labels = tuple(r.label for r in surviving_rows)
+    relevances = tuple(r.relevance for r in surviving_rows)
     label_available_timestamps = tuple(r.label_available_at for r in surviving_rows)
+
+    # Contiguous run-lengths over the (already quarter-ordered) surviving
+    # rows -- computed from the actual emitted row order rather than
+    # assumed from included_quarters, so a quarter that lost every row to
+    # feature-matrix validation simply contributes no group.
+    groups: list[int] = []
+    previous_quarter: date | None = None
+    for quarter_end, _ in surviving:
+        if groups and quarter_end == previous_quarter:
+            groups[-1] += 1
+        else:
+            groups.append(1)
+        previous_quarter = quarter_end
 
     warnings: list[str] = []
     if matrix.rejected:
@@ -171,12 +207,11 @@ def build_training_dataset(
         included_quarters=tuple(included_quarters),
         excluded_quarters=tuple(excluded),
         feature_matrix=matrix,
-        labels=labels,
+        relevances=relevances,
+        groups=tuple(groups),
         instrument_ids=matrix.instrument_ids,
         feature_timestamps=matrix.feature_timestamps,
         label_available_timestamps=label_available_timestamps,
-        positive_label_count=sum(labels),
-        negative_label_count=len(labels) - sum(labels),
         total_row_count=len(matrix),
         quarter_count=len(included_quarters),
         model_schema_identity=compute_model_schema_identity(feature_schema_version, model_config_identity),
@@ -187,34 +222,41 @@ def build_training_dataset(
 
 @dataclass(frozen=True, slots=True)
 class TrainingEligibilityResult:
-    """The two report-defined training gates (§4.4 quarters, §4.2 positive
-    labels — verified separately, never conflated), plus basic validity checks."""
+    """The report §4.4 quarter gate, the relevance-variation gate, and
+    basic dataset validity — verified separately, never conflated."""
 
     eligible: bool
     quarter_count: int
     min_train_quarters: int
     quarter_gate_passed: bool
-    positive_label_count: int
-    n_winners: int
-    positive_label_gate_passed: bool
+    distinct_relevance_count: int
+    relevance_variation_present: bool
     non_empty: bool
-    matrix_label_length_match: bool
+    matrix_relevance_length_match: bool
+    groups_match_row_count: bool
     has_finite_values: bool
-    both_classes_present: bool
     reasons: tuple[str, ...]
 
 
 def check_training_eligibility(
-    dataset: TrainingDatasetResult, *, min_train_quarters: int, n_winners: int
+    dataset: TrainingDatasetResult, *, min_train_quarters: int
 ) -> TrainingEligibilityResult:
-    """Evaluate both report-defined training gates plus basic dataset validity.
+    """Evaluate the training gates plus basic dataset validity.
 
     Report §4.4: ``quarter_count >= min_train_quarters`` (default 8).
-    Report §4.2 (cross-checked, Stage 2.1 finding): the training-viability
-    positive-label gate reuses ``n_winners`` (default 10) — there is no
-    separate ``min_positive_labels`` value in the report, so this checks
-    ``positive_label_count >= n_winners`` directly, not a distinct
-    configuration field.
+
+    The former positive-label gate (``positive_label_count >= n_winners``)
+    and single-class gate are deleted: both were artifacts of a binary
+    classifier, which cannot fit without examples of both classes. A
+    LambdaRank objective has no classes — its requirement is that the
+    relevance target *varies*, since a constant target yields no
+    discordant pairs and therefore no gradient. That is checked directly
+    here from the data (``distinct_relevance_count >= 2``), and needs no
+    configuration value.
+
+    ``groups_match_row_count`` guards the LambdaRank query-group
+    invariant: the group sizes must partition exactly the rows being fit,
+    or LightGBM would silently align quarters to the wrong rows.
     """
     reasons: list[str] = []
 
@@ -224,21 +266,31 @@ def check_training_eligibility(
             f"quarter_count={dataset.quarter_count} < min_train_quarters={min_train_quarters}"
         )
 
-    positive_label_gate_passed = dataset.positive_label_count >= n_winners
-    if not positive_label_gate_passed:
-        reasons.append(
-            f"positive_label_count={dataset.positive_label_count} < n_winners={n_winners}"
-        )
-
     non_empty = dataset.total_row_count > 0
     if not non_empty:
         reasons.append("feature matrix is empty")
 
-    matrix_label_length_match = len(dataset.feature_matrix) == len(dataset.labels)
-    if not matrix_label_length_match:
+    distinct_relevance_count = len(set(dataset.relevances))
+    relevance_variation_present = distinct_relevance_count >= 2
+    if non_empty and not relevance_variation_present:
+        reasons.append(
+            "relevance target is constant across the training set "
+            f"(only value {next(iter(set(dataset.relevances)), None)!r}) — "
+            "a pairwise ranking loss has no discordant pairs to learn from"
+        )
+
+    matrix_relevance_length_match = len(dataset.feature_matrix) == len(dataset.relevances)
+    if not matrix_relevance_length_match:
         reasons.append(
             f"feature matrix row count ({len(dataset.feature_matrix)}) != "
-            f"label count ({len(dataset.labels)})"
+            f"relevance count ({len(dataset.relevances)})"
+        )
+
+    groups_match_row_count = sum(dataset.groups) == len(dataset.feature_matrix)
+    if not groups_match_row_count:
+        reasons.append(
+            f"query-group sizes sum to {sum(dataset.groups)} but the feature "
+            f"matrix has {len(dataset.feature_matrix)} row(s)"
         )
 
     has_finite_values = all(
@@ -249,17 +301,13 @@ def check_training_eligibility(
     if not has_finite_values:
         reasons.append("a non-finite (infinite) feature value is present")
 
-    both_classes_present = non_empty and 0 in dataset.labels and 1 in dataset.labels
-    if non_empty and not both_classes_present:
-        reasons.append("only one label class is present")
-
     eligible = (
         quarter_gate_passed
-        and positive_label_gate_passed
         and non_empty
-        and matrix_label_length_match
+        and relevance_variation_present
+        and matrix_relevance_length_match
+        and groups_match_row_count
         and has_finite_values
-        and both_classes_present
     )
 
     return TrainingEligibilityResult(
@@ -267,12 +315,11 @@ def check_training_eligibility(
         quarter_count=dataset.quarter_count,
         min_train_quarters=min_train_quarters,
         quarter_gate_passed=quarter_gate_passed,
-        positive_label_count=dataset.positive_label_count,
-        n_winners=n_winners,
-        positive_label_gate_passed=positive_label_gate_passed,
+        distinct_relevance_count=distinct_relevance_count,
+        relevance_variation_present=relevance_variation_present,
         non_empty=non_empty,
-        matrix_label_length_match=matrix_label_length_match,
+        matrix_relevance_length_match=matrix_relevance_length_match,
+        groups_match_row_count=groups_match_row_count,
         has_finite_values=has_finite_values,
-        both_classes_present=both_classes_present,
         reasons=tuple(reasons),
     )

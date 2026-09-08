@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from atlas_quant.strategies.multi_factor_ranking_ml.config import MultiFactorRankingMLConfig
-from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_hgbc_estimator
+from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_lgbm_ranker_estimator
 from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import quarterly_evaluation_cycles
 from atlas_quant.strategies.multi_factor_ranking_ml.production import orchestration
 from atlas_quant.strategies.multi_factor_ranking_ml.production.decision_log import DEFAULT_DECISION_LOG_ROOT
@@ -133,7 +133,7 @@ def cmd_run_backtest(args: argparse.Namespace, stdout, stderr) -> int:
     result = run_ic_backtest(
         config=config, universe=data.universe, fundamentals_by_instrument=data.fundamentals_by_instrument,
         prices_by_instrument=data.prices_by_instrument, sector_encoder=SectorEncoder(), cycles=cycles,
-        estimator_factory=build_hgbc_estimator, macro_lookup=data.macro_lookup,
+        estimator_factory=build_lgbm_ranker_estimator, macro_lookup=data.macro_lookup,
     )
     report = build_backtest_report(result)
     if args.as_json:
@@ -154,7 +154,7 @@ def cmd_rank(args: argparse.Namespace, stdout, stderr) -> int:
 
     run_result = orchestration.run_current_ranking(
         config=config, data=data, cycle=cycle,
-        estimator_factory=build_hgbc_estimator,
+        estimator_factory=build_lgbm_ranker_estimator,
         decision_log_root=args.decision_log_root,
     )
     for w in run_result.warnings:

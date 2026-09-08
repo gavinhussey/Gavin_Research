@@ -96,14 +96,19 @@ class TestValidationRejections:
         result = _evaluate(candidates=[_candidate("AAPL", 0.9, sector="")])
         assert result.state_update.rejected_candidates[0].category == CandidateRejectionCategory.MISSING_SECTOR
 
-    @pytest.mark.parametrize("score", [float("nan"), float("inf"), -0.1, 1.1])
-    def test_invalid_score_is_rejected(self, score):
+    @pytest.mark.parametrize("score", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_score_is_rejected(self, score):
         result = _evaluate(candidates=[_candidate("AAPL", score)])
         assert result.state_update.rejected_candidates[0].category == CandidateRejectionCategory.INVALID_SCORE
 
-    def test_boundary_scores_are_accepted(self):
-        result = _evaluate(candidates=[_candidate("AAPL", 0.0), _candidate("MSFT", 1.0)])
-        assert len(result.state_update.ranked_candidates) == 2
+    @pytest.mark.parametrize("score", [-4.7, -0.1, 0.0, 1.0, 1.1, 12.5])
+    def test_any_finite_score_is_accepted(self, score):
+        """The score is a LambdaRank margin (scoring.py), not a
+        probability -- negative and >1 values are ordinary, not invalid.
+        The old [0.0, 1.0] bound is deleted, not widened."""
+        result = _evaluate(candidates=[_candidate("AAPL", score)])
+        assert not result.state_update.rejected_candidates
+        assert len(result.state_update.ranked_candidates) == 1
 
     def test_future_feature_timestamp_is_rejected(self):
         result = _evaluate(candidates=[_candidate("AAPL", 0.9, feature_timestamp=date(2027, 1, 1))])

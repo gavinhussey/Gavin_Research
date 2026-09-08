@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """multi_factor_ranking_ml's standard backtest: runs the Information-
-Coefficient/AUC backtest directly (not through the CLI) and writes every
+Coefficient backtest directly (not through the CLI) and writes every
 output to its respective place under
 `research/strategies/multi_factor_ranking_ml/outputs/` -- a plain-text
 report, a machine-readable JSON dump, and a per-cycle CSV for
@@ -53,7 +53,7 @@ OUTPUT_DIR = REPO_ROOT / "research" / "strategies" / "multi_factor_ranking_ml" /
 def main() -> int:
     from atlas_quant.backtest.multi_factor_ranking_runner import run_ic_backtest
     from atlas_quant.strategies.multi_factor_ranking_ml.config import MultiFactorRankingMLConfig
-    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_hgbc_estimator
+    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_lgbm_ranker_estimator
     from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import quarterly_evaluation_cycles
     from atlas_quant.strategies.multi_factor_ranking_ml.production import orchestration
     from atlas_quant.strategies.multi_factor_ranking_ml.reporting.report_builder import build_backtest_report
@@ -74,7 +74,7 @@ def main() -> int:
         prices_by_instrument=data.prices_by_instrument,
         sector_encoder=SectorEncoder(),
         cycles=cycles,
-        estimator_factory=build_hgbc_estimator,
+        estimator_factory=build_lgbm_ranker_estimator,
         macro_lookup=data.macro_lookup,
         min_scored_count=MIN_SCORED_COUNT,
     )
@@ -93,7 +93,6 @@ def main() -> int:
         writer.writerow([
             "quarter_start", "training_state", "ranked_count",
             "scored_for_ic_count", "ic", "decile_spread",
-            "scored_for_auc_count", "auc",
         ])
         for cycle_result in result.cycle_results:
             writer.writerow([
@@ -103,8 +102,6 @@ def main() -> int:
                 cycle_result.scored_for_ic_count,
                 cycle_result.ic,
                 cycle_result.decile_spread,
-                cycle_result.scored_for_auc_count,
-                cycle_result.auc,
             ])
 
     sys.stdout.write(report.to_text())

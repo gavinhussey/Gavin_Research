@@ -50,7 +50,7 @@ from atlas_quant.strategies.multi_factor_ranking_ml.estimator import Estimator, 
 from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import EvaluationCycle
 from atlas_quant.strategies.multi_factor_ranking_ml.feature_pipeline import FeaturePipelineResult, run_feature_pipeline
 from atlas_quant.strategies.multi_factor_ranking_ml.forward_return import ForwardReturnOutcome, build_forward_return_outcome
-from atlas_quant.strategies.multi_factor_ranking_ml.labeling import assign_quarterly_labels
+from atlas_quant.strategies.multi_factor_ranking_ml.labeling import assign_quarterly_relevance
 from atlas_quant.strategies.multi_factor_ranking_ml.model_training import ModelIdentity, TrainingState, train_model
 from atlas_quant.strategies.multi_factor_ranking_ml.production.normalization import FundamentalsFeatureRecord
 from atlas_quant.strategies.multi_factor_ranking_ml.scoring import ScoringResult, score_observations
@@ -94,10 +94,8 @@ class RankingCycleResult:
     decision_summary: MultiFactorRankingDecisionSummary | None
     ic: float | None
     decile_spread: float | None
-    auc: float | None
     ranked_count: int
     scored_for_ic_count: int
-    scored_for_auc_count: int
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, object]:
@@ -107,10 +105,8 @@ class RankingCycleResult:
             "training_state": self.training_state.value if self.training_state else None,
             "ic": self.ic,
             "decile_spread": self.decile_spread,
-            "auc": self.auc,
             "ranked_count": self.ranked_count,
             "scored_for_ic_count": self.scored_for_ic_count,
-            "scored_for_auc_count": self.scored_for_auc_count,
             "warnings": list(self.warnings),
         }
 
@@ -133,7 +129,7 @@ class ICBacktestResult:
     audit_trail: AuditTrail = field(default_factory=AuditTrail)
     #: Cycles scored against fewer than this many candidates are excluded
     #: from every headline stat below (mean/std/hit-rate/spread) -- a
-    #: Spearman correlation or AUC computed over a handful of names (this
+    #: Spearman correlation computed over a handful of names (this
     #: strategy's real early history: 9-12 stocks from 1986-10 through
     #: 1989-04, before the universe's real growth to 30+ by 1989-07 and
     #: 100+ by 1990-01) is dominated by sampling noise, not signal. Still
@@ -142,9 +138,8 @@ class ICBacktestResult:
     #: own recorded result.
     min_scored_count: int = 30
 
-    def _is_headline_eligible(self, cycle: RankingCycleResult, *, for_auc: bool = False) -> bool:
-        count = cycle.scored_for_auc_count if for_auc else cycle.scored_for_ic_count
-        return count >= self.min_scored_count
+    def _is_headline_eligible(self, cycle: RankingCycleResult) -> bool:
+        return cycle.scored_for_ic_count >= self.min_scored_count
 
     @property
     def _valid_ics(self) -> list[float]:
@@ -197,42 +192,6 @@ class ICBacktestResult:
         ]
         return statistics.mean(spreads) if spreads else None
 
-    @property
-    def _valid_aucs(self) -> list[float]:
-        return [
-            c.auc for c in self.cycle_results
-            if c.auc is not None and self._is_headline_eligible(c, for_auc=True)
-        ]
-
-    @property
-    def measured_auc_cycle_count(self) -> int:
-        """Cycles with a computable AUC (both a winner and a non-winner
-        present among that cycle's scored candidates)."""
-        return len(self._valid_aucs)
-
-    @property
-    def mean_auc(self) -> float | None:
-        aucs = self._valid_aucs
-        return statistics.mean(aucs) if aucs else None
-
-    @property
-    def auc_std(self) -> float | None:
-        aucs = self._valid_aucs
-        if len(aucs) < 2:
-            return 0.0 if aucs else None
-        return statistics.pstdev(aucs)
-
-    @property
-    def auc_above_half_rate(self) -> float | None:
-        """Fraction of measured cycles with AUC > 0.5 -- AUC's own
-        no-skill baseline (a coin flip scores 0.5, not 0.0, so this plays
-        the same role ``hit_rate`` plays for IC, calibrated to AUC's
-        actual midpoint)."""
-        aucs = self._valid_aucs
-        if not aucs:
-            return None
-        return sum(1 for auc in aucs if auc > 0.5) / len(aucs)
-
     def to_dict(self) -> dict[str, object]:
         return {
             "strategy_id": self.strategy_id,
@@ -247,10 +206,6 @@ class ICBacktestResult:
             "ic_information_ratio": self.ic_information_ratio,
             "hit_rate": self.hit_rate,
             "mean_decile_spread": self.mean_decile_spread,
-            "measured_auc_cycle_count": self.measured_auc_cycle_count,
-            "mean_auc": self.mean_auc,
-            "auc_std": self.auc_std,
-            "auc_above_half_rate": self.auc_above_half_rate,
             "cycles": [c.to_dict() for c in self.cycle_results],
             "warnings": list(self.warnings),
             "audit_trail": self.audit_trail.to_dict(),
@@ -259,8 +214,7 @@ class ICBacktestResult:
 
 def _ranks(values: Sequence[float]) -> list[float]:
     """1-based ascending ranks, ties averaged (the standard mid-rank
-    convention) -- shared by :func:`spearman_correlation` and
-    :func:`roc_auc`, both of which are rank-based statistics."""
+    convention) -- used by :func:`spearman_correlation`."""
     order = sorted(range(len(values)), key=lambda i: values[i])
     ranks = [0.0] * len(values)
     i = 0
@@ -322,44 +276,12 @@ def decile_spread(score_return_pairs: Sequence[tuple[float, float]]) -> float | 
     return top_mean - bottom_mean
 
 
-def roc_auc(labels: Sequence[int], scores: Sequence[float]) -> float | None:
-    """ROC-AUC via the Mann-Whitney U / rank-sum formula: the probability
-    that a random positive-labeled (``1``) instance is scored higher than
-    a random negative-labeled (``0``) instance (a tie counts as 0.5).
-
-    Unlike IC (which measures rank-correlation against the *continuous*
-    forward return), this measures discrimination against the same
-    *binary* win/loss label the model is trained on (``labeling.py``'s
-    top-``n_winners`` global label) -- a direct read of how well the
-    model's own training objective is being achieved, not a proxy for it.
-
-    Returns ``None`` (never a fabricated 0.5) when ``labels`` contains no
-    positives or no negatives -- AUC is undefined, not "average," when
-    one class is entirely absent, exactly as :func:`spearman_correlation`
-    returns ``None`` rather than 0.0 for a degenerate input.
-    """
-    n = len(labels)
-    if n != len(scores):
-        raise ValueError(f"labels and scores must be the same length, got {n} and {len(scores)}")
-    if any(label not in (0, 1) for label in labels):
-        raise ValueError("roc_auc requires binary labels (0 or 1)")
-
-    n_pos = sum(1 for label in labels if label == 1)
-    n_neg = n - n_pos
-    if n_pos == 0 or n_neg == 0:
-        return None
-
-    ranks = _ranks(list(scores))
-    positive_rank_sum = sum(rank for label, rank in zip(labels, ranks) if label == 1)
-    return (positive_rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
-
-
 def _label_prior_cycle(
     cycle: EvaluationCycle,
     next_cycle: EvaluationCycle,
     observations,
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
-    n_winners: int,
+    n_relevance_grades: int,
 ) -> tuple[LabeledObservation, ...]:
     exit_cutoff = datetime.combine(next_cycle.quarter_start, time.min)
     outcomes = [
@@ -369,12 +291,14 @@ def _label_prior_cycle(
         )
         for obs in observations
     ]
-    labeling = assign_quarterly_labels(outcomes, cycle.quarter_start, n_winners=n_winners)
-    label_by_id = {a.instrument_id: a.label for a in labeling.assignments}
+    graded = assign_quarterly_relevance(
+        outcomes, cycle.quarter_start, n_relevance_grades=n_relevance_grades
+    )
+    relevance_by_id = {a.instrument_id: a.relevance for a in graded.assignments}
     return tuple(
-        LabeledObservation(obs, label_by_id[obs.instrument_id], exit_cutoff)
+        LabeledObservation(obs, relevance_by_id[obs.instrument_id], exit_cutoff)
         for obs in observations
-        if obs.instrument_id in label_by_id
+        if obs.instrument_id in relevance_by_id
     )
 
 
@@ -389,7 +313,7 @@ def build_feature_results(
 ) -> dict[date, FeaturePipelineResult]:
     """Build every cycle's :class:`FeaturePipelineResult`, keyed by ``quarter_start``.
 
-    Independent of ``config.ml_train_years``/``config.n_winners`` and of
+    Independent of ``config.ml_train_years``/``config.n_relevance_grades`` and of
     which estimator will be used -- feature construction only depends on
     each cycle's own point-in-time cutoff. Callers sweeping several
     ``ml_train_years`` values (or several estimator configs) over the
@@ -414,23 +338,24 @@ def build_labeled_quarters(
     cycles: Sequence[EvaluationCycle],
     feature_results: Mapping[date, FeaturePipelineResult],
     prices_by_instrument: Mapping[InstrumentId, Sequence[DailyPriceObservation]],
-    n_winners: int,
+    n_relevance_grades: int,
 ) -> dict[date, tuple[LabeledObservation, ...]]:
-    """Every cycle-but-the-last's realized top-``n_winners`` label, keyed by ``quarter_start``.
+    """Every cycle-but-the-last's realized relevance grade, keyed by ``quarter_start``.
 
-    Independent of ``config.ml_train_years`` -- a cycle's label (whether
-    it was one of that quarter's top ``n_winners`` by realized forward
-    return) is a pure function of that cycle, its next cycle, and prices,
-    never of which later cycle is currently training or how far back its
-    training window reaches. Callers sweeping several ``ml_train_years``
-    values over the same ``feature_results``/prices/``n_winners`` should
-    build this once and pass it to every :func:`run_ic_backtest` call via
-    its ``labeled_by_quarter`` parameter.
+    Independent of ``config.ml_train_years`` -- a cycle's relevance grade
+    (which rank bucket of that quarter's realized-forward-return ordering
+    an instrument fell into) is a pure function of that cycle, its next
+    cycle, and prices, never of which later cycle is currently training or
+    how far back its training window reaches. Callers sweeping several
+    ``ml_train_years`` values over the same
+    ``feature_results``/prices/``n_relevance_grades`` should build this
+    once and pass it to every :func:`run_ic_backtest` call via its
+    ``labeled_by_quarter`` parameter.
     """
     return {
         cycles[i].quarter_start: _label_prior_cycle(
             cycles[i], cycles[i + 1], feature_results[cycles[i].quarter_start].observations,
-            prices_by_instrument, n_winners,
+            prices_by_instrument, n_relevance_grades,
         )
         for i in range(len(cycles) - 1)
     }
@@ -464,7 +389,7 @@ def run_ic_backtest(
     sweep script trying several ``config.ml_train_years`` values) to
     skip rebuilding this ``ml_train_years``-independent work on every
     call; the caller is responsible for having built them with a
-    matching ``n_winners``/universe/cycles, since this function has no
+    matching ``n_relevance_grades``/universe/cycles, since this function has no
     way to detect a mismatch.
     """
     if len(cycles) < 2:
@@ -479,7 +404,8 @@ def run_ic_backtest(
     if labeled_by_quarter is None:
         labeled_by_quarter = build_labeled_quarters(
             cycles=cycles, feature_results=feature_results,
-            prices_by_instrument=prices_by_instrument, n_winners=config.n_winners,
+            prices_by_instrument=prices_by_instrument,
+            n_relevance_grades=config.n_relevance_grades,
         )
     cycle_results: list[RankingCycleResult] = []
 
@@ -497,7 +423,7 @@ def run_ic_backtest(
             ml_train_years=config.ml_train_years, model_config_identity=config.model.identity(),
         )
         eligibility = check_training_eligibility(
-            dataset, min_train_quarters=config.min_train_quarters, n_winners=config.n_winners
+            dataset, min_train_quarters=config.min_train_quarters
         )
         training_result = train_model(
             dataset, eligibility, config.model, estimator_factory,
@@ -508,8 +434,8 @@ def run_ic_backtest(
             cycle_results.append(
                 RankingCycleResult(
                     cycle=cycle, training_state=training_result.state, model_identity=None,
-                    scoring_result=None, decision_summary=None, ic=None, decile_spread=None, auc=None,
-                    ranked_count=0, scored_for_ic_count=0, scored_for_auc_count=0,
+                    scoring_result=None, decision_summary=None, ic=None, decile_spread=None,
+                    ranked_count=0, scored_for_ic_count=0,
                     warnings=(f"training skipped: {training_result.state.value}",),
                 )
             )
@@ -532,20 +458,15 @@ def run_ic_backtest(
         summary: MultiFactorRankingDecisionSummary = strategy_result.state_update
 
         ic, spread, scored_for_ic = None, None, 0
-        auc, scored_for_auc = None, 0
         if i + 1 < len(cycles):
             next_cycle = cycles[i + 1]
             exit_cutoff = datetime.combine(next_cycle.quarter_start, time.min)
-            outcomes: list[ForwardReturnOutcome] = []
-            score_by_instrument: dict[InstrumentId, float] = {}
             pairs: list[tuple[float, float]] = []
             for ranked in summary.ranked_candidates:
                 outcome: ForwardReturnOutcome = build_forward_return_outcome(
                     ranked.instrument_id, cycle.quarter_start, cycle.quarter_start,
                     next_cycle.quarter_start, prices_by_instrument.get(ranked.instrument_id, ()), exit_cutoff,
                 )
-                outcomes.append(outcome)
-                score_by_instrument[ranked.instrument_id] = ranked.score
                 if outcome.clipped_return is not None:
                     pairs.append((ranked.score, outcome.clipped_return))
             scored_for_ic = len(pairs)
@@ -553,35 +474,11 @@ def run_ic_backtest(
                 ic = spearman_correlation([p[0] for p in pairs], [p[1] for p in pairs])
                 spread = decile_spread(pairs)
 
-            # Same binary win/loss label the model is trained on
-            # (labeling.py's global top-n_winners rule), applied to this
-            # cycle's own realized outcomes -- AUC measures how well the
-            # model's own training objective is being achieved, a direct
-            # complement to IC's continuous-return rank-correlation.
-            #
-            # Unlike training (where an uncomputable return is deliberately
-            # labeled 0 -- see labeling.py), this evaluation excludes those
-            # instruments entirely rather than counting them as confirmed
-            # negatives: we have no real evidence they underperformed, only
-            # that we don't know what they did, and treating "unknown" as
-            # "lost" would bias AUC. This mirrors IC's own `pairs` filter
-            # above, which excludes the same instruments for the same reason.
-            labeling = assign_quarterly_labels(outcomes, cycle.quarter_start, n_winners=config.n_winners)
-            label_pairs = [
-                (assignment.label, score_by_instrument[assignment.instrument_id])
-                for assignment in labeling.assignments
-                if assignment.clipped_return is not None and assignment.instrument_id in score_by_instrument
-            ]
-            scored_for_auc = len(label_pairs)
-            if label_pairs:
-                auc = roc_auc([p[0] for p in label_pairs], [p[1] for p in label_pairs])
-
         cycle_results.append(
             RankingCycleResult(
                 cycle=cycle, training_state=training_result.state, model_identity=training_result.model_identity,
-                scoring_result=scoring_result, decision_summary=summary, ic=ic, decile_spread=spread, auc=auc,
+                scoring_result=scoring_result, decision_summary=summary, ic=ic, decile_spread=spread,
                 ranked_count=len(summary.ranked_candidates), scored_for_ic_count=scored_for_ic,
-                scored_for_auc_count=scored_for_auc,
             )
         )
 

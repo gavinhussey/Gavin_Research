@@ -61,8 +61,8 @@ def _ic_result():
     cycle = EvaluationCycle(quarter_start=date(2020, 1, 1), cutoff=date(2019, 12, 31))
     cycle_result = RankingCycleResult(
         cycle=cycle, training_state=TrainingState.TRAINED, model_identity=None, scoring_result=None,
-        decision_summary=None, ic=0.25, decile_spread=0.05, auc=0.6, ranked_count=10,
-        scored_for_ic_count=10, scored_for_auc_count=10,
+        decision_summary=None, ic=0.25, decile_spread=0.05, ranked_count=10,
+        scored_for_ic_count=10,
     )
     return ICBacktestResult(
         strategy_id="multi_factor_ranking_ml", strategy_version="0.2.0", config_identity="abc",
@@ -75,8 +75,7 @@ def test_backtest_report_text_contains_headline_stats():
     assert "mean IC:" in text
     assert "0.2500" in text
     assert "no equity curve, Sharpe ratio, or drawdown" in text
-    assert "mean AUC" in text
-    assert "0.6000" in text
+    assert "0.0500" in text  # decile spread
 
 
 def test_backtest_report_to_dict_matches_result():

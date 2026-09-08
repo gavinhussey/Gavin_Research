@@ -157,7 +157,7 @@ def make_scored_candidate(
     sector: str = "Tech & Media",
     strategy_id: str = "multi_factor_ranking_ml",
     feature_schema_version: str = "2",
-    model_identifier: str = "hgbc",
+    model_identifier: str = "LGBMRanker",
     model_version: str = "1",
     feature_timestamp: date = date(2026, 1, 1),
     data_cutoff: datetime = datetime(2026, 1, 1),
@@ -179,46 +179,41 @@ def make_scored_candidate(
 
 
 class FakeEstimator:
-    """A deterministic, injectable Estimator for tests -- never a real fit.
+    """A deterministic, injectable ranker for tests -- never a real fit.
 
-    ``fixed_scores`` (if given) maps row index -> P(y=1) directly, letting
-    a test control scoring output precisely. Otherwise ``predict_proba``
-    returns a constant distribution for every row.
+    Ranker-shaped, matching ``estimator.Estimator``: ``fit(X, y,
+    group=...)`` and ``predict(X)``. There is no ``classes_`` and no
+    ``predict_proba`` -- a LambdaRank model has neither.
+
+    ``fixed_scores`` (if given) maps row index -> that row's ranking
+    score, letting a test control ranking output precisely. Scores are
+    arbitrary real numbers (they may be negative or exceed 1.0, exactly
+    like a real LGBMRanker margin); only their order is meaningful.
+    Otherwise ``predict`` returns ``default_score`` for every row.
+
+    ``fit_called_with`` records ``(X, y, group)`` so a test can assert the
+    query grouping actually handed to the ranker.
     """
 
     def __init__(
         self,
-        classes: tuple[int, ...] = (0, 1),
         fixed_scores: dict | None = None,
-        default_score: float = 0.5,
+        default_score: float = 0.0,
         fit_error: str | None = None,
     ) -> None:
-        self.classes_ = classes
         self.fixed_scores = fixed_scores or {}
         self.default_score = default_score
         self.fit_error = fit_error
         self.fit_called_with = None
 
-    def fit(self, X, y):
+    def fit(self, X, y, group=None):
         if self.fit_error is not None:
             raise ValueError(self.fit_error)
-        self.fit_called_with = (X, y)
+        self.fit_called_with = (X, y, group)
         return self
 
-    def predict_proba(self, X):
-        rows = []
-        pos_index = self.classes_.index(1) if 1 in self.classes_ else None
-        for i in range(len(X)):
-            score = self.fixed_scores.get(i, self.default_score)
-            row = [0.0] * len(self.classes_)
-            if pos_index is not None:
-                row[pos_index] = score
-                other = (1.0 - score) / max(1, len(self.classes_) - 1)
-                for j in range(len(row)):
-                    if j != pos_index:
-                        row[j] = other
-            rows.append(row)
-        return rows
+    def predict(self, X):
+        return [self.fixed_scores.get(i, self.default_score) for i in range(len(X))]
 
 
 def make_backtest_universe(n: int = 15) -> list[InstrumentId]:

@@ -1,16 +1,19 @@
-"""The injectable model-estimator boundary, report §4.1/§4.5.
+"""The injectable model-estimator boundary for this strategy's ranker.
 
-``scikit-learn`` is confirmed **not installed** in this repository's venv
-(``pyproject.toml`` declares only ``numpy``/``pandas``) — the same
-situation as any other optional heavy dependency. Per this stage's explicit
-instruction, it was not installed to make this stage "work"; instead this
-module defines an injectable :class:`Estimator` protocol, a real
-``HistGradientBoostingClassifier``-backed factory that imports
-``sklearn`` lazily (only inside its methods, never at module load time,
-so this module always imports cleanly), and every unit test in this
-repository injects a deterministic fake estimator instead. One
-``@pytest.mark.external_env`` integration test exercises the real factory
-and is skipped automatically when ``sklearn`` is absent.
+This strategy learns to **rank** a quarterly cross-section, so the
+estimator contract here is ranker-shaped: ``fit(X, y, group=...)`` /
+``predict(X) -> scores``. The previous classifier-shaped protocol
+(``classes_``/``predict_proba``) and its
+``HistGradientBoostingClassifier`` factory are deleted outright, not
+retained behind a flag -- see ``docs/reproducibility_findings.md``.
+
+``lightgbm`` is an optional heavy dependency (declared in the ``model``
+extra in ``pyproject.toml``). It is imported **lazily**, only inside
+:func:`build_lgbm_ranker_estimator`, so this module always imports
+cleanly without it; every unit test injects a deterministic fake ranker
+instead, and one ``@pytest.mark.external_env`` integration test
+exercises the real factory and skips automatically when ``lightgbm`` is
+absent.
 """
 
 from __future__ import annotations
@@ -20,40 +23,42 @@ from typing import Protocol, Sequence, runtime_checkable
 
 from atlas_quant.strategies.multi_factor_ranking_ml.config import MultiFactorRankingModelConfig
 
-#: report §4.5's hyperparameters, resolved into the exact keyword arguments
-#: this platform passes to HistGradientBoostingClassifier. Every
-#: report-required parameter is listed explicitly here -- nothing is left
-#: to an undocumented library default that could silently change behavior
-#: across a scikit-learn version bump.
+
 def resolve_estimator_parameters(model_config: MultiFactorRankingModelConfig) -> dict:
+    """The exact keyword arguments this platform passes to ``LGBMRanker``.
+
+    Every behavior-affecting parameter is listed explicitly -- nothing is
+    left to an undocumented library default that could silently change
+    across a LightGBM version bump. ``objective`` is pinned here too:
+    ``"lambdarank"`` *is* the strategy decision, not a tunable default.
+    """
     return {
-        "max_iter": model_config.max_iter,
+        "objective": "lambdarank",
+        "n_estimators": model_config.n_estimators,
         "max_depth": model_config.max_depth,
         "learning_rate": model_config.learning_rate,
-        "max_leaf_nodes": model_config.max_leaf_nodes,
-        "min_samples_leaf": model_config.min_samples_leaf,
-        "l2_regularization": model_config.l2_regularization,
-        "class_weight": model_config.class_weight,
+        "num_leaves": model_config.num_leaves,
+        "min_child_samples": model_config.min_child_samples,
+        "reg_lambda": model_config.reg_lambda,
         "random_state": model_config.random_state,
     }
 
 
 @runtime_checkable
 class Estimator(Protocol):
-    """The minimal contract this module needs from any classifier.
+    """The minimal contract this module needs from any ranker.
 
-    Deliberately narrow: ``fit``, ``predict_proba``, and a fitted
-    ``classes_`` attribute (needed to locate the positive-class
-    probability column — see ``scoring.py``). Any object satisfying this
-    (a real ``HistGradientBoostingClassifier`` or a deterministic test
-    fake) can be injected wherever an ``Estimator`` is expected.
+    Deliberately narrow: ``fit(X, y, group=...)`` -- where ``group`` is
+    the per-query row count list LambdaRank requires, one entry per
+    quarter, aligned to ``X``'s row order -- and ``predict(X)``, which
+    returns one unbounded real-valued ranking score per row. There is no
+    ``classes_`` and no ``predict_proba``: a ranker has no classes and
+    emits no probabilities.
     """
 
-    classes_: Sequence[int]
+    def fit(self, X, y, group: Sequence[int] | None = None) -> "Estimator": ...
 
-    def fit(self, X, y) -> "Estimator": ...
-
-    def predict_proba(self, X): ...
+    def predict(self, X): ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,22 +71,23 @@ class EstimatorBuildInfo:
     library_version: str | None
 
 
-def build_hgbc_estimator(model_config: MultiFactorRankingModelConfig) -> tuple[Estimator, EstimatorBuildInfo]:
-    """Construct a real ``HistGradientBoostingClassifier`` with report §4.5's exact parameters.
+def build_lgbm_ranker_estimator(
+    model_config: MultiFactorRankingModelConfig,
+) -> tuple[Estimator, EstimatorBuildInfo]:
+    """Construct a real ``lightgbm.LGBMRanker`` with this config's exact parameters.
 
-    Imports ``sklearn`` lazily — raises :class:`ImportError` if it is not
+    Imports ``lightgbm`` lazily — raises :class:`ImportError` if it is not
     installed. Callers (``model_training.py``) must catch this and mark
-    training as skipped/blocked, never silently vendor or reimplement
-    gradient boosting as a substitute.
+    training as skipped/blocked, never silently substitute a different
+    objective or reimplement gradient boosting.
     """
-    from sklearn import __version__ as sklearn_version
-    from sklearn.ensemble import HistGradientBoostingClassifier
+    from lightgbm import LGBMRanker, __version__ as lightgbm_version
 
     parameters = resolve_estimator_parameters(model_config)
-    estimator = HistGradientBoostingClassifier(**parameters)
+    estimator = LGBMRanker(verbose=-1, **parameters)
     return estimator, EstimatorBuildInfo(
-        estimator_type="HistGradientBoostingClassifier",
+        estimator_type="LGBMRanker",
         parameters=parameters,
-        library="scikit-learn",
-        library_version=sklearn_version,
+        library="lightgbm",
+        library_version=lightgbm_version,
     )

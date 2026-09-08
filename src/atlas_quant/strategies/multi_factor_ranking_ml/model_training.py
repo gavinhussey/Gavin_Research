@@ -35,8 +35,7 @@ from atlas_quant.strategies.multi_factor_ranking_ml.training_dataset import (
 class TrainingState(str, Enum):
     TRAINED = "trained"
     SKIPPED_INSUFFICIENT_QUARTERS = "skipped_insufficient_quarters"
-    SKIPPED_INSUFFICIENT_POSITIVE_LABELS = "skipped_insufficient_positive_labels"
-    SKIPPED_SINGLE_CLASS = "skipped_single_class"
+    SKIPPED_NO_RELEVANCE_VARIATION = "skipped_no_relevance_variation"
     SKIPPED_INVALID_FEATURES = "skipped_invalid_features"
     FIT_FAILED = "fit_failed"
 
@@ -144,19 +143,22 @@ def train_model(
     """Fit an estimator on ``dataset``, or return a structured skip/failure result.
 
     Never fits when ``eligibility.eligible`` is False — the specific skip
-    state is derived from *which* gate failed, checked in report-defined
-    order (quarters, then positive labels, then basic validity) so a
-    caller always knows the first, most fundamental reason.
+    state is derived from *which* gate failed, checked in order (quarters,
+    then relevance variation, then basic validity) so a caller always
+    knows the first, most fundamental reason.
     """
     audit = AuditTrail()
 
     if not eligibility.quarter_gate_passed:
         state = TrainingState.SKIPPED_INSUFFICIENT_QUARTERS
-    elif not eligibility.positive_label_gate_passed:
-        state = TrainingState.SKIPPED_INSUFFICIENT_POSITIVE_LABELS
-    elif not eligibility.both_classes_present:
-        state = TrainingState.SKIPPED_SINGLE_CLASS
-    elif not (eligibility.non_empty and eligibility.matrix_label_length_match and eligibility.has_finite_values):
+    elif eligibility.non_empty and not eligibility.relevance_variation_present:
+        state = TrainingState.SKIPPED_NO_RELEVANCE_VARIATION
+    elif not (
+        eligibility.non_empty
+        and eligibility.matrix_relevance_length_match
+        and eligibility.groups_match_row_count
+        and eligibility.has_finite_values
+    ):
         state = TrainingState.SKIPPED_INVALID_FEATURES
     else:
         state = None
@@ -196,8 +198,11 @@ def train_model(
 
     try:
         X = select_feature_columns(dataset.feature_matrix, used_feature_names)
-        y = list(dataset.labels)
-        estimator.fit(X, y)
+        y = list(dataset.relevances)
+        # LambdaRank compares items only *within* a query group, so one
+        # quarter's cross-section is one group. dataset.groups is aligned
+        # to X's row order by construction (see build_training_dataset).
+        estimator.fit(X, y, group=list(dataset.groups))
     except Exception as exc:  # noqa: BLE001 - a fit failure is a reported state, not a crash
         audit = audit.append(
             AuditRecord(
@@ -220,7 +225,10 @@ def train_model(
             stage="fit",
             message=f"fit succeeded on {dataset.total_row_count} row(s)",
             timestamp=dataset.training_cutoff,
-            data={"positive_count": dataset.positive_label_count},
+            data={
+                "query_group_count": len(dataset.groups),
+                "distinct_relevance_count": eligibility.distinct_relevance_count,
+            },
         )
     )
     return TrainingResult(

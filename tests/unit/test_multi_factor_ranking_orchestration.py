@@ -21,7 +21,7 @@ pytestmark = pytest.mark.filterwarnings("ignore")
 def _estimator_factory(*args, **kwargs):
     from atlas_quant.strategies.multi_factor_ranking_ml.estimator import EstimatorBuildInfo
 
-    return FakeEstimator(default_score=0.5), EstimatorBuildInfo(
+    return FakeEstimator(default_score=0.0), EstimatorBuildInfo(
         estimator_type="FakeEstimator", library="test", library_version=None, parameters={},
     )
 
@@ -99,7 +99,7 @@ def test_most_recent_cycle_picks_last_cycle_on_or_before_as_of():
 
 def test_run_current_ranking_trains_and_records_when_enough_history(raw_root, tmp_path):
     data = orchestration.load_raw_data(raw_root, price_convention="unadjusted")
-    config = MultiFactorRankingMLConfig(min_train_quarters=1, n_winners=1)
+    config = MultiFactorRankingMLConfig(min_train_quarters=1)
     cycle = EvaluationCycle(quarter_start=date(2020, 10, 1), cutoff=date(2020, 9, 30))
     decision_log_root = tmp_path / "decisions"
 
@@ -117,7 +117,7 @@ def test_run_current_ranking_trains_and_records_when_enough_history(raw_root, tm
 
 def test_run_current_ranking_returns_existing_entry_if_already_decided(raw_root, tmp_path):
     data = orchestration.load_raw_data(raw_root, price_convention="unadjusted")
-    config = MultiFactorRankingMLConfig(min_train_quarters=1, n_winners=1)
+    config = MultiFactorRankingMLConfig(min_train_quarters=1)
     cycle = EvaluationCycle(quarter_start=date(2020, 10, 1), cutoff=date(2020, 9, 30))
     decision_log_root = tmp_path / "decisions"
 
@@ -135,7 +135,7 @@ def test_run_current_ranking_returns_existing_entry_if_already_decided(raw_root,
 
 def test_run_current_ranking_skips_when_insufficient_training_history(raw_root, tmp_path):
     data = orchestration.load_raw_data(raw_root, price_convention="unadjusted")
-    config = MultiFactorRankingMLConfig(min_train_quarters=50, n_winners=1)
+    config = MultiFactorRankingMLConfig(min_train_quarters=50)
     cycle = EvaluationCycle(quarter_start=date(2020, 10, 1), cutoff=date(2020, 9, 30))
 
     result = orchestration.run_current_ranking(

@@ -21,7 +21,6 @@ from atlas_quant.backtest.multi_factor_ranking_runner import (
     MultiFactorRankingBacktestConfig,
     RankingCycleResult,
     decile_spread,
-    roc_auc,
     run_ic_backtest,
     spearman_correlation,
 )
@@ -77,50 +76,6 @@ class TestDecileSpread:
         assert spread < 0
 
 
-class TestRocAuc:
-    def test_perfect_separation_is_one(self):
-        # every positive scores strictly higher than every negative
-        labels = [0, 0, 0, 1, 1, 1]
-        scores = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-        assert roc_auc(labels, scores) == pytest.approx(1.0)
-
-    def test_perfect_inversion_is_zero(self):
-        # every positive scores strictly lower than every negative
-        labels = [1, 1, 1, 0, 0, 0]
-        scores = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-        assert roc_auc(labels, scores) == pytest.approx(0.0)
-
-    def test_no_skill_symmetric_ranks_is_exactly_half(self):
-        # positives occupy ranks {2,3,6,7} out of 8, negatives {1,4,5,8} --
-        # symmetric mean rank on both sides, so there's no real separation.
-        labels = [0, 1, 1, 0, 0, 1, 1, 0]
-        scores = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-        assert roc_auc(labels, scores) == pytest.approx(0.5)
-
-    def test_tied_scores_across_classes_count_as_half(self):
-        # a tie between a positive and a negative contributes 0.5, not 0 or 1
-        labels = [0, 1]
-        scores = [5.0, 5.0]
-        assert roc_auc(labels, scores) == pytest.approx(0.5)
-
-    def test_no_positives_is_none(self):
-        assert roc_auc([0, 0, 0], [1.0, 2.0, 3.0]) is None
-
-    def test_no_negatives_is_none(self):
-        assert roc_auc([1, 1, 1], [1.0, 2.0, 3.0]) is None
-
-    def test_empty_is_none(self):
-        assert roc_auc([], []) is None
-
-    def test_mismatched_length_raises(self):
-        with pytest.raises(ValueError):
-            roc_auc([0, 1], [1.0])
-
-    def test_non_binary_label_raises(self):
-        with pytest.raises(ValueError):
-            roc_auc([0, 2], [1.0, 2.0])
-
-
 def _fake_estimator_factory(scores_by_call):
     """Returns an estimator_factory that yields a fresh FakeEstimator per
     call, whose fixed_scores come from ``scores_by_call`` (a mutable list
@@ -128,7 +83,7 @@ def _fake_estimator_factory(scores_by_call):
 
     def factory(model_config: MultiFactorRankingModelConfig):
         fixed = scores_by_call.pop(0) if scores_by_call else {}
-        estimator = FakeEstimator(fixed_scores=fixed, default_score=0.5)
+        estimator = FakeEstimator(fixed_scores=fixed, default_score=0.0)
         build_info = EstimatorBuildInfo(
             estimator_type="fake", parameters={}, library="fixture", library_version=None
         )
@@ -185,7 +140,7 @@ class TestRunIcBacktest:
             )
 
     def test_every_cycle_appears_in_results_even_the_last_unmeasured_one(self):
-        config = MultiFactorRankingMLConfig(min_train_quarters=1, n_winners=1)
+        config = MultiFactorRankingMLConfig(min_train_quarters=1)
         cycles = quarterly_evaluation_cycles(date(2020, 1, 1), date(2021, 10, 1))
         universe, fundamentals, prices = _build_universe_data(12, cycles)
 
@@ -209,7 +164,7 @@ class TestRunIcBacktest:
             build_labeled_quarters,
         )
 
-        config = MultiFactorRankingMLConfig(min_train_quarters=1, n_winners=1)
+        config = MultiFactorRankingMLConfig(min_train_quarters=1)
         cycles = quarterly_evaluation_cycles(date(2020, 1, 1), date(2021, 10, 1))
         universe, fundamentals, prices = _build_universe_data(12, cycles)
 
@@ -225,7 +180,7 @@ class TestRunIcBacktest:
         )
         labeled_by_quarter = build_labeled_quarters(
             cycles=cycles, feature_results=feature_results, prices_by_instrument=prices,
-            n_winners=config.n_winners,
+            n_relevance_grades=config.n_relevance_grades,
         )
         reused_result = run_ic_backtest(
             config=config, universe=universe, fundamentals_by_instrument=fundamentals, prices_by_instrument=prices,
@@ -235,14 +190,16 @@ class TestRunIcBacktest:
         )
 
         assert [c.ic for c in reused_result.cycle_results] == [c.ic for c in default_result.cycle_results]
-        assert [c.auc for c in reused_result.cycle_results] == [c.auc for c in default_result.cycle_results]
+        assert [c.decile_spread for c in reused_result.cycle_results] == [
+            c.decile_spread for c in default_result.cycle_results
+        ]
         assert [c.training_state for c in reused_result.cycle_results] == [
             c.training_state for c in default_result.cycle_results
         ]
         assert reused_result.mean_ic == default_result.mean_ic
 
     def test_insufficient_training_history_skips_early_cycles(self):
-        config = MultiFactorRankingMLConfig(min_train_quarters=8, n_winners=1)
+        config = MultiFactorRankingMLConfig(min_train_quarters=8)
         cycles = quarterly_evaluation_cycles(date(2020, 1, 1), date(2020, 10, 1))  # only 4 cycles
         universe, fundamentals, prices = _build_universe_data(12, cycles)
 
@@ -256,7 +213,7 @@ class TestRunIcBacktest:
         assert result.mean_ic is None
 
     def test_to_dict_has_no_pnl_concepts(self):
-        config = MultiFactorRankingMLConfig(min_train_quarters=1, n_winners=1)
+        config = MultiFactorRankingMLConfig(min_train_quarters=1)
         cycles = quarterly_evaluation_cycles(date(2020, 1, 1), date(2020, 4, 1))
         universe, fundamentals, prices = _build_universe_data(3, cycles)
 
@@ -270,7 +227,7 @@ class TestRunIcBacktest:
             assert pnl_concept not in payload
 
     def test_ic_information_ratio_is_none_when_std_is_zero(self):
-        config = MultiFactorRankingMLConfig(min_train_quarters=1, n_winners=1)
+        config = MultiFactorRankingMLConfig(min_train_quarters=1)
         cycles = quarterly_evaluation_cycles(date(2020, 1, 1), date(2020, 4, 1))
         universe, fundamentals, prices = _build_universe_data(3, cycles)
         result = run_ic_backtest(
@@ -285,8 +242,8 @@ class TestRunIcBacktest:
 
 class TestMultiFactorRankingBacktestConfig:
     def test_identity_changes_with_strategy_config(self):
-        a = MultiFactorRankingBacktestConfig(strategy_config=MultiFactorRankingMLConfig(n_winners=10))
-        b = MultiFactorRankingBacktestConfig(strategy_config=MultiFactorRankingMLConfig(n_winners=5))
+        a = MultiFactorRankingBacktestConfig(strategy_config=MultiFactorRankingMLConfig(n_relevance_grades=10))
+        b = MultiFactorRankingBacktestConfig(strategy_config=MultiFactorRankingMLConfig(n_relevance_grades=5))
         assert a.identity() != b.identity()
 
     def test_has_no_pnl_fields(self):
@@ -295,34 +252,33 @@ class TestMultiFactorRankingBacktestConfig:
             assert not hasattr(config, pnl_field)
 
 
-def _cycle_result(quarter_start, *, scored_for_ic, scored_for_auc, ic=0.1, auc=0.6, decile_spread=0.05):
+def _cycle_result(quarter_start, *, scored_for_ic, ic=0.1, decile_spread=0.05):
     cycle = EvaluationCycle(quarter_start=quarter_start, cutoff=quarter_start - timedelta(days=1))
     return RankingCycleResult(
         cycle=cycle, training_state=TrainingState.TRAINED, model_identity=None, scoring_result=None,
-        decision_summary=None, ic=ic, decile_spread=decile_spread, auc=auc,
-        ranked_count=scored_for_ic, scored_for_ic_count=scored_for_ic, scored_for_auc_count=scored_for_auc,
+        decision_summary=None, ic=ic, decile_spread=decile_spread,
+        ranked_count=scored_for_ic, scored_for_ic_count=scored_for_ic,
     )
 
 
 class TestMinScoredCountFilter:
     def test_small_cycle_excluded_from_headline_stats_by_default(self):
-        tiny = _cycle_result(date(1987, 1, 1), scored_for_ic=9, scored_for_auc=9, ic=0.9, auc=0.99)
-        big = _cycle_result(date(2020, 1, 1), scored_for_ic=1000, scored_for_auc=1000, ic=0.1, auc=0.6)
+        tiny = _cycle_result(date(1987, 1, 1), scored_for_ic=9, ic=0.9)
+        big = _cycle_result(date(2020, 1, 1), scored_for_ic=1000, ic=0.1)
         result = ICBacktestResult(
-            strategy_id="multi_factor_ranking_ml", strategy_version="0.2.0", config_identity="abc",
+            strategy_id="multi_factor_ranking_ml", strategy_version="0.3.0", config_identity="abc",
             cycle_results=(tiny, big), run_identity="run-1",
         )
         assert result.min_scored_count == 30  # documented default
         assert result.measured_cycle_count == 1
         assert result.mean_ic == pytest.approx(0.1)  # tiny cycle's 0.9 never enters the average
-        assert result.mean_auc == pytest.approx(0.6)
         assert result.mean_decile_spread == pytest.approx(0.05)
 
     def test_both_cycles_included_when_threshold_lowered(self):
-        tiny = _cycle_result(date(1987, 1, 1), scored_for_ic=9, scored_for_auc=9, ic=0.9, auc=0.99)
-        big = _cycle_result(date(2020, 1, 1), scored_for_ic=1000, scored_for_auc=1000, ic=0.1, auc=0.6)
+        tiny = _cycle_result(date(1987, 1, 1), scored_for_ic=9, ic=0.9)
+        big = _cycle_result(date(2020, 1, 1), scored_for_ic=1000, ic=0.1)
         result = ICBacktestResult(
-            strategy_id="multi_factor_ranking_ml", strategy_version="0.2.0", config_identity="abc",
+            strategy_id="multi_factor_ranking_ml", strategy_version="0.3.0", config_identity="abc",
             cycle_results=(tiny, big), run_identity="run-1", min_scored_count=5,
         )
         assert result.measured_cycle_count == 2
@@ -330,9 +286,9 @@ class TestMinScoredCountFilter:
 
     def test_excluded_cycle_still_appears_in_to_dict_per_cycle_list(self):
         # min_scored_count only affects aggregation, never hides a cycle's own recorded result.
-        tiny = _cycle_result(date(1987, 1, 1), scored_for_ic=9, scored_for_auc=9)
+        tiny = _cycle_result(date(1987, 1, 1), scored_for_ic=9)
         result = ICBacktestResult(
-            strategy_id="multi_factor_ranking_ml", strategy_version="0.2.0", config_identity="abc",
+            strategy_id="multi_factor_ranking_ml", strategy_version="0.3.0", config_identity="abc",
             cycle_results=(tiny,), run_identity="run-1",
         )
         payload = result.to_dict()
@@ -341,14 +297,14 @@ class TestMinScoredCountFilter:
         assert len(payload["cycles"]) == 1
         assert payload["cycles"][0]["ic"] == pytest.approx(0.1)
 
-    def test_ic_and_auc_thresholds_apply_independently(self):
-        # a cycle can clear the AUC threshold but not the IC one, or vice versa,
-        # since scored_for_ic_count and scored_for_auc_count can differ (different
-        # exclusion rules -- see run_ic_backtest's pairs vs. label_pairs).
-        mixed = _cycle_result(date(2020, 1, 1), scored_for_ic=9, scored_for_auc=1000, ic=0.5, auc=0.7)
+    def test_decile_spread_uses_the_same_scored_count_threshold_as_ic(self):
+        # scored_for_ic_count is now the single headline-eligibility count
+        # (the separate AUC count is gone with AUC), so a cycle below the
+        # threshold is excluded from *every* headline stat, spread included.
+        tiny = _cycle_result(date(2020, 1, 1), scored_for_ic=9, ic=0.5, decile_spread=0.3)
         result = ICBacktestResult(
-            strategy_id="multi_factor_ranking_ml", strategy_version="0.2.0", config_identity="abc",
-            cycle_results=(mixed,), run_identity="run-1",
+            strategy_id="multi_factor_ranking_ml", strategy_version="0.3.0", config_identity="abc",
+            cycle_results=(tiny,), run_identity="run-1",
         )
         assert result.mean_ic is None
-        assert result.mean_auc == pytest.approx(0.7)
+        assert result.mean_decile_spread is None

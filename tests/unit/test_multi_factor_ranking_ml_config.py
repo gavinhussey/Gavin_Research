@@ -26,11 +26,23 @@ def test_defaults_match_report_current_html():
     config = MultiFactorRankingMLConfig()
     assert config.strategy_id == STRATEGY_ID == "multi_factor_ranking_ml"
     assert config.fcf_mode == "ratio"  # report §3.1 production default
-    assert config.ml_train_years == 3  # report §4.4
-    assert config.min_train_quarters == 8  # report §4.4
-    assert config.n_winners == 10  # report §4.2
+    assert config.n_relevance_grades == 10  # decile granularity for the LambdaRank target
     assert config.return_cap == 0.50  # report §5.5
     assert config.exclude_sectors == ("Materials",)  # report §5.2
+
+
+def test_training_window_defaults_are_measured_not_report_inherited():
+    """``ml_train_years``/``min_train_quarters`` deliberately diverge from
+    report §4.4 (3 and 8). Both were re-measured on real data under the
+    LambdaRank objective on 2026-09-07 -- see config.py's provenance block
+    and docs/training_window_sweep_findings.md. 6y tied every window from
+    9y to 20y (paired p ~ 0.35-0.83) and was taken on parsimony; the gate
+    proved wholly inert (every value 1..16 gave identical results) and is
+    kept low only as a guard against a degenerate training set.
+    """
+    config = MultiFactorRankingMLConfig()
+    assert config.ml_train_years == 6
+    assert config.min_train_quarters == 4
 
 
 def test_no_qualification_threshold_position_sizing_or_fallback_fields():
@@ -39,6 +51,8 @@ def test_no_qualification_threshold_position_sizing_or_fallback_fields():
         "ml_threshold", "min_positions", "max_positions", "deployable_pct",
         "earnings_lag_days", "fallback_tickers", "fallback_dynamic_weight",
         "fallback_lookback_quarters", "strategy_budget_pct",
+        # deleted with the binary top-N classifier target (see labeling.py)
+        "n_winners",
     ):
         assert not hasattr(config, deleted_field), (
             f"MultiFactorRankingMLConfig unexpectedly has {deleted_field!r} -- "
@@ -47,16 +61,20 @@ def test_no_qualification_threshold_position_sizing_or_fallback_fields():
         )
 
 
-def test_default_model_hyperparameters_match_report_4_5():
+def test_default_model_hyperparameters_are_the_lgbm_ranker_equivalents():
+    """The HGBC values are carried forward one-for-one onto their
+    LGBMRanker equivalents; class_weight has no ranker analogue and is
+    deleted outright rather than defaulted away."""
     model = MultiFactorRankingModelConfig()
-    assert model.max_iter == 300
+    assert model.n_estimators == 300      # was max_iter
     assert model.max_depth == 5
     assert model.learning_rate == 0.05
-    assert model.max_leaf_nodes == 31
-    assert model.min_samples_leaf == 20
-    assert model.l2_regularization == 0.1
-    assert model.class_weight == "balanced"
+    assert model.num_leaves == 31         # was max_leaf_nodes
+    assert model.min_child_samples == 20  # was min_samples_leaf
+    assert model.reg_lambda == 0.1        # was l2_regularization
     assert model.random_state == 42
+    for gone in ("max_iter", "max_leaf_nodes", "min_samples_leaf", "l2_regularization", "class_weight"):
+        assert not hasattr(model, gone)
 
 
 @pytest.mark.parametrize("years", [0, -1])
@@ -71,10 +89,11 @@ def test_training_window_validation_rejects_non_positive_min_quarters(quarters):
         MultiFactorRankingMLConfig(min_train_quarters=quarters)
 
 
-@pytest.mark.parametrize("winners", [0, -5])
-def test_n_winners_validation_rejects_non_positive_values(winners):
+@pytest.mark.parametrize("grades", [1, 0, -5])
+def test_n_relevance_grades_validation_rejects_degenerate_values(grades):
+    # fewer than 2 grades means every instrument is tied -- no ranking to learn
     with pytest.raises(ValueError):
-        MultiFactorRankingMLConfig(n_winners=winners)
+        MultiFactorRankingMLConfig(n_relevance_grades=grades)
 
 
 @pytest.mark.parametrize("cap", [0.0, -0.1, 1.5])
@@ -100,12 +119,12 @@ def test_fcf_mode_rejects_unknown_value():
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("max_iter", 0),
+        ("n_estimators", 0),
         ("max_depth", 0),
         ("learning_rate", 0.0),
-        ("max_leaf_nodes", 1),
-        ("min_samples_leaf", 0),
-        ("l2_regularization", -0.1),
+        ("num_leaves", 1),
+        ("min_child_samples", 0),
+        ("reg_lambda", -0.1),
     ],
 )
 def test_model_parameter_validation_rejects_invalid_values(field, value):
@@ -148,3 +167,24 @@ def test_feature_cache_identity_data_cutoff_does_affect_cache_key():
     a = FeatureCacheIdentity.compute(config, date(2026, 6, 30), created)
     b = FeatureCacheIdentity.compute(config, date(2025, 6, 30), created)
     assert a.cache_key() != b.cache_key()
+
+
+def test_resolved_estimator_parameters_are_the_lambdarank_keyword_arguments():
+    """resolve_estimator_parameters imports nothing from lightgbm, so this
+    pins the exact kwargs handed to LGBMRanker even where lightgbm itself
+    cannot be loaded."""
+    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import (
+        resolve_estimator_parameters,
+    )
+
+    params = resolve_estimator_parameters(MultiFactorRankingModelConfig())
+    assert params == {
+        "objective": "lambdarank",
+        "n_estimators": 300,
+        "max_depth": 5,
+        "learning_rate": 0.05,
+        "num_leaves": 31,
+        "min_child_samples": 20,
+        "reg_lambda": 0.1,
+        "random_state": 42,
+    }

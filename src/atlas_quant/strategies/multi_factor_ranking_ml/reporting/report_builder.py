@@ -88,23 +88,15 @@ class BacktestReport:
             ),
             "",
             (
-                f"mean AUC (vs. the same top-n_winners label the model trains on): "
-                f"{_fmt_num(r.mean_auc)}  |  measured cycles: {r.measured_auc_cycle_count}"
-            ),
-            f"AUC std dev:        {_fmt_num(r.auc_std)}",
-            f"AUC > 0.5 rate:     {_fmt_pct(r.auc_above_half_rate)}  (0.5 is AUC's own no-skill baseline, not 0)",
-            "",
-            (
                 f"{'quarter_start':<14}  {'training':<12}  {'ranked':>7}  {'scored_ic':>10}  "
-                f"{'ic':>8}  {'decile_spread':>13}  {'scored_auc':>10}  {'auc':>8}"
+                f"{'ic':>8}  {'decile_spread':>13}"
             ),
         ]
         for c in r.cycle_results:
             training = c.training_state.value if c.training_state else "—"
             lines.append(
                 f"{c.cycle.quarter_start.isoformat():<14}  {training:<12}  {c.ranked_count:>7}  "
-                f"{c.scored_for_ic_count:>10}  {_fmt_num(c.ic, 4):>8}  {_fmt_num(c.decile_spread, 4):>13}  "
-                f"{c.scored_for_auc_count:>10}  {_fmt_num(c.auc, 4):>8}"
+                f"{c.scored_for_ic_count:>10}  {_fmt_num(c.ic, 4):>8}  {_fmt_num(c.decile_spread, 4):>13}"
             )
         return "\n".join(lines) + "\n"
 

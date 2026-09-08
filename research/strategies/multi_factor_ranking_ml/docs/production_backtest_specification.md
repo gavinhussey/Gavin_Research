@@ -79,7 +79,7 @@ this code) and reuses an existing Stage 3-9 service unchanged.
    dropped and reported at `ERROR` severity, never coerced or defaulted.
 6. **Feature/label build** (`production.feature_label_build`) — calls
    Stage 3's `run_feature_pipeline`/feature cache and the same two Stage 6
-   functions (`build_forward_return_outcome`, `assign_quarterly_labels`)
+   functions (`build_forward_return_outcome`, `assign_quarterly_relevance`)
    the Stage 7 runner itself calls internally, in the same order, so a
    standalone feature/label build can never diverge from what a full
    backtest would compute.
@@ -108,9 +108,10 @@ this code) and reuses an existing Stage 3-9 service unchanged.
    recovery counts, and why a "nearest calendar quarter" mapping was
    considered and rejected.
 7. **Model-training boundary** (`production.model_boundary`) — checks
-   scikit-learn's availability *before* calling Stage 6's `train_model`
-   with the real `build_hgbc_estimator` factory. Never substitutes
-   another estimator; if scikit-learn is unavailable, reports
+   lightgbm's availability *before* calling Stage 6's `train_model`
+   with the real `build_lgbm_ranker_estimator` factory (a real
+   `LGBMRanker` with `objective="lambdarank"`). Never substitutes
+   another estimator; if lightgbm is unavailable, reports
    `blocked=True` and stops.
 8. **Top-level orchestration** (`production.orchestration`) —
    `run_multi_factor_ranking_production_backtest` coordinates all of the

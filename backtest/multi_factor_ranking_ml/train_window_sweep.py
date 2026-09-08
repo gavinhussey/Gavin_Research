@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """Sweep several trailing training-window lengths (`ml_train_years`) over
-the SAME data and report each window's IC/AUC, to find which window this
+the SAME data and report each window's IC, to find which window this
 system's real Bloomberg data actually rewards -- not just the report-
 inherited default of 3 years.
 
 Efficiency: feature construction (`build_feature_results`) and each
-cycle's realized top-n_winners label (`build_labeled_quarters`) are both
+cycle's realized relevance grade (`build_labeled_quarters`) are both
 completely independent of `ml_train_years` -- only the trailing slice of
 already-labeled history handed to each cycle's model changes. So this
 script builds those two ml_train_years-independent, expensive steps
@@ -53,8 +53,8 @@ END_QUARTER = "2026-07-01"
 CANDIDATE_ML_TRAIN_YEARS = [3, 6, 12, 15]
 PRICE_CONVENTION = "split_dividend_adjusted"
 MIN_SCORED_COUNT = 30   # same noise floor as run_backtest.py -- excludes the tiny 1986-1989 cycles
-RANK_BY = "mean_auc"    # which stat to sort the summary table by: "mean_auc" or "mean_ic"
-WRITE_PER_CYCLE_CSV = True  # also dump every measured cycle's own IC/AUC per window
+RANK_BY = "mean_ic"     # which stat to sort the summary table by
+WRITE_PER_CYCLE_CSV = True  # also dump every measured cycle's own IC per window
 # ------------------------------------------
 
 
@@ -69,7 +69,7 @@ def main() -> int:
         run_ic_backtest,
     )
     from atlas_quant.strategies.multi_factor_ranking_ml.config import MultiFactorRankingMLConfig
-    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_hgbc_estimator
+    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import build_lgbm_ranker_estimator
     from atlas_quant.strategies.multi_factor_ranking_ml.evaluation_schedule import quarterly_evaluation_cycles
     from atlas_quant.strategies.multi_factor_ranking_ml.production import orchestration
     from atlas_quant.strategies.multi_factor_ranking_ml.sector_encoding import SectorEncoder
@@ -92,7 +92,7 @@ def main() -> int:
     log("building labeled_by_quarter (also ml_train_years-independent -- computed once)")
     labeled_by_quarter = build_labeled_quarters(
         cycles=cycles, feature_results=feature_results, prices_by_instrument=data.prices_by_instrument,
-        n_winners=base_config.n_winners,
+        n_relevance_grades=base_config.n_relevance_grades,
     )
 
     rows = []
@@ -103,7 +103,7 @@ def main() -> int:
         result = run_ic_backtest(
             config=config, universe=data.universe, fundamentals_by_instrument=data.fundamentals_by_instrument,
             prices_by_instrument=data.prices_by_instrument, sector_encoder=SectorEncoder(), cycles=cycles,
-            estimator_factory=build_hgbc_estimator, macro_lookup=data.macro_lookup,
+            estimator_factory=build_lgbm_ranker_estimator, macro_lookup=data.macro_lookup,
             min_scored_count=MIN_SCORED_COUNT,
             feature_results=feature_results, labeled_by_quarter=labeled_by_quarter,
         )
@@ -114,14 +114,11 @@ def main() -> int:
             "ic_std": result.ic_std,
             "ic_information_ratio": result.ic_information_ratio,
             "hit_rate": result.hit_rate,
-            "mean_auc": result.mean_auc,
-            "auc_std": result.auc_std,
-            "auc_above_half_rate": result.auc_above_half_rate,
             "mean_decile_spread": result.mean_decile_spread,
         })
         log(
             f"  -> measured={result.measured_cycle_count}  mean_ic={_fmt(result.mean_ic)}  "
-            f"mean_auc={_fmt(result.mean_auc)}  hit_rate={_fmt(result.hit_rate)}"
+            f"ic_ir={_fmt(result.ic_information_ratio)}  hit_rate={_fmt(result.hit_rate)}"
         )
         if WRITE_PER_CYCLE_CSV:
             for cycle_result in result.cycle_results:
@@ -131,10 +128,8 @@ def main() -> int:
                     "quarter_start": d["quarter_start"],
                     "cutoff": d["cutoff"],
                     "ic": d["ic"],
-                    "auc": d["auc"],
                     "decile_spread": d["decile_spread"],
                     "scored_for_ic_count": d["scored_for_ic_count"],
-                    "scored_for_auc_count": d["scored_for_auc_count"],
                     "headline_eligible": d["scored_for_ic_count"] is not None
                     and d["scored_for_ic_count"] >= MIN_SCORED_COUNT,
                 })
@@ -148,14 +143,14 @@ def main() -> int:
     print(f"=== training-window sweep, ranked by {RANK_BY} (descending) ===")
     header = (
         f"{'ml_train_years':>14}  {'measured':>8}  {'mean_ic':>8}  {'ic_ir':>7}  "
-        f"{'hit_rate':>8}  {'mean_auc':>8}  {'auc>0.5':>8}  {'decile_spread':>13}"
+        f"{'hit_rate':>8}  {'decile_spread':>13}"
     )
     print(header)
     for r in ranked + unranked:
         print(
             f"{r['ml_train_years']:>14}  {r['measured_cycle_count']:>8}  {_fmt(r['mean_ic']):>8}  "
-            f"{_fmt(r['ic_information_ratio']):>7}  {_fmt(r['hit_rate']):>8}  {_fmt(r['mean_auc']):>8}  "
-            f"{_fmt(r['auc_above_half_rate']):>8}  {_fmt(r['mean_decile_spread']):>13}"
+            f"{_fmt(r['ic_information_ratio']):>7}  {_fmt(r['hit_rate']):>8}  "
+            f"{_fmt(r['mean_decile_spread']):>13}"
         )
 
     if ranked:

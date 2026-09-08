@@ -56,6 +56,9 @@ DEPENDENCY_SPECS: tuple[DependencySpec, ...] = (
     DependencySpec("pandas", DependencyCategory.CORE, "pandas", True, "2.0.0"),
     DependencySpec("numpy", DependencyCategory.CORE, "numpy", True, "1.25.0"),
     DependencySpec("scikit-learn", DependencyCategory.PRODUCTION_DATA, "sklearn", True, "1.3.0"),
+    # multi_factor_ranking_ml's LambdaRank estimator (LGBMRanker); its
+    # production model-training boundary blocks without this.
+    DependencySpec("lightgbm", DependencyCategory.PRODUCTION_DATA, "lightgbm", True, "4.0.0"),
     DependencySpec("pyarrow", DependencyCategory.PRODUCTION_DATA, "pyarrow", False, "14.0.0"),
     DependencySpec("requests", DependencyCategory.PRODUCTION_DATA, "requests", True, "2.31.0"),
     DependencySpec("yfinance", DependencyCategory.PRODUCTION_DATA, "yfinance", True, "0.2.40"),
