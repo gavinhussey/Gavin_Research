@@ -1,15 +1,22 @@
 """The Multi-Factor Ranking ML feature observation — one instrument/quarter's model row.
 
-This strategy's 83-feature set is built from Bloomberg CSV exports (see
+This strategy's 71-feature set is built from Bloomberg CSV exports (see
 ``docs/reproducibility_findings.md`` for full provenance), not
 filing_momentum_ml's 17 filing-derived features. :data:`FEATURE_NAMES` is
 grouped in three blocks, in order:
 
-1. 63 fundamentals-derived/market columns from ``fundamentals_quarterly.csv``
-   (growth rates, margins, valuation ratios, analyst estimates, beta, etc.)
-   -- kept only where at least 95% of the 1520-ticker universe has
-   historical coverage (a coverage analysis excluded a handful of
-   thin-coverage columns, e.g. gross-margin-derived fields at ~77%).
+1. 51 fundamentals-derived/market columns from ``fundamentals_quarterly.csv``
+   (growth rates, margins, valuation ratios, beta, the analyst target
+   price, etc.) -- kept only where at least 95% of the 1520-ticker
+   universe has historical coverage (a coverage analysis excluded a
+   handful of thin-coverage columns, e.g. gross-margin-derived fields at
+   ~77%). Four consensus/analyst columns (``analyst_rating``,
+   ``consensus_sales_next_q``, ``consensus_eps_next_q``,
+   ``analyst_eps_num_est``) and all eight free-cash-flow columns were
+   deleted from the schema on 2026-09-08 after a measured
+   importance/ablation study found neither block contributes
+   significantly; ``analyst_target_price`` was retained because ablating
+   it *was* significant. See ``docs/reproducibility_findings.md``.
 2. 12 features carried over from ``filing_momentum_features.csv`` that
    have no equivalent in (1): ``fcf_trend``, ``vol_20d``, ``vol_63d``,
    ``vol_ratio``, ``roe_trend``, ``rev_accel``, ``rev_trend``, ``om_trend``,
@@ -47,27 +54,25 @@ from atlas_quant.domain.serialization import to_jsonable
 #: from this tuple, never from dict iteration order. See module
 #: docstring for the four-block grouping and provenance of each.
 FEATURE_NAMES: tuple[str, ...] = (
-    # Block 1: fundamentals_quarterly.csv derived/market columns (63).
-    "market_cap", "consensus_eps_next_q", "volatility_30d", "analyst_target_price",
+    # Block 1: fundamentals_quarterly.csv derived/market columns (51).
+    "market_cap", "volatility_30d", "analyst_target_price",
     "pe_ratio", "price_to_book", "volatility_63d", "volatility_20d", "volume",
-    "consensus_sales_next_q", "price_to_sales", "beta", "analyst_rating",
-    "volatility_90d", "analyst_eps_num_est", "free_cash_flow", "operating_margin",
-    "net_margin", "operating_cash_flow_margin", "free_cash_flow_margin",
+    "price_to_sales", "beta",
+    "volatility_90d", "operating_margin",
+    "net_margin", "operating_cash_flow_margin",
     "revenue_yoy_growth", "revenue_qoq_growth", "operating_income_yoy_growth",
     "operating_income_qoq_growth", "net_income_yoy_growth", "net_income_qoq_growth",
     "diluted_eps_yoy_growth", "diluted_eps_qoq_growth", "operating_cash_flow_yoy_growth",
-    "operating_cash_flow_qoq_growth", "free_cash_flow_yoy_growth",
-    "free_cash_flow_qoq_growth", "total_assets_yoy_growth", "total_assets_qoq_growth",
+    "operating_cash_flow_qoq_growth", "total_assets_yoy_growth", "total_assets_qoq_growth",
     "total_debt_yoy_growth", "total_debt_qoq_growth", "stockholders_equity_yoy_growth",
     "stockholders_equity_qoq_growth", "diluted_share_count_yoy_growth",
     "diluted_share_count_qoq_growth", "shares_outstanding_yoy_growth",
     "shares_outstanding_qoq_growth", "revenue_growth_acceleration",
     "operating_income_growth_acceleration", "eps_growth_acceleration",
-    "operating_cash_flow_growth_acceleration", "free_cash_flow_growth_acceleration",
+    "operating_cash_flow_growth_acceleration",
     "operating_margin_yoy_change_bps", "operating_margin_qoq_change_bps",
     "net_margin_yoy_change_bps", "net_margin_qoq_change_bps",
-    "free_cash_flow_margin_yoy_change_bps", "free_cash_flow_margin_qoq_change_bps",
-    "operating_cash_flow_to_net_income", "free_cash_flow_to_net_income",
+    "operating_cash_flow_to_net_income",
     "capex_to_revenue", "capex_to_depreciation", "net_debt", "adjusted_net_debt",
     "debt_to_equity", "debt_to_assets", "ROA", "ROE",
     # Block 2: carried over from filing_momentum_features.csv (12).

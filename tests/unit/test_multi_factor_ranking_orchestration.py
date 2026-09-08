@@ -13,6 +13,10 @@ from atlas_quant.strategies.multi_factor_ranking_ml.model_training import Traini
 from atlas_quant.strategies.multi_factor_ranking_ml.production import orchestration
 from atlas_quant.strategies.multi_factor_ranking_ml.production.decision_log import read_decision
 
+from atlas_quant.strategies.multi_factor_ranking_ml.acquisition.fundamentals_quarterly import (
+    FUNDAMENTALS_QUARTERLY_FEATURE_COLUMNS,
+)
+
 from fixtures.multi_factor_ranking_ml import FakeEstimator, instrument, make_daily_series
 
 pytestmark = pytest.mark.filterwarnings("ignore")
@@ -28,29 +32,16 @@ def _estimator_factory(*args, **kwargs):
 
 def _write_fundamentals_quarterly(path, symbols, quarter_ends):
     header = (
-        "ticker,period_end,fiscal_year,fiscal_quarter,available_date,available_date_is_estimated,"
-        "gics_sector_name,market_cap,consensus_eps_next_q,volatility_30d,analyst_target_price,pe_ratio,"
-        "price_to_book,volatility_63d,volatility_20d,volume,consensus_sales_next_q,price_to_sales,beta,"
-        "analyst_rating,volatility_90d,analyst_eps_num_est,free_cash_flow,operating_margin,net_margin,"
-        "operating_cash_flow_margin,free_cash_flow_margin,revenue_yoy_growth,revenue_qoq_growth,"
-        "operating_income_yoy_growth,operating_income_qoq_growth,net_income_yoy_growth,net_income_qoq_growth,"
-        "diluted_eps_yoy_growth,diluted_eps_qoq_growth,operating_cash_flow_yoy_growth,"
-        "operating_cash_flow_qoq_growth,free_cash_flow_yoy_growth,free_cash_flow_qoq_growth,"
-        "total_assets_yoy_growth,total_assets_qoq_growth,total_debt_yoy_growth,total_debt_qoq_growth,"
-        "stockholders_equity_yoy_growth,stockholders_equity_qoq_growth,diluted_share_count_yoy_growth,"
-        "diluted_share_count_qoq_growth,shares_outstanding_yoy_growth,shares_outstanding_qoq_growth,"
-        "revenue_growth_acceleration,operating_income_growth_acceleration,eps_growth_acceleration,"
-        "operating_cash_flow_growth_acceleration,free_cash_flow_growth_acceleration,"
-        "operating_margin_yoy_change_bps,operating_margin_qoq_change_bps,net_margin_yoy_change_bps,"
-        "net_margin_qoq_change_bps,free_cash_flow_margin_yoy_change_bps,free_cash_flow_margin_qoq_change_bps,"
-        "operating_cash_flow_to_net_income,free_cash_flow_to_net_income,capex_to_revenue,"
-        "capex_to_depreciation,net_debt,adjusted_net_debt,debt_to_equity,debt_to_assets,ROA,ROE\n"
+        "ticker,period_end,fiscal_year,fiscal_quarter,available_date,"
+        "available_date_is_estimated,gics_sector_name,"
+        + ",".join(FUNDAMENTALS_QUARTERLY_FEATURE_COLUMNS)
+        + "\n"
     )
     lines = [header]
     for symbol in symbols:
         for i, quarter_end in enumerate(quarter_ends):
             available_date = date.fromordinal(quarter_end.toordinal() + 45)
-            values = ",".join(str(0.01 * (i + 1)) for _ in range(63))
+            values = ",".join(str(0.01 * (i + 1)) for _ in FUNDAMENTALS_QUARTERLY_FEATURE_COLUMNS)
             fiscal_quarter = (quarter_end.month - 1) // 3 + 1
             lines.append(
                 f"{symbol} UN Equity,{quarter_end.isoformat()},{quarter_end.year},{fiscal_quarter},"

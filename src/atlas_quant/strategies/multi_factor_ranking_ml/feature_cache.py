@@ -5,7 +5,7 @@ Format: one JSON metadata file plus one JSON-Lines feature-row file per
 (keyed by its ``cache_key()``). Deliberately not pickle — pickle cannot be
 validated, partially inspected, or safely rejected on schema mismatch
 without executing arbitrary bytecode; the legacy prototype's
-``ml_feature_cache.pkl`` had exactly the fcf_mode/identity mismatch this
+``ml_feature_cache.pkl`` had exactly the config/identity mismatch this
 design is built to prevent (Stage 1 conflict analysis, item C2). Parquet
 was considered but not used: this environment's venv does not include
 ``pyarrow``, and the row volumes at this stage do not need a columnar

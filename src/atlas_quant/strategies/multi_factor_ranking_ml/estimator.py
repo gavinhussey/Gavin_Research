@@ -32,8 +32,9 @@ def resolve_estimator_parameters(model_config: MultiFactorRankingModelConfig) ->
     across a LightGBM version bump. ``objective`` is pinned here too:
     ``"lambdarank"`` *is* the strategy decision, not a tunable default.
     """
-    return {
+    parameters = {
         "objective": "lambdarank",
+        "lambdarank_truncation_level": model_config.lambdarank_truncation_level,
         "n_estimators": model_config.n_estimators,
         "max_depth": model_config.max_depth,
         "learning_rate": model_config.learning_rate,
@@ -42,6 +43,12 @@ def resolve_estimator_parameters(model_config: MultiFactorRankingModelConfig) ->
         "reg_lambda": model_config.reg_lambda,
         "random_state": model_config.random_state,
     }
+    # Omitted entirely (rather than passed as None) when unset, so LightGBM
+    # applies its own exponential 2^i - 1 default -- passing None is a type
+    # error to the library, not a "use the default" signal.
+    if model_config.label_gain is not None:
+        parameters["label_gain"] = list(model_config.label_gain)
+    return parameters
 
 
 @runtime_checkable

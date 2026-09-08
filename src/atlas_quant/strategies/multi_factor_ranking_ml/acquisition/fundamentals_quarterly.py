@@ -1,12 +1,15 @@
 """Parses ``fundamentals_quarterly.csv`` -- this strategy's primary
 Bloomberg data source (see ``docs/reproducibility_findings.md``).
 
-One row per (ticker, period_end). Only the 63 derived/market columns
+One row per (ticker, period_end). Only the 51 derived/market columns
 listed in :data:`FUNDAMENTALS_QUARTERLY_FEATURE_COLUMNS` (block 1 of
 ``feature_domain.FEATURE_NAMES``) are kept as features -- every other raw
-fundamental column in the file (revenue, gross_profit, ...) is ignored,
-since only the derived/market columns cleared this strategy's 95%
-universe-coverage bar. ``ticker``/``available_date``/``available_date_is_estimated``/
+fundamental column in the file (revenue, gross_profit, the free-cash-flow
+and consensus/analyst-estimate columns, ...) is ignored. The source CSV
+may still contain those columns and this parser neither requires nor
+rejects them; they simply have no consumer since they are not in the
+feature schema (see ``docs/reproducibility_findings.md``, 2026-09-08).
+``ticker``/``available_date``/``available_date_is_estimated``/
 ``fiscal_year``/``fiscal_quarter``/``gics_sector_name`` become this
 strategy's identifier/point-in-time/sector fields.
 """
@@ -23,26 +26,24 @@ from atlas_quant.strategies.multi_factor_ranking_ml.production.normalization imp
 #: Block 1 of feature_domain.FEATURE_NAMES -- kept from fundamentals_quarterly.csv
 #: (95%+ universe-coverage bar; see docs/reproducibility_findings.md).
 FUNDAMENTALS_QUARTERLY_FEATURE_COLUMNS: tuple[str, ...] = (
-    "market_cap", "consensus_eps_next_q", "volatility_30d", "analyst_target_price",
+    "market_cap", "volatility_30d", "analyst_target_price",
     "pe_ratio", "price_to_book", "volatility_63d", "volatility_20d", "volume",
-    "consensus_sales_next_q", "price_to_sales", "beta", "analyst_rating",
-    "volatility_90d", "analyst_eps_num_est", "free_cash_flow", "operating_margin",
-    "net_margin", "operating_cash_flow_margin", "free_cash_flow_margin",
+    "price_to_sales", "beta",
+    "volatility_90d", "operating_margin",
+    "net_margin", "operating_cash_flow_margin",
     "revenue_yoy_growth", "revenue_qoq_growth", "operating_income_yoy_growth",
     "operating_income_qoq_growth", "net_income_yoy_growth", "net_income_qoq_growth",
     "diluted_eps_yoy_growth", "diluted_eps_qoq_growth", "operating_cash_flow_yoy_growth",
-    "operating_cash_flow_qoq_growth", "free_cash_flow_yoy_growth",
-    "free_cash_flow_qoq_growth", "total_assets_yoy_growth", "total_assets_qoq_growth",
+    "operating_cash_flow_qoq_growth", "total_assets_yoy_growth", "total_assets_qoq_growth",
     "total_debt_yoy_growth", "total_debt_qoq_growth", "stockholders_equity_yoy_growth",
     "stockholders_equity_qoq_growth", "diluted_share_count_yoy_growth",
     "diluted_share_count_qoq_growth", "shares_outstanding_yoy_growth",
     "shares_outstanding_qoq_growth", "revenue_growth_acceleration",
     "operating_income_growth_acceleration", "eps_growth_acceleration",
-    "operating_cash_flow_growth_acceleration", "free_cash_flow_growth_acceleration",
+    "operating_cash_flow_growth_acceleration",
     "operating_margin_yoy_change_bps", "operating_margin_qoq_change_bps",
     "net_margin_yoy_change_bps", "net_margin_qoq_change_bps",
-    "free_cash_flow_margin_yoy_change_bps", "free_cash_flow_margin_qoq_change_bps",
-    "operating_cash_flow_to_net_income", "free_cash_flow_to_net_income",
+    "operating_cash_flow_to_net_income",
     "capex_to_revenue", "capex_to_depreciation", "net_debt", "adjusted_net_debt",
     "debt_to_equity", "debt_to_assets", "ROA", "ROE",
 )

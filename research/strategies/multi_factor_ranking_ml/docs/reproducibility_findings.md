@@ -17,8 +17,9 @@ deleted, never carried over in any disabled form (see `strategy.py`'s and
 
 ## What's real right now
 
-- **Feature set**: `FEATURE_NAMES` (`feature_domain.py`) has 83 features,
-  in four blocks: 63 derived/market columns from `fundamentals_quarterly.csv`
+- **Feature set**: `FEATURE_NAMES` (`feature_domain.py`) has 71 features
+  (83 before 2026-09-08; see the feature-removal entry below),
+  in four blocks: 51 derived/market columns from `fundamentals_quarterly.csv`
   (the ≥95%-universe-coverage bar; see `acquisition/fundamentals_quarterly.py`),
   12 features from `filing_momentum_features.csv` with no equivalent in
   the first file (`acquisition/legacy_features.py`), `quarter_num`/
@@ -150,6 +151,81 @@ deleted, never carried over in any disabled form (see `strategy.py`'s and
     Re-running those sweeps under LambdaRank is a natural next step; it
     was explicitly out of scope for this change.
 
+- **Feature schema reduced 83 → 71 — deliberate strategy-logic change
+  (user-requested), 2026-09-08: the 4 consensus/analyst fields and all 8
+  free-cash-flow fields were deleted from `FEATURE_NAMES`.** Recorded
+  here per this repo's provenance-transparency rule; it is a change to
+  *this* strategy's financial logic, not a divergence from
+  `report_current.html` to resolve (that file is retired as a
+  reproduction target).
+
+  *Removed (analyst/consensus, 4):* `analyst_rating`,
+  `consensus_sales_next_q`, `consensus_eps_next_q`, `analyst_eps_num_est`.
+
+  *Removed (free cash flow, 8):* `free_cash_flow`,
+  `free_cash_flow_margin`, `free_cash_flow_yoy_growth`,
+  `free_cash_flow_qoq_growth`, `free_cash_flow_growth_acceleration`,
+  `free_cash_flow_margin_yoy_change_bps`,
+  `free_cash_flow_margin_qoq_change_bps`, `free_cash_flow_to_net_income`.
+
+  *Deliberately kept:* `analyst_target_price` — 7th by gain importance,
+  and ablating it alone was a **statistically significant** IC loss
+  (p = 0.029). It is the one IBES-class field that is load-bearing, and
+  it stays. (`fcf_trend`, block 2, is a precomputed column from the
+  legacy `filing_momentum_features.csv` export and is also unaffected —
+  it is not one of the 8 `fundamentals_quarterly.csv` FCF fields.)
+
+  *Evidence:* a full-history feature-importance analysis plus a
+  paired-per-cycle ablation backtest (147 measured cycles,
+  `ml_train_years=6`, `min_train_quarters=4`) found:
+  - the 4 analyst/consensus fields contribute a combined **0.05% of model
+    gain**; ablating them costs **−0.0017 mean IC (p = 0.226,
+    not significant)**;
+  - the 8 FCF fields were **7 of the bottom 15 by gain**; ablating them
+    costs **−0.0040 (p = 0.113, not significant)**;
+  - ablating both blocks together measured **−0.0031 (p = 0.136, not
+    significant)**.
+
+  No measured IC improvement is claimed — the honest reading is that
+  neither block is distinguishable from noise, in either direction, at
+  147 cycles.
+
+  *Why remove rather than keep:* the removal materially simplifies
+  replacing the retired Bloomberg data feed. It drops 4 of the 5
+  IBES-class analyst fields, which are the hardest and most expensive
+  field group to source from a new vendor, at no measurable cost to the
+  ranking.
+
+  *Consequences:*
+  - **`FEATURE_SCHEMA_VERSION` bumped `"2"` → `"3"`.** It feeds
+    `FeatureCacheIdentity.cache_key()`, `FeatureObservation`, and the
+    model-artifact identity, so every v2 feature cache and every
+    v2-trained model — which carry 83 columns in a different order — is
+    now rejected rather than silently reused against a 71-column schema.
+  - **`fcf_mode`/`FcfMode`/`_VALID_FCF_MODES` deleted entirely** from
+    `config.py`, along with the `FeatureCacheIdentity.fcf_mode` field and
+    its `cache_key()` entry. Traced before deleting: in *this* strategy
+    `fcf_mode` was never read by `feature_pipeline.py`, `formulas.py`, or
+    `acquisition/fundamentals_quarterly.py` — unlike the sibling
+    `filing_momentum_ml`, which does branch on it when computing
+    `fcf_trend` from raw filings. Here `fcf_trend` arrives precomputed
+    from the legacy export, so once the FCF block left the schema
+    `fcf_mode` did nothing but perturb config/cache identity. Dead
+    config, deleted per the remove-means-delete rule; `filing_momentum_ml`'s
+    own `fcf_mode` is untouched.
+  - **Raw CSV ingestion**: `FUNDAMENTALS_QUARTERLY_FEATURE_COLUMNS` no
+    longer lists the 12 columns, so they are neither required nor parsed.
+    The source export may still *contain* them — the parser ignores
+    unknown columns, exactly as it already ignores `revenue`,
+    `gross_profit`, etc. — but nothing carries them into the feature
+    schema. No FCF value is computed anywhere in the acquisition layer
+    (the columns were read straight from the CSV), so there is no
+    orphaned derived computation left behind.
+  - Existing `outputs/` backtests and
+    `docs/training_window_sweep_findings.md` were produced under the
+    83-feature schema and are not directly comparable to post-removal
+    runs.
+
 - **New dependency: `lightgbm>=4.0.0,<5.0.0`** (added to
   `pyproject.toml`'s `model` extra alongside the existing scikit-learn
   pin, which is still used for sector encoding and by the sibling
@@ -261,3 +337,115 @@ CLI — a pre-existing platform limitation, not something this strategy can
 fix — so the commands above must be run as
 `python -m atlas_quant.cli.multi_factor_ranking <subcommand> ...` instead of
 via the `atlas-quant` executable directly.)
+
+---
+
+## 2026-09-08 — the universe IS survivorship-biased (`data_quality_issue`)
+
+**Measured fact:** every one of the **1,520 tickers reports through
+2025–2026**. Not a single company in the universe stops reporting across
+36 years — zero delistings, zero bankruptcies, zero acquisitions. Real
+S&P 500 turnover runs roughly 4–5% per year, so the large majority of
+1990's constituents should be absent by 2026. A universe with a 100%
+survival rate *is*, by construction, the set of survivors.
+
+**This contradicts a claim made in the codebase.**
+`acquisition/universe.py::universe_records_from_fundamentals` sets
+`survivorship_biased=False`, reasoning that each ticker's `as_of` is its
+own earliest `filed_at`, so "a ticker that later left the universe
+(delisted, acquired) still appears here for the period it had real data."
+That reasoning is half right and the missing half is decisive: per-ticker
+`as_of` correctly handles **entry** timing, but does nothing about
+**exit**, because the ticker list itself came from a present-day Bloomberg
+export. Companies that failed before the export date were never in the
+file to begin with. Timestamping entries cannot un-bias a list that only
+contains winners. **The flag is wrong and should read `True`** (not
+changed yet — flagged for decision, since anything downstream trusting it
+is being misled).
+
+**What it invalidates.** Every *absolute return* measurement on this
+dataset, including:
+
+| Measure | Value | Status |
+|---|---:|---|
+| equal-weight universe return | +4.25%/qtr (~18%/yr) | inflated — beats S&P 500 by ~6%/yr, implausible for 36y |
+| S&P 500 total return (real, ^SP500TR) | +2.95%/qtr | reference, unbiased |
+| top-10 excess vs S&P 500 | +8.76%/qtr (~+40%/yr) | **not credible as alpha** |
+
+The tell is an internal contradiction: **AUC vs the S&P 500 is 0.5267**
+(p=0.0004) — barely above a coin flip and entirely consistent with mean
+IC ≈ 0.05. A discriminator that weak cannot produce +40%/yr. When the
+relative and absolute metrics disagree this violently, the relative ones
+(computed within a quarter, across the same biased pool on both sides) are
+the trustworthy ones.
+
+**What survives.** Within-quarter, relative measures are far less
+distorted because the bias affects both sides of the comparison:
+
+- mean IC **0.0504**, IC information ratio **0.2951** (147 quarters)
+- AUC **0.5267** vs S&P 500 TR, **0.5370** vs equal-weight (both p<0.001)
+- win rates order monotonically down the ranking: top10 **63.9%** →
+  bot50 45.6% → bot25 43.5% → bot10 **41.5%** beat the S&P 500
+- top 10 beats bottom 10 head-to-head in **66.7%** of quarters
+- top 10 beats *the average stock in the same universe* in **62.6%** of
+  quarters (z=3.05, p=0.0023) — the most bias-robust skill measure
+  available, since both sides are drawn from the identical survivor pool
+- stable across four decades (top-10 win rate 60.0 / 67.5 / 65.0 / 65.4%)
+
+Note the control that matters: the equal-weight universe *by itself* beat
+the S&P 500 in **57.1%** of quarters. So of top-10's 63.9%, only ~6.8
+points come from ranking skill; the rest is the universe's own
+(survivorship-inflated) tailwind. Any performance claim must be stated
+against the universe, never against the index.
+
+**Remediation.** Rebuilding the universe with delisted/acquired names is
+the decisive fix, and it will *lower* the headline numbers. It is the same
+work as replacing the retired Bloomberg feed — which raises the priority
+of choosing a vendor that carries delisted securities (e.g. Sharadar),
+from a nice-to-have to a requirement.
+
+## 2026-09-08 — feature importance and ablation (`data_provenance_required`)
+
+LightGBM **gain** importance averaged over 180 quarterly re-fits, on the
+83-feature schema, alongside a paired-per-cycle ablation backtest. Charted
+in `docs/diagrams/feature_importance.jpg`.
+
+- **Price/technical features dominate**: `volatility_90d`, `volume`,
+  `volatility_63d`, `beta` take the top four slots and 9 of the top 14 are
+  price-derived. Per feature the block is worth **3.11% vs 0.92%** for
+  fundamentals — 3.4×. For a strategy built on a fundamentals export, the
+  model leans hardest on data any cheap price vendor supplies.
+- **The model is therefore substantially a volatility/beta tilt.** This is
+  material for interpretation and for any customer-facing rationale: a
+  write-up attributing a high rank to fundamentals would frequently be
+  fabricating the reason.
+- **Importance is dynamic**, confirming the rolling-window design:
+  `volatility_63d` led the 1990s, `volatility_90d` the 2000s,
+  `analyst_target_price` the 2010s (8.1%, from *zero* pre-2008), and
+  `volatility_90d` again in the 2020s.
+- **Gain importance and ablation cost were largely uncorrelated** —
+  dropping the 8 near-worthless FCF features cost slightly *more*
+  (-0.0040) than dropping all 5 analyst features including the 7th-ranked
+  one (-0.0037), and dropping 12 features cost *less* (-0.0031) than
+  dropping the 8 FCF alone, which is logically impossible for real
+  effects. Treat gain importance as "what the model leans on", never as
+  "what would hurt if removed". Only `analyst_target_price` was confirmed
+  load-bearing by both methods (ablation p=0.029).
+
+## 2026-09-08 — features are NOT statistically normalized (by design, with a caveat)
+
+No z-scoring, scaling, or winsorization is applied anywhere before
+training (`production/normalization.py` normalizes *record schemas*, not
+distributions — the name is misleading). This is correct for a
+gradient-boosted tree ensemble: trees split on thresholds and are
+invariant to monotonic transformations, so scaling would produce an
+identical model. It also preserves the deliberate NaN handling, which
+imputation would destroy.
+
+**Open caveat (untested):** *cross-sectional* normalization is a different
+question and is not addressed by tree invariance. Each model trains on a
+rolling `ml_train_years` window spanning ~24 quarters, learning thresholds
+on raw levels that drift over time (a P/E of 20 in 1999 ≠ 2012; 1990
+`market_cap` dollars ≠ 2026). Standardizing each feature within its own
+quarterly cross-section is standard factor-model practice and remains
+untested here.

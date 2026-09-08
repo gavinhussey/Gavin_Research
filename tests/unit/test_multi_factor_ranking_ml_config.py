@@ -25,7 +25,6 @@ from atlas_quant.strategies.multi_factor_ranking_ml.config import (
 def test_defaults_match_report_current_html():
     config = MultiFactorRankingMLConfig()
     assert config.strategy_id == STRATEGY_ID == "multi_factor_ranking_ml"
-    assert config.fcf_mode == "ratio"  # report §3.1 production default
     assert config.n_relevance_grades == 10  # decile granularity for the LambdaRank target
     assert config.return_cap == 0.50  # report §5.5
     assert config.exclude_sectors == ("Materials",)  # report §5.2
@@ -106,16 +105,6 @@ def test_return_cap_accepts_upper_boundary():
     MultiFactorRankingMLConfig(return_cap=1.0)
 
 
-@pytest.mark.parametrize("mode", ["ratio", "raw"])
-def test_fcf_mode_accepts_valid_modes(mode):
-    MultiFactorRankingMLConfig(fcf_mode=mode)
-
-
-def test_fcf_mode_rejects_unknown_value():
-    with pytest.raises(ValueError):
-        MultiFactorRankingMLConfig(fcf_mode="ttm")  # type: ignore[arg-type]
-
-
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -139,18 +128,33 @@ def test_config_is_deterministically_serializable_via_identity():
     assert len(config.identity()) == 64  # sha256 hex digest
 
 
-def test_feature_cache_identity_changes_when_fcf_mode_changes():
+def test_feature_cache_identity_changes_when_training_window_changes():
     cutoff = date(2026, 6, 30)
     created = datetime(2026, 7, 1, 12, 0, 0)
-    ratio_identity = FeatureCacheIdentity.compute(
-        MultiFactorRankingMLConfig(fcf_mode="ratio"), cutoff, created
+    six_year = FeatureCacheIdentity.compute(
+        MultiFactorRankingMLConfig(ml_train_years=6), cutoff, created
     )
-    raw_identity = FeatureCacheIdentity.compute(
-        MultiFactorRankingMLConfig(fcf_mode="raw"), cutoff, created
+    nine_year = FeatureCacheIdentity.compute(
+        MultiFactorRankingMLConfig(ml_train_years=9), cutoff, created
     )
-    assert ratio_identity.cache_key() != raw_identity.cache_key()
-    assert ratio_identity.feature_schema_version == FEATURE_SCHEMA_VERSION
-    assert ratio_identity.strategy_version == STRATEGY_VERSION
+    assert six_year.cache_key() != nine_year.cache_key()
+    assert six_year.feature_schema_version == FEATURE_SCHEMA_VERSION
+    assert six_year.strategy_version == STRATEGY_VERSION
+
+
+def test_config_carries_no_fcf_mode():
+    """``fcf_mode`` was deleted with the 8 free-cash-flow features (2026-09-08).
+
+    It never fed a formula in this strategy -- ``fcf_trend`` comes
+    precomputed from the legacy export -- so once the FCF block left the
+    schema it was doing nothing but perturbing config/cache identity. See
+    docs/reproducibility_findings.md.
+    """
+    assert not hasattr(MultiFactorRankingMLConfig(), "fcf_mode")
+    identity = FeatureCacheIdentity.compute(
+        MultiFactorRankingMLConfig(), date(2026, 6, 30), datetime(2026, 7, 1)
+    )
+    assert not hasattr(identity, "fcf_mode")
 
 
 def test_feature_cache_identity_created_at_does_not_affect_cache_key():
@@ -180,6 +184,7 @@ def test_resolved_estimator_parameters_are_the_lambdarank_keyword_arguments():
     params = resolve_estimator_parameters(MultiFactorRankingModelConfig())
     assert params == {
         "objective": "lambdarank",
+        "lambdarank_truncation_level": 30,
         "n_estimators": 300,
         "max_depth": 5,
         "learning_rate": 0.05,
@@ -188,3 +193,28 @@ def test_resolved_estimator_parameters_are_the_lambdarank_keyword_arguments():
         "reg_lambda": 0.1,
         "random_state": 42,
     }
+    # label_gain is OMITTED, not passed as None, when unset -- LightGBM
+    # treats None as a type error rather than "use your default".
+    assert "label_gain" not in params
+
+
+def test_label_gain_is_passed_through_only_when_explicitly_set():
+    from atlas_quant.strategies.multi_factor_ranking_ml.estimator import (
+        resolve_estimator_parameters,
+    )
+
+    linear = tuple(float(i) for i in range(10))
+    params = resolve_estimator_parameters(MultiFactorRankingModelConfig(label_gain=linear))
+    assert params["label_gain"] == list(linear)
+
+
+def test_lambdarank_objective_shape_fields_are_validated():
+    """Both knobs govern what the ranking objective actually optimizes, so
+    a nonsensical value must fail loudly rather than silently reshaping the
+    training signal."""
+    with pytest.raises(ValueError, match="lambdarank_truncation_level must be > 0"):
+        MultiFactorRankingModelConfig(lambdarank_truncation_level=0)
+    with pytest.raises(ValueError, match="label_gain must be non-decreasing"):
+        MultiFactorRankingModelConfig(label_gain=(0.0, 5.0, 2.0))
+    with pytest.raises(ValueError, match="label_gain needs at least 2 entries"):
+        MultiFactorRankingModelConfig(label_gain=(1.0,))

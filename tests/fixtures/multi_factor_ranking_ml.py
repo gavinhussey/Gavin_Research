@@ -12,6 +12,7 @@ from atlas_quant.data.point_in_time import ListTradingCalendar
 from atlas_quant.data.records import DailyPriceObservation, SectorRecord
 from atlas_quant.domain.identifiers import AssetClass, InstrumentId
 from atlas_quant.domain.provenance import DataProvenance
+from atlas_quant.strategies.multi_factor_ranking_ml.config import FEATURE_SCHEMA_VERSION
 from atlas_quant.strategies.multi_factor_ranking_ml.production.normalization import FundamentalsFeatureRecord
 from atlas_quant.strategies.multi_factor_ranking_ml.scoring_domain import ScoredCandidate
 
@@ -156,7 +157,7 @@ def make_scored_candidate(
     *,
     sector: str = "Tech & Media",
     strategy_id: str = "multi_factor_ranking_ml",
-    feature_schema_version: str = "2",
+    feature_schema_version: str = FEATURE_SCHEMA_VERSION,
     model_identifier: str = "LGBMRanker",
     model_version: str = "1",
     feature_timestamp: date = date(2026, 1, 1),
@@ -265,7 +266,8 @@ def make_backtest_feature_observation_source(
             features = {name: float((i + quarter_end.toordinal()) % 10) for name in FEATURE_NAMES}
             result.append(
                 FeatureObservation(
-                    strategy_id="multi_factor_ranking_ml", strategy_version="0.1.0", feature_schema_version="2",
+                    strategy_id="multi_factor_ranking_ml", strategy_version="0.1.0",
+                    feature_schema_version=FEATURE_SCHEMA_VERSION,
                     instrument_id=iid, fiscal_period="Q", quarter_end=quarter_end,
                     filing_timestamp=datetime(quarter_end.year, quarter_end.month, quarter_end.day),
                     feature_timestamp=quarter_end,

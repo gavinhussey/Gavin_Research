@@ -4,11 +4,11 @@ Two things are proved here against the *real* estimator (not a fake,
 which could not reproduce either behavior):
 
 1. Entirely-NaN feature columns are excluded from the matrix actually
-   passed to fit/predict. ``consensus_eps_next_q``/
-   ``consensus_sales_next_q``/``analyst_eps_num_est`` are 100% NaN for any
-   training window entirely before ~2019 (before Bloomberg broadly
-   populated those consensus-estimate fields), so a real backtest hits
-   this on every cycle before 2019-04-01.
+   passed to fit/predict. ``analyst_target_price`` -- the one IBES-class
+   field still in the schema after the 2026-09-08 analyst-block removal
+   -- is 100% NaN for any training window entirely before ~2019 (before
+   Bloomberg broadly populated its analyst fields), so a real backtest
+   hits this on every cycle before 2019-04-01.
    ``model_schema.non_degenerate_feature_names``/``select_feature_columns``
    handle it; these tests prove training and scoring apply the *same*
    reduced column set.
@@ -55,7 +55,7 @@ pytestmark = pytest.mark.skipif(
     reason=f"lightgbm is not usable in this environment: {_LIGHTGBM_ERROR}",
 )
 
-_DEGENERATE_COLUMN = "consensus_eps_next_q"
+_DEGENERATE_COLUMN = "analyst_target_price"
 _N_QUARTERS = 8
 _ROWS_PER_QUARTER = 20
 _N_ROWS = _N_QUARTERS * _ROWS_PER_QUARTER

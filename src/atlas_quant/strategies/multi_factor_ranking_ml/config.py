@@ -5,16 +5,14 @@ Every default value here is taken directly from report_current.html
 separate legacy prototype repository's code (settings.py/ml_scorer.py,
 read there only as supporting reference, not copied) where noted. Where
 the report and that legacy code conflicted (ML_THRESHOLD/MIN_TRAIN_Q
-duplicated across its settings.py and ml_scorer.py; fcf_mode default vs.
-its on-disk feature-cache mismatch), this module is the single source of
-truth going forward.
+duplicated across its settings.py and ml_scorer.py), this module is the
+single source of truth going forward.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Literal
 
 from atlas_quant.config.identity import compute_config_identity
 
@@ -48,7 +46,7 @@ SOURCE_REPORT_SHA256 = (
 # STRATEGY_VERSION, since a cache built under one feature schema is never
 # valid input for a model expecting a different one.
 #
-# v2 (this bump): FeatureObservation gained strategy_cohort_end/
+# v2: FeatureObservation gained strategy_cohort_end/
 # cohort_buy_timestamp, and build_feature_observation's inclusion rule
 # changed from "the selected filing's quarter_end must equal the target
 # cohort's calendar date" (an implementation bug -- synthetic fixtures are
@@ -61,11 +59,18 @@ SOURCE_REPORT_SHA256 = (
 # rule and must never be read as if it were a v2 cache -- this bump
 # ensures FeatureCacheIdentity's own identity changes so v1 caches are
 # rejected, not silently reused.
-FEATURE_SCHEMA_VERSION = "2"
-
-FcfMode = Literal["ratio", "raw"]
-
-_VALID_FCF_MODES: tuple[FcfMode, ...] = ("ratio", "raw")
+#
+# v3 (this bump): 12 features were deleted from FEATURE_NAMES, taking the
+# schema from 83 to 71 -- the 4 consensus/analyst columns
+# (analyst_rating, consensus_sales_next_q, consensus_eps_next_q,
+# analyst_eps_num_est; analyst_target_price was kept) and all 8
+# free-cash-flow columns, after a measured importance/ablation study
+# (see docs/reproducibility_findings.md, 2026-09-08). A v2 cache and a
+# v2-trained model both carry 83 columns in a different order and must
+# never be reused against this schema; this bump makes
+# FeatureCacheIdentity.cache_key() and the model artifact identity
+# change so they are rejected rather than silently misaligned.
+FEATURE_SCHEMA_VERSION = "3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +89,19 @@ class MultiFactorRankingModelConfig:
     ``docs/reproducibility_findings.md``.
     """
 
+    #: How deep into each quarter's ranking LambdaRank's NDCG is computed.
+    #: LightGBM's own default is 30 -- i.e. only the top 30 of a ~1,440-name
+    #: cross-section contribute gradient, while this strategy is *evaluated*
+    #: by whole-list rank correlation (IC). That is a direct objective/metric
+    #: mismatch, so this is exposed as a tunable rather than left at an
+    #: unexamined library default.
+    lambdarank_truncation_level: int = 30
+    #: Per-grade NDCG gains, index = relevance grade. ``None`` keeps
+    #: LightGBM's exponential default (2^i - 1), which concentrates almost
+    #: all gradient in the top grades; a linear schedule spreads it across
+    #: the whole distribution. Length must cover the highest relevance grade
+    #: produced by ``n_relevance_grades``.
+    label_gain: tuple[float, ...] | None = None
     n_estimators: int = 300
     max_depth: int = 5
     learning_rate: float = 0.05
@@ -109,6 +127,21 @@ class MultiFactorRankingModelConfig:
             raise ValueError(
                 f"reg_lambda must be >= 0, got {self.reg_lambda!r}"
             )
+        if self.lambdarank_truncation_level <= 0:
+            raise ValueError(
+                "lambdarank_truncation_level must be > 0, got "
+                f"{self.lambdarank_truncation_level!r}"
+            )
+        if self.label_gain is not None:
+            if len(self.label_gain) < 2:
+                raise ValueError(
+                    f"label_gain needs at least 2 entries, got {self.label_gain!r}"
+                )
+            if any(b < a for a, b in zip(self.label_gain, self.label_gain[1:])):
+                raise ValueError(
+                    "label_gain must be non-decreasing (a higher relevance grade "
+                    f"can never be worth less), got {self.label_gain!r}"
+                )
 
     def identity(self) -> str:
         return compute_config_identity(self)
@@ -146,7 +179,6 @@ class MultiFactorRankingMLConfig:
       top-N label entirely (see ``docs/reproducibility_findings.md``),
       keeping 10 only as a natural decile granularity.
     - ``return_cap`` = 0.50 — report §5.5 (``RETURN_CAP``)
-    - ``fcf_mode`` = "ratio" — report §3.1, the stated production default
     - ``exclude_sectors`` = ("Materials",) — report §5.2 (a sector-eligibility
       exclusion applied before ranking, independent of any qualification bar)
 
@@ -187,7 +219,6 @@ class MultiFactorRankingMLConfig:
     strategy_id: str = STRATEGY_ID
     universe_id: str = "bloomberg_fundamentals_quarterly"
 
-    fcf_mode: FcfMode = "ratio"
     ml_train_years: int = 6
     min_train_quarters: int = 4
     n_relevance_grades: int = 10
@@ -214,10 +245,6 @@ class MultiFactorRankingMLConfig:
             raise ValueError(
                 f"return_cap must be within (0.0, 1.0], got {self.return_cap!r}"
             )
-        if self.fcf_mode not in _VALID_FCF_MODES:
-            raise ValueError(
-                f"fcf_mode must be one of {_VALID_FCF_MODES}, got {self.fcf_mode!r}"
-            )
 
     def identity(self) -> str:
         """Deterministic identity of this config's resolved values.
@@ -236,16 +263,15 @@ class FeatureCacheIdentity:
     This is a schema, not a cache implementation — Stage 3 will build the
     actual cache writer/reader against this shape. It exists now so the
     identity contract is fixed before any cache-writing code is written,
-    directly addressing the fcf_mode/cache-file mismatch found in the
-    legacy prototype's feature cache (Stage 1 conflict analysis, item C2):
-    a cache missing this metadata cannot be safely reused across
+    directly addressing the config/cache-file identity mismatch found in
+    the legacy prototype's feature cache (Stage 1 conflict analysis, item
+    C2): a cache missing this metadata cannot be safely reused across
     configurations.
     """
 
     strategy_id: str
     strategy_version: str
     feature_schema_version: str
-    fcf_mode: FcfMode
     train_years: int
     min_train_quarters: int
     model_config_identity: str
@@ -273,7 +299,6 @@ class FeatureCacheIdentity:
             strategy_id=config.strategy_id,
             strategy_version=STRATEGY_VERSION,
             feature_schema_version=FEATURE_SCHEMA_VERSION,
-            fcf_mode=config.fcf_mode,
             train_years=config.ml_train_years,
             min_train_quarters=config.min_train_quarters,
             model_config_identity=config.model.identity(),
@@ -306,7 +331,6 @@ class FeatureCacheIdentity:
                 "strategy_id": self.strategy_id,
                 "strategy_version": self.strategy_version,
                 "feature_schema_version": self.feature_schema_version,
-                "fcf_mode": self.fcf_mode,
                 "train_years": self.train_years,
                 "min_train_quarters": self.min_train_quarters,
                 "model_config_identity": self.model_config_identity,
