@@ -70,7 +70,20 @@ SOURCE_REPORT_SHA256 = (
 # never be reused against this schema; this bump makes
 # FeatureCacheIdentity.cache_key() and the model artifact identity
 # change so they are rejected rather than silently misaligned.
-FEATURE_SCHEMA_VERSION = "3"
+# v4 (this bump): the five raw-level features listed in
+# MultiFactorRankingMLConfig.cross_sectional_rank_features are now
+# replaced, in the feature pipeline, by their percentile rank within their
+# own quarterly cross-section (see
+# strategies/multi_factor_ranking_ml/cross_sectional.py). The feature
+# *set* is unchanged at 71 columns in the same order, but five columns'
+# **values** now mean something different -- a [0, 1] relative rank rather
+# than a dollar/share level. A v3 cache therefore holds raw levels and a
+# v3-trained model expects raw levels; neither is valid input alongside
+# this schema. This bump changes FeatureCacheIdentity.cache_key() and
+# model_schema.compute_model_schema_identity(), so normalized and
+# unnormalized features are rejected rather than silently mixed. See
+# docs/reproducibility_findings.md (2026-09-08).
+FEATURE_SCHEMA_VERSION = "4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +239,28 @@ class MultiFactorRankingMLConfig:
 
     exclude_sectors: tuple[str, ...] = ("Materials",)
 
+    #: Features replaced by their percentile rank within their own quarterly
+    #: cross-section, scaled to [0, 1], by
+    #: ``cross_sectional.apply_cross_sectional_rank_normalization`` at the end
+    #: of ``feature_pipeline.run_feature_pipeline``. An explicit **per-feature
+    #: policy**, never a global transform: these five are raw levels (dollars,
+    #: share counts, a price) whose meaning drifts across a 6-year / ~24-quarter
+    #: training window, which tree invariance to monotone transforms does not
+    #: fix. Macro features are excluded by construction (they are broadcast
+    #: identically to every instrument, so ranking them would collapse all six
+    #: to a constant), as are the categorical, volatility, and growth/ratio
+    #: blocks -- see ``cross_sectional.py`` and
+    #: ``docs/reproducibility_findings.md``. Every entry must be a member of
+    #: ``feature_domain.FEATURE_NAMES``; the empty tuple is legal and means
+    #: "no normalization".
+    cross_sectional_rank_features: tuple[str, ...] = (
+        "market_cap",
+        "volume",
+        "net_debt",
+        "adjusted_net_debt",
+        "analyst_target_price",
+    )
+
     model: MultiFactorRankingModelConfig = field(default_factory=MultiFactorRankingModelConfig)
 
     def __post_init__(self) -> None:
@@ -244,6 +279,34 @@ class MultiFactorRankingMLConfig:
         if not (0.0 < self.return_cap <= 1.0):
             raise ValueError(
                 f"return_cap must be within (0.0, 1.0], got {self.return_cap!r}"
+            )
+        # Imported locally so this module -- the base config every other
+        # module in the strategy imports -- keeps no import-time dependency
+        # on the feature schema module.
+        from atlas_quant.strategies.multi_factor_ranking_ml.feature_domain import (
+            FEATURE_NAMES,
+        )
+
+        unknown = [
+            name for name in self.cross_sectional_rank_features if name not in FEATURE_NAMES
+        ]
+        if unknown:
+            raise ValueError(
+                "cross_sectional_rank_features contains name(s) not in "
+                f"FEATURE_NAMES: {unknown!r} — a typo must fail loudly, never "
+                "silently normalize nothing"
+            )
+        duplicates = sorted(
+            {
+                name
+                for name in self.cross_sectional_rank_features
+                if self.cross_sectional_rank_features.count(name) > 1
+            }
+        )
+        if duplicates:
+            raise ValueError(
+                "cross_sectional_rank_features must not repeat a feature: "
+                f"{duplicates!r}"
             )
 
     def identity(self) -> str:

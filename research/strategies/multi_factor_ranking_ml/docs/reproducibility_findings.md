@@ -26,7 +26,13 @@ deleted, never carried over in any disabled form (see `strategy.py`'s and
   `sector_enc` (computed locally), and 6 market-wide macro series
   (`fed_funds_rate`, `hy_credit_oas`, `ust_10y_yield`, `ust_2y_yield`,
   `vix`, `yield_curve_10y_2y`; `acquisition/macro.py`), broadcast-joined
-  onto every instrument at each cycle's own cutoff date.
+  onto every instrument at each cycle's own cutoff date. Five of those 71
+  (`market_cap`, `volume`, `net_debt`, `adjusted_net_debt`,
+  `analyst_target_price`) are delivered to the model as a **percentile
+  rank within their own quarterly cross-section**, scaled to `[0, 1]`,
+  rather than as a raw level — a per-feature policy carried by
+  `config.cross_sectional_rank_features`; see the normalization entry
+  below.
 - **Data source**: real Bloomberg CSV exports, supplied by the user,
   under `data/raw/multi_factor_ranking_ml/` (gitignored, never committed —
   raw/normalized/cache/manifest/model/decision/order/log data for this
@@ -225,6 +231,138 @@ deleted, never carried over in any disabled form (see `strategy.py`'s and
     `docs/training_window_sweep_findings.md` were produced under the
     83-feature schema and are not directly comparable to post-removal
     runs.
+
+- **Cross-sectional percentile-rank normalization of 5 raw-level
+  features — deliberate strategy-logic change (user-requested),
+  2026-09-08.** `market_cap`, `volume`, `net_debt`, `adjusted_net_debt`
+  and `analyst_target_price` are now replaced, in
+  `feature_pipeline.run_feature_pipeline`, by their percentile rank
+  within their **own quarterly cross-section**, scaled to `[0, 1]`
+  (`strategies/multi_factor_ranking_ml/cross_sectional.py`). Recorded
+  here per this repo's provenance-transparency rule.
+
+  *Why:* each model is fit on a rolling `ml_train_years = 6` window
+  spanning ~24 quarters. A feature expressed as a raw level (dollars,
+  share counts) does not mean the same thing at the start and the end of
+  that window — a $10B market cap was large-cap in 1990 and mid-cap in
+  2026. Tree models' invariance to monotone transforms does **not**
+  protect against this: it is a change in the feature's *meaning across
+  time*, not a change of scale within one cross-section.
+
+  *Percentile rank rather than z-score:* financial cross-sections are
+  heavily fat-tailed, so one extreme value distorts the mean and SD used
+  by every other name, while rank is robust to it. Rank also matches what
+  the training label already is — a decile-rank relevance grade.
+
+  *Evidence — measured on full history (147 cycles, 6y window, 4-quarter
+  gate), paired per-cycle against an unnormalized baseline run in the
+  same job:*
+
+  | arm | mean IC | IC-IR | hit rate | decile spread | Δ mean IC | t | p |
+  |---|---|---|---|---|---|---|---|
+  | baseline (0 normalized) | 0.0473 | 0.2797 | 0.6395 | 0.0592 | — | — | — |
+  | **A: raw levels (5)** | **0.0502** | **0.2955** | **0.6599** | **0.0619** | +0.0028 | 1.10 | 0.273 |
+  | B: raw + 6 volatility (11) | 0.0475 | 0.2720 | 0.6463 | 0.0577 | +0.0001 | 0.04 | 0.970 |
+
+  **Arm A is adopted, and it is NOT a demonstrated improvement.** It
+  improves every headline metric and restores the level of the pre-cut
+  83-feature schema (0.0504 / 0.2951) while keeping the simpler
+  71-feature schema — but at p = 0.273 against a per-cycle IC standard
+  error of ~0.014 it is **not statistically significant**. It is adopted
+  as a *theoretically-motivated default with directionally consistent
+  evidence*, exactly the same standing as `ml_train_years = 6`. No IC
+  improvement is claimed.
+
+  *Arm B — a clean negative result: volatility features must NOT be
+  normalized.* They are already scale-free, and ranking them within a
+  quarter discards their absolute level, which carries information (a
+  30% -vol quarter is a different market from a 15%-vol quarter even if
+  the same names sit at the same relative ranks). Normalizing them erased
+  the entire arm-A gain and pushed IC-IR *below* baseline. This is why
+  the policy is per-feature and not global.
+
+  *Excluded by construction, not by measurement:*
+  - **Macro** (`fed_funds_rate`, `hy_credit_oas`, `ust_10y_yield`,
+    `ust_2y_yield`, `vix`, `yield_curve_10y_2y`) is broadcast identically
+    to every instrument in a quarter, so a cross-sectional rank would map
+    all six to the *same* value every quarter, annihilating a block worth
+    ~4.9% of model gain. Verified on real data (2023-07-01 cycle, 1488
+    observations): each macro feature still has exactly 1 distinct value
+    per cycle and is untouched by the transform.
+  - **Categorical**: `sector_enc` is a label — arithmetic on it, rank
+    included, is meaningless. `quarter_num` likewise.
+  - **Growth/ratio** features are already differenced or already
+    scale-free, and ranking growth destroys sign information: a
+    recession's least-bad shrinker would rank identically to a boom-time
+    leader.
+
+  *Point-in-time safety:* `apply_cross_sectional_rank_normalization`
+  reads **only** the observations of the single cycle it is handed —
+  `run_feature_pipeline` builds them for one `quarter_start`/`cutoff`
+  pair. No other quarter's data, past or future, enters any rank, so a
+  later cycle's data cannot change an earlier cycle's normalized values
+  (guarded by a dedicated test). The function must never be widened to
+  take a multi-cycle panel.
+
+  *Missingness:* NaN in, NaN out — never imputed. Only non-missing values
+  participate in the ranking and in the scaling denominator; LightGBM
+  handles NaN natively and the pipeline deliberately preserves
+  missingness. Ties share the average rank.
+
+  *Edge case:* with fewer than 2 non-missing values in a cross-section
+  the percentile rank is undefined (the `(rank − 1) / (n − 1)` denominator
+  is zero, and a lone value has no cross-section to be relative to), so
+  the feature is **left at its raw level** for that cycle. This is a real
+  **live single-name scoring** hazard: scoring one instrument in
+  isolation would feed a raw dollar level into a model trained on `[0, 1]`
+  ranks. Production scoring
+  (`production.orchestration.run_current_ranking`) always ranks the whole
+  1520-name universe, so it does not arise there — but any future
+  single-name path must not silently rely on this branch.
+
+  *Consequences:*
+  - **`FEATURE_SCHEMA_VERSION` bumped `"3"` → `"4"`.** The feature *set*
+    is unchanged (71 columns, same order), but five columns' **values**
+    now mean something different. The constant feeds
+    `FeatureCacheIdentity.cache_key()`, `FeatureObservation`, and
+    `model_schema.compute_model_schema_identity()`, so every v3 feature
+    cache (raw levels) and every v3-trained model (expects raw levels) is
+    now rejected rather than silently mixed with normalized features.
+  - **The policy is a config field**,
+    `MultiFactorRankingMLConfig.cross_sectional_rank_features`, validated
+    in `__post_init__`: every entry must be a member of `FEATURE_NAMES`
+    (a typo fails loudly rather than silently normalizing nothing), and
+    the empty tuple is legal and means "no normalization". It
+    participates in `config.identity()`, so two runs under different
+    policies cannot share a cache or a model.
+  - The transform lives in `run_feature_pipeline` — the single entry
+    point the IC backtest runner
+    (`backtest.multi_factor_ranking_runner.build_feature_results`), live
+    production scoring (`production.orchestration.run_current_ranking`,
+    both its training-history and current-cycle calls) and the
+    `build-features` CLI command all share — so backtest and live
+    normalize identically by construction. It is deliberately *not* in
+    `build_feature_observation`, which sees one instrument and has no
+    cross-section to rank against.
+  - Existing `outputs/` backtests and
+    `docs/training_window_sweep_findings.md` were produced under
+    unnormalized features and are not directly comparable to post-change
+    runs.
+  - **A new consequence of the already-known survivorship bias**
+    (`data_provenance_required`), not created by this change but widened
+    by it: a normalized value now depends on *which instruments are in
+    the cross-section*, not only on the instrument itself. The universe is
+    derived from the tickers present in the export as pulled, so the
+    survivors' ranks are computed against a survivor-only cross-section.
+    Previously survivorship bias contaminated only the aggregate
+    statistics; it now also enters the feature values the model trains on.
+    Disclosed, not corrected — correcting it needs a point-in-time
+    universe the export does not provide.
+  - A normalized value is only meaningful relative to the cycle it was
+    computed in. The universe grows from ~9 names in 1986 to ~1,450 in
+    2023, so a rank of 0.9 is a far weaker statement in the early history
+    than in the modern one. The model sees no indication of cross-section
+    size.
 
 - **New dependency: `lightgbm>=4.0.0,<5.0.0`** (added to
   `pyproject.toml`'s `model` extra alongside the existing scikit-learn

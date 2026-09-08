@@ -23,6 +23,14 @@ for that cycle, never fabricated.
 cutoff for every instrument in a cycle, since macro is market-wide and
 every instrument ranked together should see the same macro snapshot.
 
+One transform is applied *after* every instrument's row is assembled,
+because it needs the whole cycle at once: the five raw-level features in
+``config.cross_sectional_rank_features`` are replaced by their percentile
+rank within that cycle's own cross-section (``cross_sectional.py``). It
+lives in ``run_feature_pipeline``, never in ``build_feature_observation``,
+which sees only one instrument and so has no cross-section to rank
+against.
+
 Explicitly out of scope here: qualification, model training/prediction,
 ranking/rejection (``decision_pipeline.py``), and this strategy has no
 position-weighting or portfolio-construction stage at all (pure ranking
@@ -44,6 +52,9 @@ from atlas_quant.strategies.multi_factor_ranking_ml.config import (
     FEATURE_SCHEMA_VERSION,
     STRATEGY_VERSION,
     MultiFactorRankingMLConfig,
+)
+from atlas_quant.strategies.multi_factor_ranking_ml.cross_sectional import (
+    apply_cross_sectional_rank_normalization,
 )
 from atlas_quant.strategies.multi_factor_ranking_ml.feature_domain import (
     FEATURE_NAMES,
@@ -222,6 +233,28 @@ def run_feature_pipeline(
 
     Deterministic: iterates ``universe`` in the given order and never
     depends on dict iteration order for its own output ordering.
+
+    Cross-sectional normalization
+    -----------------------------
+    Once every observation for this cycle is assembled, the features named
+    in ``config.cross_sectional_rank_features`` are replaced by their
+    percentile rank within **this cycle's own cross-section only**, scaled
+    to ``[0, 1]`` (see
+    :func:`~...cross_sectional.apply_cross_sectional_rank_normalization`).
+    No other quarter's data participates in any rank, past or future, so
+    the transform introduces no lookahead: a later cycle's data cannot
+    change this cycle's values. NaN stays NaN (never imputed), ties share
+    the average rank, and a cross-section with fewer than 2 non-missing
+    values for a feature leaves that feature untouched -- percentile rank
+    is undefined there, a real edge case for live single-name scoring.
+
+    This function is the single place the transform is applied, and it is
+    the one every consumer goes through -- the IC backtest runner
+    (``backtest.multi_factor_ranking_runner.build_feature_results``), live
+    production scoring (``production.orchestration.run_current_ranking``,
+    both its training-history and current-cycle calls), and the
+    ``build-features`` CLI command -- so live and backtest normalize identically
+    by construction. Keep it that way: never normalize in a caller.
     """
     observations: list[FeatureObservation] = []
     rejected: list[RejectedObservation] = []
@@ -248,8 +281,12 @@ def run_feature_pipeline(
                     f"{len(result.missing_features)} missing feature(s)"
                 )
 
+    normalized = apply_cross_sectional_rank_normalization(
+        observations, config.cross_sectional_rank_features
+    )
+
     return FeaturePipelineResult(
-        observations=tuple(observations),
+        observations=normalized,
         rejected=tuple(rejected),
         warnings=tuple(warnings),
         config_identity=config.identity(),
