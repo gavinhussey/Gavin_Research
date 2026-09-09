@@ -587,3 +587,89 @@ on raw levels that drift over time (a P/E of 20 in 1999 ≠ 2012; 1990
 `market_cap` dollars ≠ 2026). Standardizing each feature within its own
 quarterly cross-section is standard factor-model practice and remains
 untested here.
+
+## 2026-09-09 — neural ranker experiment (`neural_ranker/`): FiLM macro conditioning is null on the cached slice
+
+A research finding, not a data-provenance caveat or an implementation
+bug: none of the five provenance classifications applies, and no strategy
+logic changed. Transcribed from the executed `neural_ranker/NN_09_findings.ipynb`,
+which consolidates the run artifacts of the executed `NN_05` and `NN_06`.
+
+**Question.** Can a macro-conditioned neural ranker (FiLM: the quarter's
+6-value macro vector modulating a per-stock encoder,
+`neural_ranker/OUTLINE.md` §1) express something the LambdaRank LightGBM
+baseline structurally cannot, and does it show up as out-of-sample IC?
+Built and measured as notebooks `NN_00`–`NN_06` (+ the consolidation
+`NN_09`) on the cached real-data slice 2020-10-01 .. 2024-01-01 (14
+cycles, 9 trained, 8 with a measured IC; slice fingerprint
+`168fedca9e7b334fdf7fb0e4b8a15cb2`; checkout `7b7f2681146b` at run time).
+Nothing under `src/atlas_quant/` was modified.
+
+**Answer: null on this slice.** Paired per seed and per cycle (same
+seeds, same windows, same Materials-excluded names, same real forward
+returns), FiLM minus FiLM-removed IC averages **−0.0094** over the 8
+measured cycles (std 0.0210, t = −1.271, **p = 0.244**, FiLM higher in 4
+of 8 cycles; per-seed mean difference −0.0274 .. +0.0149, std across
+seeds 0.0170). By the verdict rule registered before the run (helps/hurts
+at p < 0.05, else null), the result is null. **No production value is
+claimed for either arm.**
+
+**Walk-forward context (`NN_05`, not a claim).** Under the same fixed
+protocol the FiLM model's seed-mean IC over the 8 cycles is +0.0492 (std
+0.0751, hit rate 0.875) against the stored LightGBM baseline's +0.0275
+(std 0.0916, hit rate 0.750); paired NN minus LightGBM +0.0218 (std
+0.0506), NN higher in 6 of 8 cycles; per-seed mean IC +0.0331 ..
++0.0637. Eight cycles is far thinner than the 22-cycle full-history
+baseline and no significance test was run on this comparison.
+
+**Fixed protocol decisions, recorded as decisions, not tuned results.**
+
+1. Rank-normalize only the five raw-level features the production
+   pipeline already ranks (`market_cap`, `volume`, `net_debt`,
+   `adjusted_net_debt`, `analyst_target_price`), honoring `BUILD_SPEC.md`
+   §5 rule 2 over §4's code block; `normalize_cycle` is a measured no-op
+   on the cached slice.
+2. Fixed, non-fitted encoder input: identity on those five,
+   `sign(x)·log1p(|x|)` on the other 58 stock-level features; missing
+   entries masked, and set to 0.0 for the tensor library only after
+   masking (a placeholder, not an imputation).
+3. Graded ListNet target `softmax(((2**y − 1)/(2**9 − 1)) / 0.5)`: the
+   literal `softmax(2**y − 1)` was measured in `NN_04` to put all mass on
+   the top decile in float32, and temperature 1.0 was measured in `NN_05`
+   to be near-uniform; 0.5 was set once, never searched.
+4. CPU for every measured fit (same-seed training on MPS measured not
+   bit-reproducible; on CPU bit-identical).
+5. Early stopping on the most recent quarter of the production training
+   window (`training_dataset.build_training_dataset`), validation every
+   10 steps, patience 20, best weights restored, 1,000-step cap; five
+   seeds (0–4); the same Materials-excluded scoring universe and forward
+   returns the LightGBM baseline's IC was measured on, every IC through
+   `multi_factor_ranking_runner.spearman_correlation`.
+
+**Measured caveats.** Under this protocol the best validation loss comes
+at step 10–50 on every fit in both arms; a validation-only diagnostic
+shows validation loss rising monotonically after step 20 while training
+loss keeps falling, and held-out ranking quality not improving with more
+steps — so the scored models are early-stopped near-init models. The
+conditioner saw only 4–12 distinct macro states per training window. The
+universe is survivorship-biased (recorded 2026-09-08), which inflates
+both arms equally and leaves the paired comparison valid but no absolute
+number quotable. With an SE of 0.0074 across cycles, an effect smaller
+than roughly ±0.02 IC could not have been detected: the null means "not
+distinguishable from zero at this sample size", not "macro conditioning
+is useless".
+
+**Point-in-time.** Verified explicitly in every notebook: tensors for
+cycle *t* are byte-identical with all later cycles removed (13 of 13
+cycles; a pooled-normalization negative control fails the same audit);
+every training and validation quarter precedes its target and has labels
+available before the target's cutoff; normalization and the input
+transform use only the cycle's own cross-section; forward returns enter
+only the IC.
+
+**Stop condition.** Per `BUILD_SPEC.md` §9, `NN_07` (seed variance) and
+`NN_08` (baseline comparison and ensemble) were not pursued: `NN_06` was
+the decisive ablation and it was null. Run artifacts (per-fit
+scores/ICs, bit-reproducible on CPU) live under `neural_ranker/outputs/`
+(gitignored); the executed notebooks and `neural_ranker/nn_common.py` are
+the experiment record.

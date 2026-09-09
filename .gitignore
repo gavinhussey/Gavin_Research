@@ -53,3 +53,8 @@ data/models/multi_factor_ranking_ml*
 data/decisions/multi_factor_ranking_ml*
 data/orders/multi_factor_ranking_ml*
 data/logs/multi_factor_ranking_ml*
+
+# neural_ranker experiment -- reproducible run artifacts written by the
+# NN_05+ notebooks (per-fit scores/ICs, rebuilt bit-for-bit on CPU). Never
+# committed by default; the notebooks themselves are the record.
+neural_ranker/outputs/
