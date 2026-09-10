@@ -421,7 +421,8 @@ deleted, never carried over in any disabled form (see `strategy.py`'s and
   over untuned, with no held-out validation. They are recorded here for
   provenance — the first genuine numbers this pipeline produced from
   `data/raw/multi_factor_ranking_ml/`'s real files — not as a result.
-  The full 1980-2026 history has still not been run.
+  The full 1980-2026 history has since been run under the current
+  configuration (2026-09-09; see the entry of that date below).
   Any equity-curve, Sharpe/Sortino, or trade-level numbers that might
   exist elsewhere in this repo under `filing_momentum_ml` are that
   strategy's results, not this one's, and must never be cited as if they
@@ -588,88 +589,87 @@ on raw levels that drift over time (a P/E of 20 in 1999 ≠ 2012; 1990
 quarterly cross-section is standard factor-model practice and remains
 untested here.
 
-## 2026-09-09 — neural ranker experiment (`neural_ranker/`): FiLM macro conditioning is null on the cached slice
+## 2026-09-09 — neural ranker experiment: tested, did not beat LightGBM, removed
 
-A research finding, not a data-provenance caveat or an implementation
-bug: none of the five provenance classifications applies, and no strategy
-logic changed. Transcribed from the executed `neural_ranker/NN_09_findings.ipynb`,
-which consolidates the run artifacts of the executed `NN_05` and `NN_06`.
+A research finding, not a provenance caveat; no strategy logic changed and
+nothing under `src/atlas_quant/` was ever modified. A neural ranker
+(per-stock MLP encoder, graded ListNet target, CPU, five seeds, the
+baseline's own Materials-excluded scoring universe, every IC through
+`spearman_correlation`) was built as an experiment in `neural_ranker/` and
+then **deleted from the tree**. Commit `04f2a47` holds the notebooks up to
+the FiLM ablation; the later full-history validation and development-arm
+work was never committed.
 
-**Question.** Can a macro-conditioned neural ranker (FiLM: the quarter's
-6-value macro vector modulating a per-stock encoder,
-`neural_ranker/OUTLINE.md` §1) express something the LambdaRank LightGBM
-baseline structurally cannot, and does it show up as out-of-sample IC?
-Built and measured as notebooks `NN_00`–`NN_06` (+ the consolidation
-`NN_09`) on the cached real-data slice 2020-10-01 .. 2024-01-01 (14
-cycles, 9 trained, 8 with a measured IC; slice fingerprint
-`168fedca9e7b334fdf7fb0e4b8a15cb2`; checkout `7b7f2681146b` at run time).
-Nothing under `src/atlas_quant/` was modified.
+- **FiLM macro conditioning: null.** On the cached 2020-10-01 .. 2024-01-01
+  slice, FiLM minus no-FiLM IC was −0.0094 over 8 cycles (p = 0.244).
+- **No-FiLM network vs LightGBM, full history: failed.** Pre-registered
+  confirmation cycles (2008-01-01 onward, 66 cycles): paired difference
+  −0.0027, 95% CI [−0.0179, +0.0125], p = 0.73, network higher in 31 of 66.
+  Development (73 cycles) −0.0118; all 147 measured cycles −0.0071. The
+  apparent +0.0312 edge on the 8-cycle slice was an artifact of truncated
+  3–10-quarter training windows, which starved LightGBM (+0.0275 → +0.0565
+  with full windows) far more than the network (+0.0587 → +0.0559).
+- **Ten development-cycle arms, all behind LightGBM.** Stopping rules,
+  width (128→64 vs 500→200→40→20), activation (GELU vs ReLU), a GRU over
+  eight quarters of point-in-time history, and cross-sectional attention
+  all landed between −0.0035 and −0.0097 against LightGBM, none
+  significant. The GRU and attention arms correlated 0.990 and 0.992 with
+  the plain network, adding nothing at 4× and 7× the training cost.
+- **Standalone skill is real but not superior.** Over 147 cycles the
+  network's own mean IC was +0.0430 (p < 0.001), against LightGBM's
+  +0.0502; the two models' per-cycle IC series correlate 0.91, and a
+  50/50 blend added +0.0004 on development.
 
-**Answer: null on this slice.** Paired per seed and per cycle (same
-seeds, same windows, same Materials-excluded names, same real forward
-returns), FiLM minus FiLM-removed IC averages **−0.0094** over the 8
-measured cycles (std 0.0210, t = −1.271, **p = 0.244**, FiLM higher in 4
-of 8 cycles; per-seed mean difference −0.0274 .. +0.0149, std across
-seeds 0.0170). By the verdict rule registered before the run (helps/hurts
-at p < 0.05, else null), the result is null. **No production value is
-claimed for either arm.**
+**Conclusion.** The ceiling is set by these features and ~32,000 rows per
+fit, not by model form; gradient-boosted trees are the better estimator
+here. LightGBM LambdaRank remains the strategy's model. The confirmation
+cycles were spent only on the pre-registered full-history test.
 
-**Walk-forward context (`NN_05`, not a claim).** Under the same fixed
-protocol the FiLM model's seed-mean IC over the 8 cycles is +0.0492 (std
-0.0751, hit rate 0.875) against the stored LightGBM baseline's +0.0275
-(std 0.0916, hit rate 0.750); paired NN minus LightGBM +0.0218 (std
-0.0506), NN higher in 6 of 8 cycles; per-seed mean IC +0.0331 ..
-+0.0637. Eight cycles is far thinner than the 22-cycle full-history
-baseline and no significance test was run on this comparison.
+## 2026-09-09 — full-history production baseline re-run under the current configuration
 
-**Fixed protocol decisions, recorded as decisions, not tuned results.**
+Not a change; a confirmation that the documented numbers are current. The
+production IC backtest (`atlas_quant.backtest.multi_factor_ranking_runner
+.run_ic_backtest`, driven exactly as `atlas_quant.cli.multi_factor_ranking
+run-backtest` drives it: same loader, `MultiFactorRankingMLConfig()`
+defaults, same cycle schedule, same report builder) was run over
+1980-01-01 .. 2026-07-01 — 187 quarterly cycles — against the real
+Bloomberg exports, under strategy version 0.3.0, feature schema 4, config
+identity `b1e8a3339eecf744d501175f07c965c0a59882485ed5dd8c5382f41f173f7d75`
+(`ml_train_years=6`, `min_train_quarters=4`, the five rank-normalized
+raw-level features). Runtime 905 s. Equivalent command:
 
-1. Rank-normalize only the five raw-level features the production
-   pipeline already ranks (`market_cap`, `volume`, `net_debt`,
-   `adjusted_net_debt`, `analyst_target_price`), honoring `BUILD_SPEC.md`
-   §5 rule 2 over §4's code block; `normalize_cycle` is a measured no-op
-   on the cached slice.
-2. Fixed, non-fitted encoder input: identity on those five,
-   `sign(x)·log1p(|x|)` on the other 58 stock-level features; missing
-   entries masked, and set to 0.0 for the tensor library only after
-   masking (a placeholder, not an imputation).
-3. Graded ListNet target `softmax(((2**y − 1)/(2**9 − 1)) / 0.5)`: the
-   literal `softmax(2**y − 1)` was measured in `NN_04` to put all mass on
-   the top decile in float32, and temperature 1.0 was measured in `NN_05`
-   to be near-uniform; 0.5 was set once, never searched.
-4. CPU for every measured fit (same-seed training on MPS measured not
-   bit-reproducible; on CPU bit-identical).
-5. Early stopping on the most recent quarter of the production training
-   window (`training_dataset.build_training_dataset`), validation every
-   10 steps, patience 20, best weights restored, 1,000-step cap; five
-   seeds (0–4); the same Materials-excluded scoring universe and forward
-   returns the LightGBM baseline's IC was measured on, every IC through
-   `multi_factor_ranking_runner.spearman_correlation`.
+```bash
+.venv/bin/python -m atlas_quant.cli.multi_factor_ranking run-backtest \
+    --raw-root data/raw/multi_factor_ranking_ml \
+    --start-quarter 1980-01-01 --end-quarter 2026-07-01
+```
 
-**Measured caveats.** Under this protocol the best validation loss comes
-at step 10–50 on every fit in both arms; a validation-only diagnostic
-shows validation loss rising monotonically after step 20 while training
-loss keeps falling, and held-out ranking quality not improving with more
-steps — so the scored models are early-stopped near-init models. The
-conditioner saw only 4–12 distinct macro states per training window. The
-universe is survivorship-biased (recorded 2026-09-08), which inflates
-both arms equally and leaves the paired comparison valid but no absolute
-number quotable. With an SE of 0.0074 across cycles, an effect smaller
-than roughly ±0.02 IC could not have been detected: the null means "not
-distinguishable from zero at this sample size", not "macro conditioning
-is useless".
+| stat | fresh run | documented (arm A, 2026-09-08) |
+|---|---:|---:|
+| measured cycles (`min_scored_count=30`) | 147 | 147 |
+| mean IC | 0.0502 | 0.0502 |
+| IC std | 0.1697 | — |
+| IC information ratio | 0.2955 | 0.2955 |
+| hit rate | 0.6599 | 0.6599 |
+| mean decile spread | 0.0619 | 0.0619 |
 
-**Point-in-time.** Verified explicitly in every notebook: tensors for
-cycle *t* are byte-identical with all later cycles removed (13 of 13
-cycles; a pooled-normalization negative control fails the same audit);
-every training and validation quarter precedes its target and has labels
-available before the target's cutoff; normalization and the input
-transform use only the cycle's own cross-section; forward returns enter
-only the IC.
+The production path reproduces the adopted arm-A figures of the
+cross-sectional normalization entry above at the document's precision;
+those numbers are current. 181 of 187 cycles trained (the first 6 lack
+`min_train_quarters`); 32 further cycles (1981-10 .. 1989-07) have an IC
+but fewer than 30 scored names and are excluded from the headline stats
+by the noise floor, so the measured span is 1989-10-01 .. 2026-04-01.
+Every caveat recorded above still applies to these numbers, in
+particular the survivorship-biased universe: they are within-universe
+relative statistics, not a live expectation.
 
-**Stop condition.** Per `BUILD_SPEC.md` §9, `NN_07` (seed variance) and
-`NN_08` (baseline comparison and ensemble) were not pursued: `NN_06` was
-the decisive ablation and it was null. Run artifacts (per-fit
-scores/ICs, bit-reproducible on CPU) live under `neural_ranker/outputs/`
-(gitignored); the executed notebooks and `neural_ranker/nn_common.py` are
-the experiment record.
+Artifacts (gitignored, under `research/strategies/multi_factor_ranking_ml/outputs/`):
+`backtest_1980-01-01_2026-07-01_train6y.txt` (the CLI text report),
+`backtest_1980-01-01_2026-07-01_train6y.json` (the full serialized
+result) and `backtest_1980-01-01_2026-07-01_train6y_cycles.csv`
+(per-cycle IC). The older files in that folder —
+`backtest_1980-01-01_2026-07-01_train3y.*` (2026-09-04, strategy 0.2.0
+binary classifier), `holdout_selection_*` (2026-09-04) and
+`train_window_sweep_*` (2026-09-07, 83-feature schema, unnormalized) —
+are superseded history and must not be read as current-configuration
+results.
