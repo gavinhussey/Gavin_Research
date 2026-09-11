@@ -16,22 +16,40 @@ htmlcov/
 # Filing Momentum ML production research data -- never committed: raw
 # provider payloads, normalized records, feature/model/regime caches,
 # dataset manifests, generated reports, and notebook run outputs.
-data/raw/filing_momentum_ml/
-data/normalized/filing_momentum_ml/
-data/cache/filing_momentum_ml/
-data/manifests/filing_momentum_ml/
+# Trailing-glob form (not just the bare directory): one-off acquisition
+# runs land in dated sibling dirs like
+# `data/raw/filing_momentum_ml_split_adj_div_unadj_20260813/`, which an
+# exact-directory rule does not cover -- a `git add -A` then stages
+# gigabytes of raw provider payloads. Same reason for the other data/
+# rules below.
+data/raw/filing_momentum_ml*
+data/normalized/filing_momentum_ml*
+data/cache/filing_momentum_ml*
+data/manifests/filing_momentum_ml*
 outputs/reports/
 research/strategies/filing_momentum_ml/outputs/
 
 # Persisted model store (fitted estimators, keyed by ModelIdentity) and
 # the write-once live decision log -- also never committed.
-data/models/filing_momentum_ml/
-data/decisions/filing_momentum_ml/
+data/models/filing_momentum_ml*
+data/decisions/filing_momentum_ml*
 
 # Paper-trading sleeve ledger and order-run audit log -- also never
 # committed; both hold live broker-account state.
 data/ledger/
-data/orders/filing_momentum_ml/
+data/orders/filing_momentum_ml*
 
 # Scheduled-job output (nightly data-refresh check, daily paper-trade run).
-data/logs/filing_momentum_ml/
+data/logs/filing_momentum_ml*
+
+# Multi-Factor Ranking ML -- same categories of never-committed
+# production/research data, mirrored under its own strategy name.
+data/raw/multi_factor_ranking_ml*
+data/normalized/multi_factor_ranking_ml*
+data/cache/multi_factor_ranking_ml*
+data/manifests/multi_factor_ranking_ml*
+research/strategies/multi_factor_ranking_ml/outputs/
+data/models/multi_factor_ranking_ml*
+data/decisions/multi_factor_ranking_ml*
+data/orders/multi_factor_ranking_ml*
+data/logs/multi_factor_ranking_ml*

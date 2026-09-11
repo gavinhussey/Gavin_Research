@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for the nightly entry-eve data-refresh check. Never committed
+  with real values: render {{REPO_ROOT}} to this repo's absolute path
+  and install the result at
+  ~/Library/LaunchAgents/com.atlasquant.multifactorrankingml.acquiredatacheck.plist,
+  then launchctl load it. Contains no credentials; the wrapper script
+  it invokes sources ~/.atlas-quant/secrets.env itself.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.atlasquant.multifactorrankingml.acquiredatacheck</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{REPO_ROOT}}/live/multi_factor_ranking_ml/run_acquire_data_check.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>20</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{{REPO_ROOT}}/data/logs/multi_factor_ranking_ml/acquire_data_check.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{REPO_ROOT}}/data/logs/multi_factor_ranking_ml/acquire_data_check.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
